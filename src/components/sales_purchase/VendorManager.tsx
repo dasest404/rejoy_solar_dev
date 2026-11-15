@@ -16,7 +16,8 @@ import {
   X,
   CreditCard,
   ShieldCheck,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Loader2
 } from 'lucide-react';
 
 export const VendorManager: React.FC = () => {
@@ -27,13 +28,17 @@ export const VendorManager: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Form states
   const [formName, setFormName] = useState('');
   const [formContactPerson, setFormContactPerson] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPhone, setFormPhone] = useState('');
-  const [formCategory, setFormCategory] = useState<Vendor['category']>('Solar Modules');
+  const [formCategory, setFormCategory] = useState<string>('Solar Modules');
+  const [useCustomCategory, setUseCustomCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState('');
   const [formGst, setFormGst] = useState('');
   const [formAddress, setFormAddress] = useState('');
   const [formCity, setFormCity] = useState('');
@@ -46,7 +51,7 @@ export const VendorManager: React.FC = () => {
 
   const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger]);
 
-  const categories: Vendor['category'][] = [
+  const presetCategories: string[] = [
     'Solar Modules',
     'Inverters',
     'Structures',
@@ -54,6 +59,17 @@ export const VendorManager: React.FC = () => {
     'Civil & Mechanical',
     'Logistics & Services'
   ];
+
+  const categories = useMemo(() => {
+    const merged = [...presetCategories];
+    vendors.forEach(v => {
+      const cat = (v.category || '').trim();
+      if (cat && !merged.includes(cat)) {
+        merged.push(cat);
+      }
+    });
+    return merged;
+  }, [vendors]);
 
   const filteredVendors = useMemo(() => {
     const q = (searchQuery || '').toLowerCase().trim();
@@ -78,6 +94,8 @@ export const VendorManager: React.FC = () => {
     setFormEmail('');
     setFormPhone('');
     setFormCategory('Solar Modules');
+    setUseCustomCategory(false);
+    setCustomCategory('');
     setFormGst('');
     setFormAddress('');
     setFormCity('');
@@ -97,7 +115,9 @@ export const VendorManager: React.FC = () => {
     setFormContactPerson(vendor.contactPerson);
     setFormEmail(vendor.email);
     setFormPhone(vendor.phone);
-    setFormCategory(vendor.category);
+    setFormCategory(vendor.category || 'Solar Modules');
+    setUseCustomCategory(false);
+    setCustomCategory('');
     setFormGst(vendor.gstNumber);
     setFormAddress(vendor.address);
     setFormCity(vendor.city);
@@ -110,17 +130,21 @@ export const VendorManager: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleSaveVendor = (e: React.FormEvent) => {
+  const handleSaveVendor = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setFormErrors({});
+
+    const resolvedCategory = useCustomCategory ? customCategory.trim() : formCategory.trim();
 
     const errs: Record<string, string> = {};
     if (!formName.trim()) errs.name = 'Vendor name is required';
     if (!formContactPerson.trim()) errs.contactPerson = 'Contact person is required';
+    if (!resolvedCategory) errs.category = 'Category is required';
 
     if (Object.keys(errs).length > 0) {
       setFormErrors(errs);
-      showToast('Vendor name and contact person are required', 'warning');
+      showToast('Vendor name, contact person, and category are required', 'warning');
       return;
     }
 
@@ -129,30 +153,29 @@ export const VendorManager: React.FC = () => {
       vendorCode: editingVendor
         ? editingVendor.vendorCode
         : `VND-${String(vendors.length + 1).padStart(3, '0')}`,
-      name: formName,
-      contactPerson: formContactPerson,
-      email: formEmail,
-      phone: formPhone,
-      category: formCategory,
-      gstNumber: formGst,
-      address: formAddress,
-      city: formCity,
-      state: formState,
-      bankDetails: formBankName
+      name: formName.trim(),
+      contactPerson: formContactPerson.trim(),
+      email: formEmail.trim(),
+      phone: formPhone.trim(),
+      category: resolvedCategory as Vendor['category'],
+      gstNumber: formGst.trim(),
+      address: formAddress.trim(),
+      city: formCity.trim(),
+      state: formState.trim(),
+      bankDetails: formBankName.trim()
         ? {
-            bankName: formBankName,
-            accountNo: formAccountNo,
-            ifsc: formIfsc
+            bankName: formBankName.trim(),
+            accountNo: formAccountNo.trim(),
+            ifsc: formIfsc.trim()
           }
         : undefined,
       paymentTerms: formPaymentTerms,
       rating: formRating,
-      status: 'ACTIVE',
+      status: editingVendor?.status || 'ACTIVE',
       createdAt: editingVendor ? editingVendor.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
-    // Duplicate validation
     const dupCheck = validateVendor(vendorToSave, vendors, editingVendor?.id);
     if (!dupCheck.valid) {
       setFormErrors({ [dupCheck.field || 'general']: dupCheck.message });
@@ -160,28 +183,41 @@ export const VendorManager: React.FC = () => {
       return;
     }
 
+    setIsSaving(true);
     try {
-      storageService.saveVendor(vendorToSave);
+      const saved = await storageService.saveVendorAsync(vendorToSave);
       triggerRefresh();
       showToast(
-        `Vendor ${vendorToSave.name} ${editingVendor ? 'updated' : 'added'} successfully`,
+        `Vendor ${saved.name} ${editingVendor ? 'updated' : 'added'} successfully`,
         'success'
       );
       setIsModalOpen(false);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to save vendor';
+      const msg = err instanceof Error ? err.message : 'Failed to save vendor to MySQL';
       showToast(msg, 'error');
       if (err instanceof DuplicateRecordError) {
         setFormErrors({ [err.field]: err.message });
+      } else {
+        setFormErrors({ general: msg });
       }
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDeleteVendor = (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to remove vendor ${name}?`)) {
-      storageService.deleteVendor(id);
+  const handleDeleteVendor = async (id: string, name: string) => {
+    if (deletingId) return;
+    if (!window.confirm(`Are you sure you want to remove vendor ${name}?`)) return;
+    setDeletingId(id);
+    try {
+      await storageService.deleteVendorAsync(id);
       triggerRefresh();
       showToast(`Vendor ${name} deleted`, 'info');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete vendor';
+      showToast(msg, 'error');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -348,17 +384,23 @@ export const VendorManager: React.FC = () => {
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => handleOpenEdit(vendor)}
-                  className="p-2 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                  disabled={deletingId === vendor.id}
+                  className="p-2 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                   title="Edit Vendor"
                 >
                   <Edit className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => handleDeleteVendor(vendor.id, vendor.name)}
-                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                  disabled={deletingId === vendor.id}
+                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                   title="Delete Vendor"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  {deletingId === vendor.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
                 </button>
               </div>
             </div>
@@ -444,8 +486,17 @@ export const VendorManager: React.FC = () => {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Category *</label>
                   <select
-                    value={formCategory}
-                    onChange={e => setFormCategory(e.target.value as Vendor['category'])}
+                    value={useCustomCategory ? '__CUSTOM__' : formCategory}
+                    onChange={e => {
+                      if (e.target.value === '__CUSTOM__') {
+                        setUseCustomCategory(true);
+                        setCustomCategory('');
+                      } else {
+                        setUseCustomCategory(false);
+                        setFormCategory(e.target.value);
+                      }
+                      if (formErrors.category) setFormErrors(prev => ({ ...prev, category: '' }));
+                    }}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
                     {categories.map(cat => (
@@ -453,7 +504,21 @@ export const VendorManager: React.FC = () => {
                         {cat}
                       </option>
                     ))}
+                    <option value="__CUSTOM__">+ Add Custom Category...</option>
                   </select>
+                  {useCustomCategory && (
+                    <input
+                      type="text"
+                      required
+                      value={customCategory}
+                      onChange={e => setCustomCategory(e.target.value)}
+                      placeholder="Enter new vendor category"
+                      className="mt-1.5 w-full px-3 py-1.5 text-xs bg-white border border-amber-400 rounded-xl"
+                    />
+                  )}
+                  {formErrors.category && (
+                    <p className="text-[11px] text-red-600 font-medium mt-1">{formErrors.category}</p>
+                  )}
                 </div>
               </div>
 
@@ -656,16 +721,19 @@ export const VendorManager: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  {editingVendor ? 'Save Changes' : 'Create Vendor'}
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSaving ? 'Saving to MySQL...' : editingVendor ? 'Save Changes' : 'Create Vendor'}
                 </button>
               </div>
             </form>

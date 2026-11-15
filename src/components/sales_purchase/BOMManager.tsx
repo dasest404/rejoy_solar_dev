@@ -20,7 +20,8 @@ import {
   Sun,
   ShieldCheck,
   Check,
-  Truck
+  Truck,
+  Loader2
 } from 'lucide-react';
 import { EWayBillModal } from './EWayBillModal';
 
@@ -31,8 +32,12 @@ export const BOMManager: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [selectedBOMForView, setSelectedBOMForView] = useState<BillOfMaterials | null>(null);
-  const [selectedBOMForEWayBill, setSelectedBOMForEWayBill] = useState<BillOfMaterials | null>(null);
+  const [viewingBOMId, setViewingBOMId] = useState<string | null>(null);
+  const [ewayBOMId, setEwayBOMId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [allocatingId, setAllocatingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Form state for new BOM
   const [formProjectId, setFormProjectId] = useState('');
@@ -53,6 +58,15 @@ export const BOMManager: React.FC = () => {
   const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
   const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
   const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
+
+  const selectedBOMForView = useMemo(
+    () => (viewingBOMId ? boms.find(b => b.id === viewingBOMId) || null : null),
+    [boms, viewingBOMId]
+  );
+  const selectedBOMForEWayBill = useMemo(
+    () => (ewayBOMId ? boms.find(b => b.id === ewayBOMId) || null : null),
+    [boms, ewayBOMId]
+  );
 
   const filteredBOMs = useMemo(() => {
     const q = (searchQuery || '').toLowerCase().trim();
@@ -122,8 +136,9 @@ export const BOMManager: React.FC = () => {
     setLineItemError('');
   };
 
-  const handleSaveBOM = (e: React.FormEvent) => {
+  const handleSaveBOM = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setBOMError('');
 
     if (!formProjectId) {
@@ -169,7 +184,6 @@ export const BOMManager: React.FC = () => {
       updatedAt: new Date().toISOString()
     };
 
-    // Pre-validate duplicate BOM version for project and duplicate line items
     const bomCheck = validateBOM(newBOM, boms);
     if (!bomCheck.valid) {
       setBOMError(bomCheck.message);
@@ -177,14 +191,15 @@ export const BOMManager: React.FC = () => {
       return;
     }
 
+    setIsSaving(true);
     try {
-      storageService.saveBOM(newBOM);
+      const saved = await storageService.saveBOMAsync(newBOM);
       triggerRefresh();
-      showToast(`Bill of Materials ${newBOM.bomNumber} created successfully`, 'success');
+      showToast(`Bill of Materials ${saved.bomNumber} created successfully`, 'success');
       setIsCreateModalOpen(false);
 
-      // Reset modal form
       setFormProjectId('');
+      setFormWarehouseId('');
       setFormVersion('v1.0');
       setFormNotes('');
       setFormItems([]);
@@ -194,23 +209,31 @@ export const BOMManager: React.FC = () => {
       const msg = err instanceof Error ? err.message : 'Failed to create Bill of Materials';
       setBOMError(msg);
       showToast(msg, 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
   // Stock allocation handler
-  const handleAllocateStock = (bom: BillOfMaterials) => {
-    const success = storageService.allocateBOMStock(bom.id, currentUser?.name || 'Project Manager');
-    if (success) {
+  const handleAllocateStock = async (bom: BillOfMaterials) => {
+    if (allocatingId) return;
+    setAllocatingId(bom.id);
+    try {
+      await storageService.allocateBOMStockAsync(bom.id, currentUser?.name || 'Project Manager');
       triggerRefresh();
       showToast(`Stock successfully reserved & allocated for BOM ${bom.bomNumber}`, 'success');
-    } else {
-      showToast(`Could not allocate stock. Please verify product inventory.`, 'error');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not allocate stock. Please verify product inventory.';
+      showToast(msg, 'error');
+    } finally {
+      setAllocatingId(null);
     }
   };
 
   // Status progression
-  const handleUpdateStatus = (bom: BillOfMaterials, newStatus: BillOfMaterials['status']) => {
-    const updated = {
+  const handleUpdateStatus = async (bom: BillOfMaterials, newStatus: BillOfMaterials['status']) => {
+    if (updatingId) return;
+    const updated: BillOfMaterials = {
       ...bom,
       status: newStatus,
       updatedAt: new Date().toISOString()
@@ -219,16 +242,34 @@ export const BOMManager: React.FC = () => {
       updated.approvedBy = currentUser?.name || 'Chief Technical Officer';
       updated.approvedAt = new Date().toISOString();
     }
-    storageService.saveBOM(updated);
-    triggerRefresh();
-    showToast(`BOM ${bom.bomNumber} status updated to ${newStatus}`, 'info');
+    setUpdatingId(bom.id);
+    try {
+      await storageService.saveBOMAsync(updated);
+      triggerRefresh();
+      showToast(`BOM ${bom.bomNumber} status updated to ${newStatus}`, 'info');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update BOM status';
+      showToast(msg, 'error');
+    } finally {
+      setUpdatingId(null);
+    }
   };
 
-  const handleDeleteBOM = (id: string, bomNumber: string) => {
-    if (window.confirm(`Are you sure you want to delete ${bomNumber}?`)) {
-      storageService.deleteBOM(id);
+  const handleDeleteBOM = async (id: string, bomNumber: string) => {
+    if (deletingId) return;
+    if (!window.confirm(`Are you sure you want to delete ${bomNumber}?`)) return;
+    setDeletingId(id);
+    try {
+      await storageService.deleteBOMAsync(id);
+      if (viewingBOMId === id) setViewingBOMId(null);
+      if (ewayBOMId === id) setEwayBOMId(null);
       triggerRefresh();
       showToast(`BOM ${bomNumber} deleted`, 'info');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete BOM';
+      showToast(msg, 'error');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -394,8 +435,8 @@ export const BOMManager: React.FC = () => {
               <div className="space-y-2 pt-3 border-t border-slate-100">
                 <div className="flex items-center justify-between gap-2">
                   <button
-                    onClick={() => setSelectedBOMForView(bom)}
-                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors"
+                    onClick={() => setViewingBOMId(bom.id)}
+                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                   >
                     <Eye className="w-3.5 h-3.5" />
                     Inspect Details
@@ -403,10 +444,15 @@ export const BOMManager: React.FC = () => {
 
                   <button
                     onClick={() => handleDeleteBOM(bom.id, bom.bomNumber)}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                    disabled={deletingId === bom.id}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                     title="Delete BOM"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {deletingId === bom.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-500" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
 
@@ -414,10 +460,15 @@ export const BOMManager: React.FC = () => {
                 {!isAllocated && (
                   <button
                     onClick={() => handleAllocateStock(bom)}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
+                    disabled={allocatingId === bom.id}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                   >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    Allocate & Reserve Stock
+                    {allocatingId === bom.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    )}
+                    {allocatingId === bom.id ? 'Allocating...' : 'Allocate & Reserve Stock'}
                   </button>
                 )}
 
@@ -425,17 +476,22 @@ export const BOMManager: React.FC = () => {
                 {bom.status === 'APPROVED' && (
                   <button
                     onClick={() => handleUpdateStatus(bom, 'RELEASED_TO_SITE')}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                    disabled={updatingId === bom.id}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                   >
-                    <Send className="w-3.5 h-3.5" />
+                    {updatingId === bom.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
                     Release BOM to Site Team
                   </button>
                 )}
 
                 {/* Generate E-Way Bill Button */}
                 <button
-                  onClick={() => setSelectedBOMForEWayBill(bom)}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg text-xs font-semibold transition-colors"
+                  onClick={() => setEwayBOMId(bom.id)}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                   title="Generate GST Form EWB-01 for this Bill of Materials"
                 >
                   <Truck className="w-3.5 h-3.5 text-indigo-600" />
@@ -445,9 +501,14 @@ export const BOMManager: React.FC = () => {
                 {bom.status === 'DRAFT' && (
                   <button
                     onClick={() => handleUpdateStatus(bom, 'APPROVED')}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold transition-colors"
+                    disabled={updatingId === bom.id}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-60 cursor-pointer"
                   >
-                    <Check className="w-3.5 h-3.5" />
+                    {updatingId === bom.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
                     Approve BOM
                   </button>
                 )}
@@ -753,16 +814,19 @@ export const BOMManager: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  Save Bill of Materials
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSaving ? 'Saving to MySQL...' : 'Save Bill of Materials'}
                 </button>
               </div>
             </form>
@@ -784,8 +848,8 @@ export const BOMManager: React.FC = () => {
                 </h3>
               </div>
               <button
-                onClick={() => setSelectedBOMForView(null)}
-                className="p-1 text-slate-400 hover:text-slate-600"
+                onClick={() => setViewingBOMId(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -871,9 +935,9 @@ export const BOMManager: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  const target = selectedBOMForView;
-                  setSelectedBOMForView(null);
-                  setSelectedBOMForEWayBill(target);
+                  const targetId = selectedBOMForView.id;
+                  setViewingBOMId(null);
+                  setEwayBOMId(targetId);
                 }}
                 className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
               >
@@ -883,7 +947,7 @@ export const BOMManager: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => setSelectedBOMForView(null)}
+                onClick={() => setViewingBOMId(null)}
                 className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 transition-colors cursor-pointer"
               >
                 Close
@@ -896,7 +960,7 @@ export const BOMManager: React.FC = () => {
       {/* Modal: Generate & View E-Way Bill */}
       <EWayBillModal
         isOpen={Boolean(selectedBOMForEWayBill)}
-        onClose={() => setSelectedBOMForEWayBill(null)}
+        onClose={() => setEwayBOMId(null)}
         bom={selectedBOMForEWayBill}
       />
     </div>

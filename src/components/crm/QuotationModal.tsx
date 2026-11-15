@@ -35,6 +35,7 @@ import {
   DEFAULT_PAYMENT_MILESTONES
 } from '../../utils/quotationDefaults';
 import { storageService } from '../../services/storage';
+import { useApp } from '../../context/AppContext';
 
 interface QuotationModalProps {
   isOpen: boolean;
@@ -51,6 +52,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   editQuotation,
   customers
 }) => {
+  const { refreshTrigger } = useApp();
   // Active Form Section Tab
   const [activeTab, setActiveTab] = useState<'details' | 'bom' | 'cost' | 'milestones'>('details');
 
@@ -223,7 +225,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   // Available Products from Warehouse / Inventory
   const availableProducts = useMemo(() => {
     return storageService.getProducts();
-  }, [isOpen]);
+  }, [isOpen, refreshTrigger]);
 
   // BOM Item Manipulations
   const handleAddItem = (initialCategory: QuotationItem['category'] = 'Other') => {

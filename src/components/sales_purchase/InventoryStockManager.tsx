@@ -20,7 +20,8 @@ import {
   DollarSign,
   Warehouse as WarehouseIcon,
   ArrowRightLeft,
-  Building2
+  Building2,
+  Loader2
 } from 'lucide-react';
 
 export const InventoryStockManager: React.FC = () => {
@@ -38,6 +39,8 @@ export const InventoryStockManager: React.FC = () => {
   const [adjustWarehouseId, setAdjustWarehouseId] = useState<string>('');
   const [newCount, setNewCount] = useState<number>(0);
   const [adjustReason, setAdjustReason] = useState('Quarterly Physical Count Audit');
+  const [isAdjusting, setIsAdjusting] = useState(false);
+  const [adjustError, setAdjustError] = useState('');
 
   // Modal for Inter-Warehouse Transfer
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -47,6 +50,7 @@ export const InventoryStockManager: React.FC = () => {
   const [transferQty, setTransferQty] = useState<number>(1);
   const [transferNotes, setTransferNotes] = useState('');
   const [transferError, setTransferError] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
 
   const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
   const movements = useMemo(() => storageService.getStockMovements(), [refreshTrigger]);
@@ -123,6 +127,7 @@ export const InventoryStockManager: React.FC = () => {
     setAdjustWarehouseId(initialWhId);
     setNewCount(getProductStockInWarehouse(p, initialWhId));
     setAdjustReason('Physical Inventory Audit');
+    setAdjustError('');
   };
 
   const handleAdjustWarehouseChange = (whId: string) => {
@@ -132,23 +137,32 @@ export const InventoryStockManager: React.FC = () => {
     }
   };
 
-  const handleSaveAdjustment = (e: React.FormEvent) => {
+  const handleSaveAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adjustingProduct) return;
+    if (!adjustingProduct || isAdjusting) return;
+    setAdjustError('');
 
     const targetWh = warehouses.find(w => w.id === adjustWarehouseId) || defaultWarehouse;
-
-    storageService.adjustStock(
-      adjustingProduct.id,
-      newCount,
-      adjustReason,
-      currentUser?.name || 'Operations Supervisor',
-      targetWh.id,
-      targetWh.name
-    );
-    triggerRefresh();
-    showToast(`Inventory count updated for ${adjustingProduct.sku} at ${targetWh.name}`, 'success');
-    setAdjustingProduct(null);
+    setIsAdjusting(true);
+    try {
+      await storageService.adjustStockAsync(
+        adjustingProduct.id,
+        newCount,
+        adjustReason,
+        currentUser?.name || 'Operations Supervisor',
+        targetWh.id,
+        targetWh.name
+      );
+      triggerRefresh();
+      showToast(`Inventory count updated for ${adjustingProduct.sku} at ${targetWh.name}`, 'success');
+      setAdjustingProduct(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to adjust stock in MySQL';
+      setAdjustError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsAdjusting(false);
+    }
   };
 
   // Open Transfer Modal
@@ -163,8 +177,9 @@ export const InventoryStockManager: React.FC = () => {
   };
 
   // Submit Inter-Warehouse Transfer
-  const handleSubmitTransfer = (e: React.FormEvent) => {
+  const handleSubmitTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isTransferring) return;
     setTransferError('');
 
     if (!transferProductId) {
@@ -193,23 +208,26 @@ export const InventoryStockManager: React.FC = () => {
       return;
     }
 
-    const result = storageService.transferStock(
-      prod.id,
-      fromWh.id,
-      toWh.id,
-      transferQty,
-      transferNotes,
-      currentUser?.name || 'Logistics Coordinator'
-    );
-
-    if (!result.success) {
-      setTransferError(result.message || 'Transfer failed');
-      return;
+    setIsTransferring(true);
+    try {
+      await storageService.transferStockAsync(
+        prod.id,
+        fromWh.id,
+        toWh.id,
+        transferQty,
+        transferNotes,
+        currentUser?.name || 'Logistics Coordinator'
+      );
+      triggerRefresh();
+      showToast(`Transferred ${transferQty} ${prod.unit} from ${fromWh.name} to ${toWh.name}`, 'success');
+      setIsTransferModalOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Stock transfer failed';
+      setTransferError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsTransferring(false);
     }
-
-    triggerRefresh();
-    showToast(`Transferred ${transferQty} ${prod.unit} from ${fromWh.name} to ${toWh.name}`, 'success');
-    setIsTransferModalOpen(false);
   };
 
   return (
@@ -638,6 +656,11 @@ export const InventoryStockManager: React.FC = () => {
             </div>
 
             <form onSubmit={handleSaveAdjustment} className="space-y-4">
+              {adjustError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl font-medium">
+                  {adjustError}
+                </div>
+              )}
               <div>
                 <span className="text-xs text-slate-500 block mb-1">Product:</span>
                 <span className="font-semibold text-slate-800 text-sm block">
@@ -704,16 +727,19 @@ export const InventoryStockManager: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isAdjusting}
                   onClick={() => setAdjustingProduct(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                  disabled={isAdjusting}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  Confirm Adjustment
+                  {isAdjusting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isAdjusting ? 'Saving...' : 'Confirm Adjustment'}
                 </button>
               </div>
             </form>
@@ -846,16 +872,19 @@ export const InventoryStockManager: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isTransferring}
                   onClick={() => setIsTransferModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                  disabled={isTransferring}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  Execute Stock Transfer
+                  {isTransferring && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isTransferring ? 'Transferring...' : 'Execute Stock Transfer'}
                 </button>
               </div>
             </form>

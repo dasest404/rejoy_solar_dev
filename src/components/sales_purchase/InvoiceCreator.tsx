@@ -17,7 +17,8 @@ import {
   Building2,
   DollarSign,
   PackageCheck,
-  Calendar
+  Calendar,
+  Loader2
 } from 'lucide-react';
 
 export const InvoiceCreator: React.FC = () => {
@@ -27,7 +28,11 @@ export const InvoiceCreator: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [viewingInvoice, setViewingInvoice] = useState<SalesInvoice | null>(null);
+  const [viewingInvoiceId, setViewingInvoiceId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Form states
   const [formCustomerId, setFormCustomerId] = useState('');
@@ -55,6 +60,10 @@ export const InvoiceCreator: React.FC = () => {
   const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger]);
   const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
   const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
+  const viewingInvoice = useMemo(
+    () => (viewingInvoiceId ? invoices.find(inv => inv.id === viewingInvoiceId) || null : null),
+    [viewingInvoiceId, invoices]
+  );
 
   // Calculations for summary metrics
   const metrics = useMemo(() => {
@@ -142,16 +151,21 @@ export const InvoiceCreator: React.FC = () => {
 
   const formGrandTotal = formSubtotal + formTaxTotal;
 
-  const handleSaveInvoice = (e: React.FormEvent) => {
+  const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
 
     if (!formCustomerId) {
-      showToast('Please select a customer', 'warning');
+      const msg = 'Please select a customer';
+      setFormError(msg);
+      showToast(msg, 'warning');
       return;
     }
 
     if (lineItems.length === 0) {
-      showToast('Please add at least one line item to the invoice', 'warning');
+      const msg = 'Please add at least one line item to the invoice';
+      setFormError(msg);
+      showToast(msg, 'warning');
       return;
     }
 
@@ -186,38 +200,68 @@ export const InvoiceCreator: React.FC = () => {
       updatedAt: new Date().toISOString()
     };
 
-    storageService.saveSalesInvoice(
-      newInvoice,
-      formDeductStock,
-      currentUser?.name || 'Accounts Officer'
-    );
-    triggerRefresh();
-    showToast(`Invoice ${newInvoice.invoiceNumber} created and issued successfully`, 'success');
-    setIsCreateModalOpen(false);
+    setIsSaving(true);
+    try {
+      const saved = await storageService.saveSalesInvoiceAsync(
+        newInvoice,
+        formDeductStock,
+        currentUser?.name || 'Accounts Officer'
+      );
+      triggerRefresh();
+      showToast(`Invoice ${saved.invoiceNumber} created and issued successfully`, 'success');
+      setIsCreateModalOpen(false);
+      setFormError(null);
 
-    // Reset Form
-    setFormCustomerId('');
-    setFormProjectId('');
-    setLineItems([]);
-    setFormNotes('');
+      // Reset Form only after confirmed persistence
+      setFormCustomerId('');
+      setFormProjectId('');
+      setLineItems([]);
+      setFormNotes('');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to save sales invoice to MySQL.';
+      setFormError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleMarkAsPaid = (invoice: SalesInvoice) => {
-    const updated = {
-      ...invoice,
-      status: 'PAID' as const,
-      updatedAt: new Date().toISOString()
-    };
-    storageService.saveSalesInvoice(updated, false);
-    triggerRefresh();
-    showToast(`Invoice ${invoice.invoiceNumber} marked as PAID`, 'success');
+  const handleMarkAsPaid = async (invoice: SalesInvoice) => {
+    setMarkingPaidId(invoice.id);
+    try {
+      const updated: SalesInvoice = {
+        ...invoice,
+        status: 'PAID',
+        updatedAt: new Date().toISOString()
+      };
+      await storageService.saveSalesInvoiceAsync(
+        updated,
+        false,
+        currentUser?.name || 'Accounts Officer'
+      );
+      triggerRefresh();
+      showToast(`Invoice ${invoice.invoiceNumber} marked as PAID`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || `Failed to mark ${invoice.invoiceNumber} as paid`, 'error');
+    } finally {
+      setMarkingPaidId(null);
+    }
   };
 
-  const handleDeleteInvoice = (id: string, invNumber: string) => {
-    if (window.confirm(`Are you sure you want to delete invoice ${invNumber}?`)) {
-      storageService.deleteSalesInvoice(id);
+  const handleDeleteInvoice = async (id: string, invNumber: string) => {
+    if (!window.confirm(`Are you sure you want to delete invoice ${invNumber}?`)) return;
+    setDeletingId(id);
+    try {
+      await storageService.deleteSalesInvoiceAsync(id);
+      if (viewingInvoiceId === id) {
+        setViewingInvoiceId(null);
+      }
       triggerRefresh();
       showToast(`Invoice ${invNumber} deleted`, 'info');
+    } catch (err: any) {
+      showToast(err?.message || `Failed to delete invoice ${invNumber}`, 'error');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -308,7 +352,10 @@ export const InvoiceCreator: React.FC = () => {
 
         <button
           id="btn-create-invoice"
-          onClick={() => setIsCreateModalOpen(true)}
+          onClick={() => {
+            setFormError(null);
+            setIsCreateModalOpen(true);
+          }}
           className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors"
         >
           <Plus className="w-4 h-4" />
@@ -413,13 +460,15 @@ export const InvoiceCreator: React.FC = () => {
                       {inv.status !== 'PAID' && (
                         <button
                           onClick={() => handleMarkAsPaid(inv)}
-                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-200 transition-colors"
+                          disabled={markingPaidId === inv.id}
+                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1"
                         >
+                          {markingPaidId === inv.id && <Loader2 className="w-3 h-3 animate-spin" />}
                           Mark Paid
                         </button>
                       )}
                       <button
-                        onClick={() => setViewingInvoice(inv)}
+                        onClick={() => setViewingInvoiceId(inv.id)}
                         className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
                         title="View Tax Invoice"
                       >
@@ -427,10 +476,11 @@ export const InvoiceCreator: React.FC = () => {
                       </button>
                       <button
                         onClick={() => handleDeleteInvoice(inv.id, inv.invoiceNumber)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        disabled={deletingId === inv.id}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50 rounded-lg transition-colors"
                         title="Delete Invoice"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        {deletingId === inv.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                       </button>
                     </div>
                   </td>
@@ -475,6 +525,12 @@ export const InvoiceCreator: React.FC = () => {
 
             {/* Form */}
             <form onSubmit={handleSaveInvoice} className="flex-1 overflow-y-auto p-6 space-y-6">
+              {formError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-rose-700 text-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{formError}</span>
+                </div>
+              )}
               {/* Customer & Project */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -784,16 +840,19 @@ export const InvoiceCreator: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-semibold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                  disabled={isSaving}
+                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-xs transition-colors inline-flex items-center gap-1.5"
                 >
-                  Issue Tax Invoice
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSaving ? 'Issuing Invoice...' : 'Issue Tax Invoice'}
                 </button>
               </div>
             </form>
@@ -821,7 +880,7 @@ export const InvoiceCreator: React.FC = () => {
                   Print
                 </button>
                 <button
-                  onClick={() => setViewingInvoice(null)}
+                  onClick={() => setViewingInvoiceId(null)}
                   className="p-1.5 text-slate-400 hover:text-slate-600"
                 >
                   <X className="w-5 h-5" />
@@ -915,7 +974,7 @@ export const InvoiceCreator: React.FC = () => {
 
             <div className="flex justify-end">
               <button
-                onClick={() => setViewingInvoice(null)}
+                onClick={() => setViewingInvoiceId(null)}
                 className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900"
               >
                 Close

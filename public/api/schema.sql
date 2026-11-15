@@ -427,11 +427,18 @@ CREATE TABLE IF NOT EXISTS `solar_products` (
   `hsn_code` VARCHAR(32) DEFAULT '',
   `gst_rate` DECIMAL(5,2) DEFAULT 18.00,
   `unit_price` DECIMAL(12,2) DEFAULT 0.00,
+  `selling_price` DECIMAL(12,2) DEFAULT 0.00,
   `current_stock` DECIMAL(12,2) DEFAULT 0.00,
   `reorder_level` DECIMAL(12,2) DEFAULT 0.00,
+  `location` VARCHAR(255) DEFAULT '',
   `warehouse_id` VARCHAR(64) DEFAULT '',
+  `warehouse_name` VARCHAR(255) DEFAULT '',
+  `warehouse_stocks_json` LONGTEXT DEFAULT NULL,
+  `preferred_vendor_id` VARCHAR(64) DEFAULT '',
+  `preferred_vendor_name` VARCHAR(255) DEFAULT '',
   `status` VARCHAR(32) DEFAULT 'ACTIVE',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_products_category` (`category`),
   INDEX `idx_products_sku` (`sku`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -454,8 +461,10 @@ CREATE TABLE IF NOT EXISTS `solar_vendors` (
   `payment_terms` VARCHAR(128) DEFAULT '30 Days',
   `rating` DECIMAL(3,1) DEFAULT 4.5,
   `categories_json` LONGTEXT,
+  `bank_details_json` LONGTEXT DEFAULT NULL,
   `status` VARCHAR(32) DEFAULT 'ACTIVE',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_vendors_code` (`vendor_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -470,6 +479,13 @@ CREATE TABLE IF NOT EXISTS `solar_purchase_orders` (
   `po_date` DATE NOT NULL,
   `expected_delivery_date` DATE DEFAULT NULL,
   `project_id` VARCHAR(64) DEFAULT '',
+  `project_title` VARCHAR(255) DEFAULT '',
+  `warehouse_id` VARCHAR(64) DEFAULT '',
+  `warehouse_name` VARCHAR(255) DEFAULT '',
+  `payment_due_date` DATE DEFAULT NULL,
+  `invoice_reference` VARCHAR(128) DEFAULT '',
+  `stock_updated` TINYINT(1) DEFAULT 0,
+  `received_date` DATE DEFAULT NULL,
   `items_json` LONGTEXT NOT NULL,
   `subtotal` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   `gst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
@@ -479,6 +495,7 @@ CREATE TABLE IF NOT EXISTS `solar_purchase_orders` (
   `receipts_json` LONGTEXT,
   `notes` TEXT,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_po_vendor` (`vendor_id`),
   INDEX `idx_po_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -490,16 +507,25 @@ CREATE TABLE IF NOT EXISTS `solar_boms` (
   `id` VARCHAR(64) PRIMARY KEY,
   `bom_number` VARCHAR(64) NOT NULL UNIQUE,
   `project_id` VARCHAR(64) NOT NULL,
+  `project_code` VARCHAR(64) DEFAULT '',
   `project_title` VARCHAR(255) NOT NULL,
+  `customer_name` VARCHAR(255) DEFAULT '',
   `system_capacity_kw` DECIMAL(10,2) NOT NULL,
   `version` VARCHAR(16) DEFAULT '1.0',
   `status` VARCHAR(32) DEFAULT 'APPROVED',
+  `warehouse_id` VARCHAR(64) DEFAULT '',
+  `warehouse_name` VARCHAR(255) DEFAULT '',
+  `stock_allocated` TINYINT(1) DEFAULT 0,
+  `eway_bill_number` VARCHAR(64) DEFAULT '',
+  `eway_bill_date` VARCHAR(32) DEFAULT '',
   `items_json` LONGTEXT NOT NULL,
   `total_estimated_cost` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   `created_by` VARCHAR(128) DEFAULT '',
   `approved_by` VARCHAR(128) DEFAULT '',
+  `approved_at` DATETIME DEFAULT NULL,
   `notes` TEXT,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_boms_project` (`project_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -509,11 +535,16 @@ CREATE TABLE IF NOT EXISTS `solar_boms` (
 CREATE TABLE IF NOT EXISTS `solar_sales_invoices` (
   `id` VARCHAR(64) PRIMARY KEY,
   `invoice_number` VARCHAR(64) NOT NULL UNIQUE,
+  `invoice_type` VARCHAR(64) DEFAULT 'TAX_INVOICE',
   `project_id` VARCHAR(64) DEFAULT '',
+  `project_title` VARCHAR(255) DEFAULT '',
   `customer_id` VARCHAR(64) NOT NULL,
   `customer_name` VARCHAR(255) NOT NULL,
+  `customer_gst` VARCHAR(64) DEFAULT '',
+  `customer_address` TEXT,
   `invoice_date` DATE NOT NULL,
   `due_date` DATE DEFAULT NULL,
+  `payment_terms` VARCHAR(128) DEFAULT '15 Days Net',
   `items_json` LONGTEXT NOT NULL,
   `subtotal` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   `gst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
@@ -524,8 +555,11 @@ CREATE TABLE IF NOT EXISTS `solar_sales_invoices` (
   `eway_bill_number` VARCHAR(64) DEFAULT '',
   `eway_bill_details_json` LONGTEXT,
   `warehouse_id` VARCHAR(64) DEFAULT '',
+  `deduct_stock` TINYINT(1) DEFAULT 1,
+  `stock_deducted` TINYINT(1) DEFAULT 0,
   `notes` TEXT,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_invoices_customer` (`customer_id`),
   INDEX `idx_invoices_status` (`payment_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -543,9 +577,15 @@ CREATE TABLE IF NOT EXISTS `solar_warehouses` (
   `pincode` VARCHAR(16) DEFAULT '',
   `manager_name` VARCHAR(128) DEFAULT '',
   `manager_phone` VARCHAR(32) DEFAULT '',
+  `email` VARCHAR(191) DEFAULT '',
   `gst_number` VARCHAR(32) DEFAULT '',
+  `capacity_sq_ft` DECIMAL(12,2) DEFAULT 15000.00,
   `is_active` TINYINT(1) DEFAULT 1,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  `status` VARCHAR(32) DEFAULT 'ACTIVE',
+  `is_default` TINYINT(1) DEFAULT 0,
+  `notes` TEXT,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -560,7 +600,11 @@ CREATE TABLE IF NOT EXISTS `solar_stock_movements` (
   `quantity` DECIMAL(12,2) NOT NULL,
   `balance_after` DECIMAL(12,2) NOT NULL,
   `reference_number` VARCHAR(64) DEFAULT '',
+  `reference_id` VARCHAR(64) DEFAULT '',
   `warehouse_id` VARCHAR(64) DEFAULT '',
+  `warehouse_name` VARCHAR(255) DEFAULT '',
+  `target_warehouse_id` VARCHAR(64) DEFAULT '',
+  `target_warehouse_name` VARCHAR(255) DEFAULT '',
   `notes` TEXT,
   `timestamp` DATETIME NOT NULL,
   `performed_by` VARCHAR(128) DEFAULT '',
@@ -579,7 +623,9 @@ CREATE TABLE IF NOT EXISTS `solar_stock_audits` (
   `audit_date` DATE NOT NULL,
   `auditor_name` VARCHAR(128) NOT NULL,
   `status` VARCHAR(32) DEFAULT 'COMPLETED',
+  `items_audited` INT DEFAULT 0,
   `discrepancies_count` INT DEFAULT 0,
+  `net_adjustment_value` DECIMAL(14,2) DEFAULT 0.00,
   `items_json` LONGTEXT NOT NULL,
   `notes` TEXT,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP

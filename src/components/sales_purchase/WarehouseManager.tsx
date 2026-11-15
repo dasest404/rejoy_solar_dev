@@ -23,7 +23,8 @@ import {
   X,
   TrendingUp,
   Package,
-  ArrowRight
+  ArrowRight,
+  Loader2
 } from 'lucide-react';
 
 export const WarehouseManager: React.FC = () => {
@@ -38,6 +39,9 @@ export const WarehouseManager: React.FC = () => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [settingDefaultId, setSettingDefaultId] = useState<string | null>(null);
 
   // Form State
   const [name, setName] = useState('');
@@ -61,6 +65,8 @@ export const WarehouseManager: React.FC = () => {
   const [auditAuditor, setAuditAuditor] = useState(currentUser?.name || 'Quality & Inventory Auditor');
   const [auditNotes, setAuditNotes] = useState('');
   const [auditCounts, setAuditCounts] = useState<Record<string, number>>({});
+  const [isSubmittingAudit, setIsSubmittingAudit] = useState(false);
+  const [auditError, setAuditError] = useState('');
 
   // Data Loading
   const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
@@ -162,8 +168,11 @@ export const WarehouseManager: React.FC = () => {
   };
 
   // Save Warehouse
-  const handleSaveWarehouse = (e: React.FormEvent) => {
+  const handleSaveWarehouse = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    setFormError('');
+
     if (!name.trim()) {
       setFormError('Warehouse name is required');
       return;
@@ -173,7 +182,6 @@ export const WarehouseManager: React.FC = () => {
       return;
     }
 
-    // Check duplicate code
     const isCodeTaken = warehouses.some(
       w => w.code.toLowerCase() === code.trim().toLowerCase() && w.id !== editingWarehouse?.id
     );
@@ -201,40 +209,64 @@ export const WarehouseManager: React.FC = () => {
       updatedAt: new Date().toISOString()
     };
 
-    storageService.saveWarehouse(warehouseData);
-    triggerRefresh();
-    showToast(
-      editingWarehouse
-        ? `Warehouse "${warehouseData.name}" updated successfully.`
-        : `New warehouse "${warehouseData.name}" created successfully.`,
-      'success'
-    );
-    setIsModalOpen(false);
+    setIsSaving(true);
+    try {
+      const saved = await storageService.saveWarehouseAsync(warehouseData);
+      triggerRefresh();
+      showToast(
+        editingWarehouse
+          ? `Warehouse "${saved.name}" updated successfully.`
+          : `New warehouse "${saved.name}" created successfully.`,
+        'success'
+      );
+      setIsModalOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save warehouse to MySQL';
+      setFormError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Delete Warehouse
-  const handleDeleteWarehouse = (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to remove warehouse "${name}"?`)) {
+  const handleDeleteWarehouse = async (id: string, whName: string) => {
+    if (deletingId) return;
+    if (!window.confirm(`Are you sure you want to remove warehouse "${whName}"?`)) {
       return;
     }
-    const res = storageService.deleteWarehouse(id);
-    if (!res.success) {
-      showToast(res.message || 'Failed to delete warehouse', 'error');
-      return;
+    setDeletingId(id);
+    try {
+      await storageService.deleteWarehouseAsync(id);
+      triggerRefresh();
+      showToast(`Warehouse "${whName}" deleted successfully.`, 'info');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete warehouse';
+      showToast(msg, 'error');
+    } finally {
+      setDeletingId(null);
     }
-    triggerRefresh();
-    showToast(`Warehouse "${name}" deleted successfully.`, 'info');
   };
 
   // Set Default
-  const handleSetDefault = (w: Warehouse) => {
-    storageService.saveWarehouse({
-      ...w,
-      isDefault: true,
-      status: 'ACTIVE'
-    });
-    triggerRefresh();
-    showToast(`"${w.name}" set as default distribution warehouse.`, 'success');
+  const handleSetDefault = async (w: Warehouse) => {
+    if (settingDefaultId) return;
+    setSettingDefaultId(w.id);
+    try {
+      await storageService.saveWarehouseAsync({
+        ...w,
+        isDefault: true,
+        status: 'ACTIVE',
+        updatedAt: new Date().toISOString()
+      });
+      triggerRefresh();
+      showToast(`"${w.name}" set as default distribution warehouse.`, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update default warehouse';
+      showToast(msg, 'error');
+    } finally {
+      setSettingDefaultId(null);
+    }
   };
 
   // Open Physical Audit Modal
@@ -242,7 +274,7 @@ export const WarehouseManager: React.FC = () => {
     setAuditWarehouse(w);
     setAuditAuditor(currentUser?.name || 'Quality & Inventory Auditor');
     setAuditNotes(`Physical quarterly count verification for ${w.name}`);
-    // Pre-populate actual count with current stock
+    setAuditError('');
     const initialCounts: Record<string, number> = {};
     products.forEach(p => {
       const stock = p.warehouseStocks?.[w.id] ?? (w.isDefault ? p.currentStock : 0);
@@ -253,58 +285,67 @@ export const WarehouseManager: React.FC = () => {
   };
 
   // Submit Physical Audit Reconciliation
-  const handleSubmitAudit = (e: React.FormEvent) => {
+  const handleSubmitAudit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auditWarehouse) return;
+    if (!auditWarehouse || isSubmittingAudit) return;
+    setAuditError('');
+    setIsSubmittingAudit(true);
 
     let discrepancies = 0;
     let netAdjustmentVal = 0;
     let auditedCount = 0;
 
-    products.forEach(p => {
-      const expectedStock = p.warehouseStocks?.[auditWarehouse.id] ?? (auditWarehouse.isDefault ? p.currentStock : 0);
-      const countedStock = auditCounts[p.id] !== undefined ? Number(auditCounts[p.id]) : expectedStock;
-      auditedCount++;
+    try {
+      for (const p of products) {
+        const expectedStock = p.warehouseStocks?.[auditWarehouse.id] ?? (auditWarehouse.isDefault ? p.currentStock : 0);
+        const countedStock = auditCounts[p.id] !== undefined ? Number(auditCounts[p.id]) : expectedStock;
+        auditedCount++;
 
-      if (countedStock !== expectedStock) {
-        discrepancies++;
-        const diff = countedStock - expectedStock;
-        netAdjustmentVal += diff * (p.unitPrice || 0);
+        if (countedStock !== expectedStock) {
+          discrepancies++;
+          const diff = countedStock - expectedStock;
+          netAdjustmentVal += diff * (p.unitPrice || 0);
 
-        // Adjust stock in this warehouse
-        storageService.adjustStock(
-          p.id,
-          countedStock,
-          `Physical Audit Reconciliation: ${auditWarehouse.name} (${auditAuditor})`,
-          auditAuditor,
-          auditWarehouse.id,
-          auditWarehouse.name
-        );
+          await storageService.adjustStockAsync(
+            p.id,
+            countedStock,
+            `Physical Audit Reconciliation: ${auditWarehouse.name} (${auditAuditor})`,
+            auditAuditor,
+            auditWarehouse.id,
+            auditWarehouse.name
+          );
+        }
       }
-    });
 
-    const newAuditRecord: StockAuditRecord = {
-      id: `audit-${Date.now()}`,
-      auditNumber: `AUD-${new Date().getFullYear()}-${String(audits.length + 1).padStart(3, '0')}`,
-      warehouseId: auditWarehouse.id,
-      warehouseName: auditWarehouse.name,
-      auditDate: new Date().toISOString().slice(0, 10),
-      auditedBy: auditAuditor,
-      status: 'COMPLETED',
-      notes: auditNotes || 'Physical count verified and discrepancies reconciled.',
-      itemsAudited: auditedCount,
-      discrepanciesFound: discrepancies,
-      netAdjustmentValue: netAdjustmentVal,
-      createdAt: new Date().toISOString()
-    };
+      const newAuditRecord: StockAuditRecord = {
+        id: `audit-${Date.now()}`,
+        auditNumber: `AUD-${new Date().getFullYear()}-${String(audits.length + 1).padStart(3, '0')}`,
+        warehouseId: auditWarehouse.id,
+        warehouseName: auditWarehouse.name,
+        auditDate: new Date().toISOString().slice(0, 10),
+        auditedBy: auditAuditor,
+        status: 'COMPLETED',
+        notes: auditNotes || 'Physical count verified and discrepancies reconciled.',
+        itemsAudited: auditedCount,
+        discrepanciesFound: discrepancies,
+        netAdjustmentValue: netAdjustmentVal,
+        createdAt: new Date().toISOString()
+      };
 
-    storageService.saveStockAudit(newAuditRecord);
-    triggerRefresh();
-    showToast(
-      `Audit completed for ${auditWarehouse.name}. Reconciled ${discrepancies} item variance(s).`,
-      'success'
-    );
-    setIsAuditModalOpen(false);
+      await storageService.saveStockAuditAsync(newAuditRecord);
+      triggerRefresh();
+      showToast(
+        `Audit completed for ${auditWarehouse.name}. Reconciled ${discrepancies} item variance(s).`,
+        'success'
+      );
+      setIsAuditModalOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save stock audit to MySQL';
+      setAuditError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSubmittingAudit(false);
+    }
   };
 
   return (
@@ -562,16 +603,22 @@ export const WarehouseManager: React.FC = () => {
                       {!w.isDefault && (
                         <button
                           onClick={() => handleSetDefault(w)}
-                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                          disabled={settingDefaultId === w.id || deletingId === w.id}
+                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                           title="Make Default Warehouse"
                         >
-                          <Star className="w-3.5 h-3.5" />
+                          {settingDefaultId === w.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                          ) : (
+                            <Star className="w-3.5 h-3.5" />
+                          )}
                         </button>
                       )}
 
                       <button
                         onClick={() => handleOpenEdit(w)}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        disabled={deletingId === w.id}
+                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                         title="Edit Facility"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
@@ -580,10 +627,15 @@ export const WarehouseManager: React.FC = () => {
                       {!w.isDefault && (
                         <button
                           onClick={() => handleDeleteWarehouse(w.id, w.name)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          disabled={deletingId === w.id || settingDefaultId === w.id}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                           title="Delete Facility"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          {deletingId === w.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-500" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
                         </button>
                       )}
                     </>
@@ -889,16 +941,19 @@ export const WarehouseManager: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors"
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  {editingWarehouse ? 'Save Changes' : 'Create Facility'}
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSaving ? 'Saving to MySQL...' : editingWarehouse ? 'Save Changes' : 'Create Facility'}
                 </button>
               </div>
             </form>
@@ -933,6 +988,11 @@ export const WarehouseManager: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmitAudit} className="flex-1 overflow-y-auto p-6 space-y-5">
+              {auditError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl font-medium">
+                  {auditError}
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1030,16 +1090,19 @@ export const WarehouseManager: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
+                  disabled={isSubmittingAudit}
                   onClick={() => setIsAuditModalOpen(false)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors"
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                  disabled={isSubmittingAudit}
+                  className="inline-flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  Confirm & Apply Audit Reconciliation
+                  {isSubmittingAudit && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSubmittingAudit ? 'Reconciling Stock...' : 'Confirm & Apply Audit Reconciliation'}
                 </button>
               </div>
             </form>

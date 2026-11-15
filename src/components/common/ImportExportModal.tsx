@@ -321,7 +321,15 @@ export const ImportExportModal: React.FC = () => {
           showToast('No employee records were imported.', 'error');
         }
       } else if (importExportModule === 'Products') {
-        const result = await storageService.importProducts(report.validRecords);
+        const defaultWh = storageService.getDefaultWarehouse();
+        const normalizedProducts = report.validRecords.map((r: any) => ({
+          ...r,
+          warehouseId: r.warehouseId || defaultWh?.id,
+          warehouseName: r.warehouseName || defaultWh?.name,
+          sellingPrice: r.sellingPrice ?? r.unitPrice,
+          minStockThreshold: r.minStockThreshold ?? r.reorderLevel ?? 10
+        }));
+        const result = await storageService.importProducts(normalizedProducts);
         const summary: ImportExecutionSummary = {
           success: result.success,
           total: report.totalRows,
@@ -349,7 +357,11 @@ export const ImportExportModal: React.FC = () => {
           showToast('No product records were imported.', 'error');
         }
       } else if (importExportModule === 'Vendors') {
-        const result = await storageService.importVendors(report.validRecords);
+        const normalizedVendors = report.validRecords.map((r: any) => ({
+          ...r,
+          category: (r.category || 'Solar Modules').trim()
+        }));
+        const result = await storageService.importVendors(normalizedVendors);
         const summary: ImportExecutionSummary = {
           success: result.success,
           total: report.totalRows,

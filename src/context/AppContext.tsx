@@ -431,14 +431,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSyncError(storageService.lastSyncError);
 
     const handleStorageUpdate = () => {
-      setTimeout(() => {
-        setNotifications(storageService.getNotifications());
-        setSettings(storageService.getSettings());
-        setBootstrapStatus(storageService.bootstrapStatus);
-        setBootstrapError(storageService.bootstrapError);
-        setSyncError(storageService.lastSyncError);
-        setRefreshTrigger(prev => prev + 1);
-      }, 0);
+      setNotifications(storageService.getNotifications());
+      setSettings(storageService.getSettings());
+      setBootstrapStatus(storageService.bootstrapStatus);
+      setBootstrapError(storageService.bootstrapError);
+      setSyncError(storageService.lastSyncError);
+      setRefreshTrigger(prev => prev + 1);
     };
 
     const handleStorageError = (ev: Event) => {

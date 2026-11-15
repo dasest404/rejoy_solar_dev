@@ -288,7 +288,7 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
     }
 
     const normalizedCollection = String(collection).toLowerCase();
-    const adminOnlyCollections = ['users', 'solar_users', 'acl_config', 'solar_acl_config', 'settings', 'solar_system_settings'];
+    const adminOnlyCollections = ['users', 'solar_users', 'acl_config', 'solar_acl_config', 'settings', 'solar_system_settings', 'warehouses', 'solar_warehouses'];
     const hrCollections = ['employees', 'employee', 'solar_employees', 'solar_employee'];
 
     if (isCustomerUser(user)) {
@@ -1724,6 +1724,11 @@ apiRouter.get('/warehouses', async (_req: Request, res: Response) => {
 
 apiRouter.post('/warehouses', async (req: Request, res: Response) => {
   try {
+    const user = (req as any).user;
+    if (user && !['Admin', 'Super Admin'].includes(user.role)) {
+      res.status(403).json({ success: false, error: 'Forbidden: Only Administrators can modify warehouses.' });
+      return;
+    }
     const wh = { ...req.body, id: req.body.id || `wh-${Date.now()}` };
     const saved = await dbManager.saveWarehouse(wh);
     res.status(201).json({ success: true, data: saved });
@@ -1734,6 +1739,11 @@ apiRouter.post('/warehouses', async (req: Request, res: Response) => {
 
 apiRouter.put('/warehouses/:id', async (req: Request, res: Response) => {
   try {
+    const user = (req as any).user;
+    if (user && !['Admin', 'Super Admin'].includes(user.role)) {
+      res.status(403).json({ success: false, error: 'Forbidden: Only Administrators can modify warehouses.' });
+      return;
+    }
     const { id } = req.params;
     const saved = await dbManager.saveWarehouse({ ...req.body, id });
     res.json({ success: true, data: saved });
@@ -1744,9 +1754,18 @@ apiRouter.put('/warehouses/:id', async (req: Request, res: Response) => {
 
 apiRouter.delete('/warehouses/:id', async (req: Request, res: Response) => {
   try {
+    const user = (req as any).user;
+    if (user && !['Admin', 'Super Admin'].includes(user.role)) {
+      res.status(403).json({ success: false, error: 'Forbidden: Only Administrators can delete warehouses.' });
+      return;
+    }
     await dbManager.deleteWarehouse(req.params.id);
     res.json({ success: true, message: 'Warehouse deleted from MySQL.' });
   } catch (err: any) {
+    if (String(err?.message || '').includes('Primary/Default warehouse')) {
+      res.status(400).json({ success: false, error: err.message });
+      return;
+    }
     sendApiError(res, err, 'Failed to delete warehouse');
   }
 });

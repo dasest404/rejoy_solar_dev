@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject } from '../../../types/solar';
 import { storageService } from '../../../services/storage';
+import { useApp } from '../../../context/AppContext';
 import { validatePOLineItem, validatePOLineItems } from '../../../services/validation';
 import {
   Edit3,
@@ -13,7 +14,8 @@ import {
   Building2,
   Calendar,
   Layers,
-  FileText
+  FileText,
+  Loader2
 } from 'lucide-react';
 
 interface EditPurchaseOrderModalProps {
@@ -53,12 +55,15 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
   });
 
   // Adding new item state
+  const { refreshTrigger } = useApp();
+  const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [newItemQty, setNewItemQty] = useState<number>(10);
   const [newItemUnitPrice, setNewItemUnitPrice] = useState<number>(0);
   const [newItemTaxPercent, setNewItemTaxPercent] = useState<number>(12);
   const [lineItemError, setLineItemError] = useState('');
   const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleProductSelect = (prodId: string) => {
     setSelectedProductId(prodId);
@@ -208,8 +213,9 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     };
   }, [items]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setFormError('');
 
     if (items.length === 0) {
@@ -227,7 +233,6 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
       return;
     }
 
-    // Strict duplicate check on line items before saving
     const duplicateValidation = validatePOLineItems(items);
     if (!duplicateValidation.valid) {
       const msg = duplicateValidation.message || 'Duplicate products detected in Purchase Order.';
@@ -238,7 +243,6 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
 
     const vendor = vendors.find(v => v.id === vendorId);
     const project = projects.find(p => p.id === projectId);
-    const warehouses = storageService.getWarehouses();
     const selectedWh = warehouses.find(w => w.id === warehouseId) || storageService.getDefaultWarehouse();
 
     const updatedOrder: PurchaseOrder = {
@@ -263,15 +267,18 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
       updatedAt: new Date().toISOString()
     };
 
+    setIsSubmitting(true);
     try {
-      storageService.savePurchaseOrder(updatedOrder, false);
-      showToast(`Purchase Order ${order.purchaseNumber} updated successfully`, 'success');
-      onOrderSaved(updatedOrder);
+      const saved = await storageService.savePurchaseOrderAsync(updatedOrder, false);
+      showToast(`Purchase Order ${saved.purchaseNumber} updated successfully`, 'success');
+      onOrderSaved(saved);
       onClose();
-    } catch (err: any) {
-      const msg = err.message || 'Failed to update purchase order.';
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update purchase order.';
       setFormError(msg);
       showToast(msg, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -333,7 +340,7 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
                 onChange={e => setWarehouseId(e.target.value)}
                 className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500/20 font-medium"
               >
-                {storageService.getWarehouses().map(w => (
+                {warehouses.map(w => (
                   <option key={w.id} value={w.id}>
                     {w.name} ({w.code}) {w.isDefault ? '★' : ''}
                   </option>
@@ -680,19 +687,20 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
           <div className="flex items-center justify-between pt-4 border-t border-slate-200">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={onClose}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
             >
               Cancel
             </button>
 
             <button
               type="submit"
-              disabled={totals.hasOrderedLessThanReceived || totals.hasDuplicateProducts}
-              className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+              disabled={isSubmitting || totals.hasOrderedLessThanReceived || totals.hasDuplicateProducts}
+              className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
             >
-              <Save className="w-4 h-4" />
-              Save PO Summary Changes
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {isSubmitting ? 'Saving Changes...' : 'Save PO Summary Changes'}
             </button>
           </div>
         </form>

@@ -11,11 +11,15 @@ import {
   CreditCard,
   UserSquare2,
   Wrench,
-  ArrowRight
+  ArrowRight,
+  Package,
+  Truck,
+  Warehouse as WarehouseIcon,
+  ClipboardList
 } from 'lucide-react';
 
 export const GlobalSearchModal: React.FC = () => {
-  const { isSearchOpen, setIsSearchOpen, openCustomerControlCenter, setActiveView } = useApp();
+  const { isSearchOpen, setIsSearchOpen, openCustomerControlCenter, setActiveView, refreshTrigger } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
@@ -32,13 +36,17 @@ export const GlobalSearchModal: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setIsSearchOpen]);
 
-  const customers = useMemo(() => storageService.getCustomers(), [isSearchOpen]);
-  const leads = useMemo(() => storageService.getLeads(), [isSearchOpen]);
-  const projects = useMemo(() => storageService.getProjects(), [isSearchOpen]);
-  const employees = useMemo(() => storageService.getEmployees(), [isSearchOpen]);
-  const quotations = useMemo(() => storageService.getQuotations(), [isSearchOpen]);
-  const payments = useMemo(() => storageService.getPayments(), [isSearchOpen]);
-  const serviceTickets = useMemo(() => storageService.getServiceTickets(), [isSearchOpen]);
+  const customers = useMemo(() => storageService.getCustomers(), [isSearchOpen, refreshTrigger]);
+  const leads = useMemo(() => storageService.getLeads(), [isSearchOpen, refreshTrigger]);
+  const projects = useMemo(() => storageService.getProjects(), [isSearchOpen, refreshTrigger]);
+  const employees = useMemo(() => storageService.getEmployees(), [isSearchOpen, refreshTrigger]);
+  const quotations = useMemo(() => storageService.getQuotations(), [isSearchOpen, refreshTrigger]);
+  const payments = useMemo(() => storageService.getPayments(), [isSearchOpen, refreshTrigger]);
+  const serviceTickets = useMemo(() => storageService.getServiceTickets(), [isSearchOpen, refreshTrigger]);
+  const products = useMemo(() => storageService.getProducts(), [isSearchOpen, refreshTrigger]);
+  const vendors = useMemo(() => storageService.getVendors(), [isSearchOpen, refreshTrigger]);
+  const warehouses = useMemo(() => storageService.getWarehouses(), [isSearchOpen, refreshTrigger]);
+  const purchaseOrders = useMemo(() => storageService.getPurchaseOrders(), [isSearchOpen, refreshTrigger]);
 
   const results = useMemo(() => {
     if (!searchTerm.trim()) {
@@ -87,9 +95,48 @@ export const GlobalSearchModal: React.FC = () => {
           (s.ticketId || '').toLowerCase().includes(q) ||
           (s.customerName || '').toLowerCase().includes(q) ||
           (s.issue || '').toLowerCase().includes(q)
+      ),
+      products: products.filter(
+        pr =>
+          (pr.name || '').toLowerCase().includes(q) ||
+          (pr.sku || '').toLowerCase().includes(q) ||
+          (pr.brand || '').toLowerCase().includes(q) ||
+          (pr.category || '').toLowerCase().includes(q)
+      ),
+      vendors: vendors.filter(
+        v =>
+          (v.name || '').toLowerCase().includes(q) ||
+          (v.vendorCode || '').toLowerCase().includes(q) ||
+          (v.city || '').toLowerCase().includes(q) ||
+          (v.category || '').toLowerCase().includes(q)
+      ),
+      warehouses: warehouses.filter(
+        w =>
+          (w.name || '').toLowerCase().includes(q) ||
+          (w.code || '').toLowerCase().includes(q) ||
+          (w.city || '').toLowerCase().includes(q)
+      ),
+      purchaseOrders: purchaseOrders.filter(
+        po =>
+          (po.purchaseNumber || '').toLowerCase().includes(q) ||
+          (po.vendorName || '').toLowerCase().includes(q) ||
+          (po.projectTitle || '').toLowerCase().includes(q)
       )
     };
-  }, [searchTerm, customers, projects, leads, quotations, payments, employees, serviceTickets]);
+  }, [
+    searchTerm,
+    customers,
+    projects,
+    leads,
+    quotations,
+    payments,
+    employees,
+    serviceTickets,
+    products,
+    vendors,
+    warehouses,
+    purchaseOrders
+  ]);
 
   if (!isSearchOpen) return null;
 
@@ -103,7 +150,7 @@ export const GlobalSearchModal: React.FC = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search customer, phone, lead, project ID, quotation, employee..."
+            placeholder="Search customer, product SKU, vendor, warehouse, PO, project..."
             className="w-full bg-transparent text-slate-900 placeholder:text-slate-400 text-base focus:outline-hidden"
             autoFocus
           />
@@ -129,7 +176,7 @@ export const GlobalSearchModal: React.FC = () => {
             <div className="py-12 text-center text-slate-400">
               <Search className="w-10 h-10 mx-auto text-slate-300 mb-2" />
               <p className="text-sm font-medium">Type to search across all solar business records</p>
-              <p className="text-xs text-slate-400 mt-1">Customers, Projects, Leads, Quotations, Invoices, Engineers</p>
+              <p className="text-xs text-slate-400 mt-1">Customers, Projects, Leads, Products, Vendors, Warehouses, POs, Engineers</p>
             </div>
           ) : (
             <>
@@ -326,6 +373,127 @@ export const GlobalSearchModal: React.FC = () => {
                           <p className="text-xs text-slate-500">{s.issue}</p>
                         </div>
                         <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-amber-600 transition-colors" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Products / Inventory Catalog */}
+              {results && results.products.length > 0 && (
+                <div className="pt-4 first:pt-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    <Package className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Products ({results.products.length})</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {results.products.map(pr => (
+                      <div
+                        key={pr.id}
+                        onClick={() => {
+                          setActiveView('inventory_products');
+                          setIsSearchOpen(false);
+                        }}
+                        className="flex items-center justify-between p-2.5 hover:bg-amber-50/60 rounded-xl cursor-pointer transition-colors group"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-sm text-slate-900 group-hover:text-amber-700">{pr.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-slate-100 text-slate-700 font-mono font-bold">{pr.sku}</span>
+                          </div>
+                          <p className="text-xs text-slate-500">{pr.category} • {pr.brand} • Stock: {pr.currentStock} {pr.unit}</p>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-amber-600 transition-colors" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Vendors */}
+              {results && results.vendors.length > 0 && (
+                <div className="pt-4 first:pt-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    <Truck className="w-3.5 h-3.5 text-purple-500" />
+                    <span>Vendors ({results.vendors.length})</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {results.vendors.map(v => (
+                      <div
+                        key={v.id}
+                        onClick={() => {
+                          setActiveView('purchase_vendors');
+                          setIsSearchOpen(false);
+                        }}
+                        className="flex items-center justify-between p-2.5 hover:bg-purple-50/60 rounded-xl cursor-pointer transition-colors group"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-sm text-slate-900 group-hover:text-purple-700">{v.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-purple-100 text-purple-800 font-mono font-bold">{v.vendorCode}</span>
+                          </div>
+                          <p className="text-xs text-slate-500">{v.category} • {v.city}, {v.state}</p>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-purple-600 transition-colors" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Warehouses */}
+              {results && results.warehouses.length > 0 && (
+                <div className="pt-4 first:pt-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    <WarehouseIcon className="w-3.5 h-3.5 text-cyan-600" />
+                    <span>Warehouses ({results.warehouses.length})</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {results.warehouses.map(w => (
+                      <div
+                        key={w.id}
+                        onClick={() => {
+                          setActiveView('warehouse_management');
+                          setIsSearchOpen(false);
+                        }}
+                        className="flex items-center justify-between p-2.5 hover:bg-cyan-50/60 rounded-xl cursor-pointer transition-colors group"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-sm text-slate-900 group-hover:text-cyan-700">{w.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-cyan-100 text-cyan-800 font-mono font-bold">{w.code}</span>
+                          </div>
+                          <p className="text-xs text-slate-500">{w.city}, {w.state} • {w.contactPerson}</p>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-600 transition-colors" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Purchase Orders */}
+              {results && results.purchaseOrders.length > 0 && (
+                <div className="pt-4 first:pt-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    <ClipboardList className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Purchase Orders ({results.purchaseOrders.length})</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {results.purchaseOrders.map(po => (
+                      <div
+                        key={po.id}
+                        onClick={() => {
+                          setActiveView('purchase_orders');
+                          setIsSearchOpen(false);
+                        }}
+                        className="flex items-center justify-between p-2.5 hover:bg-emerald-50/60 rounded-xl cursor-pointer transition-colors group"
+                      >
+                        <div>
+                          <span className="font-semibold text-sm text-slate-900 group-hover:text-emerald-700">{po.purchaseNumber} - {po.vendorName}</span>
+                          <p className="text-xs text-slate-500">₹{po.totalAmount.toLocaleString('en-IN')} • {po.status}</p>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-emerald-600 transition-colors" />
                       </div>
                     ))}
                   </div>

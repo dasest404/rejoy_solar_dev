@@ -21,7 +21,8 @@ import {
   ExternalLink,
   Edit3,
   Layers,
-  ChevronDown
+  ChevronDown,
+  Loader2
 } from 'lucide-react';
 
 interface EWayBillModalProps {
@@ -75,20 +76,21 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
   bom,
   onSaved
 }) => {
-  const { showToast, triggerRefresh } = useApp();
+  const { showToast, triggerRefresh, refreshTrigger } = useApp();
 
   // Mode: 'eway' (Page 2), 'invoice' (Page 1), 'both' (Both pages for print), 'edit' (Parameters)
   const [activeTab, setActiveTab] = useState<'eway' | 'invoice' | 'both' | 'edit'>('eway');
   const [copied, setCopied] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  const [isSaving, setIsSaving] = useState(false);
 
   // Retrieve contextual ERP records
-  const settings = useMemo(() => storageService.getSettings(), [isOpen]);
-  const customers = useMemo(() => storageService.getCustomers(), [isOpen]);
-  const projects = useMemo(() => storageService.getProjects(), [isOpen]);
-  const products = useMemo(() => storageService.getProducts(), [isOpen]);
-  const invoices = useMemo(() => storageService.getSalesInvoices(), [isOpen]);
-  const warehouses = useMemo(() => storageService.getWarehouses(), [isOpen]);
+  const settings = useMemo(() => storageService.getSettings(), [isOpen, refreshTrigger]);
+  const customers = useMemo(() => storageService.getCustomers(), [isOpen, refreshTrigger]);
+  const projects = useMemo(() => storageService.getProjects(), [isOpen, refreshTrigger]);
+  const products = useMemo(() => storageService.getProducts(), [isOpen, refreshTrigger]);
+  const invoices = useMemo(() => storageService.getSalesInvoices(), [isOpen, refreshTrigger]);
+  const warehouses = useMemo(() => storageService.getWarehouses(), [isOpen, refreshTrigger]);
 
   // Warehouse selection state - default to BOM warehouse, or Bhilai warehouse, or default
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('');
@@ -327,7 +329,8 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
     window.print();
   };
 
-  const handleSaveEWayBill = () => {
+  const handleSaveEWayBill = async () => {
+    setIsSaving(true);
     try {
       const updatedBOM: BillOfMaterials = {
         ...bom,
@@ -336,12 +339,14 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
         ewayBillNumber: ewbNumber,
         ewayBillDate: new Date().toISOString()
       };
-      storageService.saveBOM(updatedBOM);
+      await storageService.saveBOMAsync(updatedBOM);
       triggerRefresh();
       showToast(`E-Way Bill ${ewbNumber} generated with dispatch from ${selectedWarehouse.name}`, 'success');
       if (onSaved) onSaved(ewbNumber);
     } catch (e: any) {
       showToast(e?.message || 'Failed to save E-Way Bill', 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1309,11 +1314,12 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
 
             <button
               type="button"
+              disabled={isSaving}
               onClick={handleSaveEWayBill}
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+              className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-slate-950 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
             >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Save & Confirm EWB</span>
+              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+              <span>{isSaving ? 'Saving EWB...' : 'Save & Confirm EWB'}</span>
             </button>
 
             <button

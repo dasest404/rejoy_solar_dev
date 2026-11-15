@@ -212,6 +212,85 @@ class MySqlDatabaseManager {
         }
       } catch {}
 
+      // Auto-migrate extended columns on Sales & Purchase ERP tables
+      const salesPurchaseMigrations: Record<string, Record<string, string>> = {
+        solar_products: {
+          selling_price: "DECIMAL(12,2) DEFAULT 0.00",
+          location: "VARCHAR(255) DEFAULT ''",
+          warehouse_name: "VARCHAR(255) DEFAULT ''",
+          warehouse_stocks_json: "LONGTEXT DEFAULT NULL",
+          preferred_vendor_id: "VARCHAR(64) DEFAULT ''",
+          preferred_vendor_name: "VARCHAR(255) DEFAULT ''",
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        solar_vendors: {
+          bank_details_json: "LONGTEXT DEFAULT NULL",
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        solar_purchase_orders: {
+          project_title: "VARCHAR(255) DEFAULT ''",
+          warehouse_id: "VARCHAR(64) DEFAULT ''",
+          warehouse_name: "VARCHAR(255) DEFAULT ''",
+          payment_due_date: "DATE DEFAULT NULL",
+          invoice_reference: "VARCHAR(128) DEFAULT ''",
+          stock_updated: "TINYINT(1) DEFAULT 0",
+          received_date: "DATE DEFAULT NULL",
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        solar_boms: {
+          project_code: "VARCHAR(64) DEFAULT ''",
+          customer_name: "VARCHAR(255) DEFAULT ''",
+          warehouse_id: "VARCHAR(64) DEFAULT ''",
+          warehouse_name: "VARCHAR(255) DEFAULT ''",
+          stock_allocated: "TINYINT(1) DEFAULT 0",
+          eway_bill_number: "VARCHAR(64) DEFAULT ''",
+          eway_bill_date: "VARCHAR(32) DEFAULT ''",
+          approved_at: "DATETIME DEFAULT NULL",
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        solar_sales_invoices: {
+          invoice_type: "VARCHAR(64) DEFAULT 'TAX_INVOICE'",
+          customer_gst: "VARCHAR(64) DEFAULT ''",
+          customer_address: "TEXT",
+          project_title: "VARCHAR(255) DEFAULT ''",
+          payment_terms: "VARCHAR(128) DEFAULT '15 Days Net'",
+          deduct_stock: "TINYINT(1) DEFAULT 1",
+          stock_deducted: "TINYINT(1) DEFAULT 0",
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        solar_warehouses: {
+          email: "VARCHAR(191) DEFAULT ''",
+          capacity_sq_ft: "DECIMAL(12,2) DEFAULT 15000.00",
+          status: "VARCHAR(32) DEFAULT 'ACTIVE'",
+          is_default: "TINYINT(1) DEFAULT 0",
+          notes: "TEXT",
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        solar_stock_movements: {
+          warehouse_name: "VARCHAR(255) DEFAULT ''",
+          target_warehouse_id: "VARCHAR(64) DEFAULT ''",
+          target_warehouse_name: "VARCHAR(255) DEFAULT ''",
+          reference_id: "VARCHAR(64) DEFAULT ''"
+        },
+        solar_stock_audits: {
+          items_audited: "INT DEFAULT 0",
+          net_adjustment_value: "DECIMAL(14,2) DEFAULT 0.00"
+        }
+      };
+      for (const [tableName, colsMap] of Object.entries(salesPurchaseMigrations)) {
+        try {
+          const [cols]: any = await this.pool.query(`SHOW COLUMNS FROM \`${tableName}\``);
+          const existing = new Set<string>((cols as any[]).map(c => String(c.Field).toLowerCase()));
+          for (const [col, typeDef] of Object.entries(colsMap)) {
+            if (!existing.has(col.toLowerCase())) {
+              try {
+                await this.pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${col}\` ${typeDef}`);
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
       // Check and migrate table & columns on solar_employee (authoritative employee table)
       try {
         // Ensure base table solar_employee exists
@@ -2260,13 +2339,17 @@ class MySqlDatabaseManager {
       const hsnCode = String(raw.hsnCode || raw.hsn_code || '85414011').trim();
       const rawPrice = String(raw.unitPrice ?? raw.unit_price ?? raw.sellingPrice ?? '').replace(/[^0-9.]/g, '');
       const unitPrice = parseFloat(rawPrice) || 0;
+      const rawSelling = String(raw.sellingPrice ?? raw.selling_price ?? '').replace(/[^0-9.]/g, '');
+      const sellingPrice = rawSelling !== '' ? (parseFloat(rawSelling) || 0) : Math.round(unitPrice * 1.15);
       const rawStock = String(raw.currentStock ?? raw.current_stock ?? raw.stock ?? '').replace(/[^0-9.]/g, '');
       const currentStock = parseFloat(rawStock) || 0;
-      const rawReorder = String(raw.reorderLevel ?? raw.minStockLevel ?? raw.reorder_level ?? '').replace(/[^0-9.]/g, '');
-      const reorderLevel = parseFloat(rawReorder) || 10;
+      const rawReorder = String(raw.minStockThreshold ?? raw.reorderLevel ?? raw.minStockLevel ?? raw.reorder_level ?? '').replace(/[^0-9.]/g, '');
+      const reorderLevel = rawReorder !== '' ? (parseFloat(rawReorder) ?? 10) : 10;
       const rawGst = String(raw.gstRate ?? raw.gst_rate ?? '').replace(/[^0-9.]/g, '');
-      const gstRate = parseFloat(rawGst) || 18;
+      const gstRate = rawGst !== '' ? (parseFloat(rawGst) || 0) : 18;
       const warehouseId = String(raw.warehouseId || raw.warehouse_id || '').trim();
+      const warehouseName = String(raw.warehouseName || raw.warehouse_name || '').trim();
+      const location = String(raw.location || warehouseName || '').trim();
       const status = String(raw.status || 'ACTIVE').trim().toUpperCase();
 
       if (!name) {
@@ -2294,6 +2377,13 @@ class MySqlDatabaseManager {
       }
 
       const prodId = raw.id || `prod-imp-${Date.now()}-${rowNum}`;
+      const warehouseStocks = (raw.warehouseStocks && typeof raw.warehouseStocks === 'object')
+        ? raw.warehouseStocks
+        : (warehouseId ? { [warehouseId]: currentStock } : {});
+      const warehouseStocksJson = JSON.stringify(warehouseStocks);
+      const preferredVendorId = String(raw.preferredVendorId || raw.preferred_vendor_id || '').trim();
+      const preferredVendorName = String(raw.preferredVendorName || raw.preferred_vendor_name || '').trim();
+
       const record: any = {
         id: prodId,
         sku,
@@ -2309,13 +2399,17 @@ class MySqlDatabaseManager {
         gstRate,
         taxRate: gstRate,
         unitPrice,
-        sellingPrice: raw.sellingPrice ? parseFloat(String(raw.sellingPrice).replace(/[^0-9.]/g, '')) : Math.round(unitPrice * 1.15),
+        sellingPrice,
         currentStock,
         reorderLevel,
         minStockLevel: reorderLevel,
         minStockThreshold: reorderLevel,
-        location: raw.location || 'Warehouse A',
+        location,
         warehouseId,
+        warehouseName,
+        warehouseStocks,
+        preferredVendorId,
+        preferredVendorName,
         status,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -2327,21 +2421,29 @@ class MySqlDatabaseManager {
             INSERT INTO \`solar_products\` (
               \`id\`, \`name\`, \`sku\`, \`category\`, \`brand\`, \`model\`,
               \`specifications\`, \`unit\`, \`hsn_code\`, \`gst_rate\`,
-              \`unit_price\`, \`current_stock\`, \`reorder_level\`, \`warehouse_id\`, \`status\`
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              \`unit_price\`, \`selling_price\`, \`current_stock\`, \`reorder_level\`,
+              \`location\`, \`warehouse_id\`, \`warehouse_name\`, \`warehouse_stocks_json\`,
+              \`preferred_vendor_id\`, \`preferred_vendor_name\`, \`status\`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
               \`name\` = VALUES(\`name\`), \`sku\` = VALUES(\`sku\`),
               \`category\` = VALUES(\`category\`), \`brand\` = VALUES(\`brand\`),
               \`model\` = VALUES(\`model\`), \`specifications\` = VALUES(\`specifications\`),
               \`unit\` = VALUES(\`unit\`), \`hsn_code\` = VALUES(\`hsn_code\`),
               \`gst_rate\` = VALUES(\`gst_rate\`), \`unit_price\` = VALUES(\`unit_price\`),
-              \`current_stock\` = VALUES(\`current_stock\`), \`reorder_level\` = VALUES(\`reorder_level\`),
+              \`selling_price\` = VALUES(\`selling_price\`), \`current_stock\` = VALUES(\`current_stock\`),
+              \`reorder_level\` = VALUES(\`reorder_level\`), \`location\` = VALUES(\`location\`),
+              \`warehouse_id\` = VALUES(\`warehouse_id\`), \`warehouse_name\` = VALUES(\`warehouse_name\`),
+              \`warehouse_stocks_json\` = VALUES(\`warehouse_stocks_json\`),
+              \`preferred_vendor_id\` = VALUES(\`preferred_vendor_id\`), \`preferred_vendor_name\` = VALUES(\`preferred_vendor_name\`),
               \`status\` = VALUES(\`status\`)
           `;
           await this.pool.query(sql, [
             record.id, record.name, record.sku, record.category, record.brand, record.model,
             record.specifications, record.unit, record.hsnCode, record.gstRate,
-            record.unitPrice, record.currentStock, record.reorderLevel, record.warehouseId, record.status
+            record.unitPrice, record.sellingPrice, record.currentStock, record.reorderLevel,
+            record.location, record.warehouseId, record.warehouseName, warehouseStocksJson,
+            record.preferredVendorId, record.preferredVendorName, record.status
           ]);
         } catch (dbErr: any) {
           failedRecords.push({ row: rowNum, reason: `MySQL write error: ${dbErr.message}` });
@@ -2454,8 +2556,10 @@ class MySqlDatabaseManager {
       const rawRating = String(raw.rating || '4.5').replace(/[^0-9.]/g, '');
       const rating = parseFloat(rawRating) || 4.5;
       const status = String(raw.status || 'ACTIVE').trim().toUpperCase();
-      const rawCat = raw.categories || raw.category || ['Modules'];
-      const categories = Array.isArray(rawCat) ? rawCat : [String(rawCat)];
+      const rawCat = raw.categories || (raw.category ? [raw.category] : ['Solar Modules']);
+      const categories = (Array.isArray(rawCat) ? rawCat : [String(rawCat)]).map(c => String(c).trim()).filter(Boolean);
+      const bankDetails = raw.bankDetails && typeof raw.bankDetails === 'object' ? raw.bankDetails : null;
+      const bankDetailsJson = bankDetails ? JSON.stringify(bankDetails) : null;
 
       if (!name) {
         failedRecords.push({ row: rowNum, reason: 'Vendor name is mandatory.' });
@@ -2518,9 +2622,10 @@ class MySqlDatabaseManager {
         panNumber,
         paymentTerms,
         rating,
-        category: categories[0] || 'Modules',
+        category: raw.category || categories[0] || 'Solar Modules',
         categories,
         categoriesJson: JSON.stringify(categories),
+        bankDetails: bankDetails || undefined,
         status,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -2532,21 +2637,22 @@ class MySqlDatabaseManager {
             INSERT INTO \`solar_vendors\` (
               \`id\`, \`name\`, \`vendor_code\`, \`contact_person\`, \`phone\`, \`email\`,
               \`address\`, \`city\`, \`state\`, \`gst_number\`, \`pan_number\`,
-              \`payment_terms\`, \`rating\`, \`categories_json\`, \`status\`
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              \`payment_terms\`, \`rating\`, \`categories_json\`, \`bank_details_json\`, \`status\`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
               \`name\` = VALUES(\`name\`), \`vendor_code\` = VALUES(\`vendor_code\`),
               \`contact_person\` = VALUES(\`contact_person\`), \`phone\` = VALUES(\`phone\`),
               \`email\` = VALUES(\`email\`), \`address\` = VALUES(\`address\`),
               \`city\` = VALUES(\`city\`), \`state\` = VALUES(\`state\`),
               \`gst_number\` = VALUES(\`gst_number\`), \`payment_terms\` = VALUES(\`payment_terms\`),
-              \`rating\` = VALUES(\`rating\`), \`status\` = VALUES(\`status\`)
+              \`rating\` = VALUES(\`rating\`), \`categories_json\` = VALUES(\`categories_json\`),
+              \`bank_details_json\` = VALUES(\`bank_details_json\`), \`status\` = VALUES(\`status\`)
           `;
           await this.pool.query(sql, [
             record.id, record.name, record.vendorCode, record.contactPerson,
             record.phone, record.email, record.address, record.city, record.state,
             record.gstNumber, record.panNumber, record.paymentTerms, record.rating,
-            record.categoriesJson, record.status
+            record.categoriesJson, bankDetailsJson, record.status
           ]);
         } catch (dbErr: any) {
           failedRecords.push({ row: rowNum, reason: `MySQL write error: ${dbErr.message}` });
@@ -3940,89 +4046,150 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('products');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_products` ORDER BY `created_at` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      name: r.name,
-      sku: r.sku,
-      itemCode: r.sku,
-      category: r.category,
-      brand: r.brand,
-      model: r.model,
-      specifications: r.specifications,
-      specification: r.specifications,
-      unit: r.unit,
-      hsnCode: r.hsn_code,
-      gstRate: Number(r.gst_rate) || 18,
-      taxRate: Number(r.gst_rate) || 18,
-      unitPrice: Number(r.unit_price) || 0,
-      currentStock: Number(r.current_stock) || 0,
-      reorderLevel: Number(r.reorder_level) || 0,
-      minStockLevel: Number(r.reorder_level) || 0,
-      warehouseId: r.warehouse_id,
-      status: r.status,
-      createdAt: r.created_at
-    }));
+    const mapped = (rows as any[]).map(r => {
+      let warehouseStocks: Record<string, number> = {};
+      try {
+        if (r.warehouse_stocks_json) warehouseStocks = JSON.parse(r.warehouse_stocks_json) || {};
+      } catch {}
+      const minStock = r.reorder_level != null ? Number(r.reorder_level) : 0;
+      const gst = r.gst_rate != null ? Number(r.gst_rate) : 18;
+      const unitPrice = r.unit_price != null ? Number(r.unit_price) : 0;
+      const sellingPrice = r.selling_price != null ? Number(r.selling_price) : 0;
+      return {
+        id: r.id,
+        name: r.name,
+        sku: r.sku,
+        itemCode: r.sku,
+        category: r.category,
+        brand: r.brand || '',
+        model: r.model || '',
+        specifications: r.specifications || '',
+        specification: r.specifications || '',
+        unit: r.unit || 'Nos',
+        hsnCode: r.hsn_code || '',
+        gstRate: gst,
+        taxRate: gst,
+        unitPrice,
+        sellingPrice,
+        currentStock: Number(r.current_stock ?? 0),
+        reorderLevel: minStock,
+        minStockLevel: minStock,
+        minStockThreshold: minStock,
+        location: r.location || r.warehouse_name || '',
+        warehouseId: r.warehouse_id || '',
+        warehouseName: r.warehouse_name || '',
+        warehouseStocks,
+        preferredVendorId: r.preferred_vendor_id || '',
+        preferredVendorName: r.preferred_vendor_name || '',
+        status: r.status || 'ACTIVE',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at || r.created_at
+      };
+    });
     this.setFallbackItems('products', mapped);
     return mapped;
   }
 
   public async saveProduct(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_products', item.id);
+    const id = item.id || `prod-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_products', id);
     const name = item.name ?? existing?.name ?? 'Solar Product';
-    const sku = item.sku ?? item.itemCode ?? existing?.sku ?? item.id;
-    const category = item.category ?? existing?.category ?? 'Panels';
+    const sku = item.sku ?? item.itemCode ?? existing?.sku ?? id;
+    const category = item.category ?? existing?.category ?? 'Solar Panels';
     const brand = item.brand ?? existing?.brand ?? '';
     const model = item.model ?? existing?.model ?? '';
-    const specifications = item.specifications ?? item.specification ?? existing?.specifications ?? '';
+    const specifications = item.specification ?? item.specifications ?? existing?.specifications ?? '';
     const unit = item.unit ?? existing?.unit ?? 'Nos';
     const hsnCode = item.hsnCode ?? item.hsn_code ?? existing?.hsn_code ?? '';
-    const gstRate = Number(item.gstRate ?? item.taxRate ?? item.gst_rate ?? item.tax_rate ?? existing?.gst_rate) || 18;
-    const unitPrice = Number(item.unitPrice ?? item.unit_price ?? existing?.unit_price) || 0;
-    const currentStock = Number(item.currentStock ?? item.current_stock ?? existing?.current_stock) || 0;
-    const reorderLevel = Number(item.reorderLevel ?? item.minStockLevel ?? item.reorder_level ?? existing?.reorder_level) || 10;
+    const rawGst = item.gstRate ?? item.taxRate ?? item.gst_rate ?? item.tax_rate ?? existing?.gst_rate;
+    const gstRate = rawGst != null ? Number(rawGst) : 18;
+    const rawUnitPrice = item.unitPrice ?? item.unit_price ?? existing?.unit_price;
+    const unitPrice = rawUnitPrice != null ? Number(rawUnitPrice) : 0;
+    const rawSellingPrice = item.sellingPrice ?? item.selling_price ?? existing?.selling_price;
+    const sellingPrice = rawSellingPrice != null ? Number(rawSellingPrice) : unitPrice;
+    const rawCurrentStock = item.currentStock ?? item.current_stock ?? existing?.current_stock;
+    const currentStock = rawCurrentStock != null ? Number(rawCurrentStock) : 0;
+    const rawReorder = item.minStockThreshold ?? item.reorderLevel ?? item.minStockLevel ?? item.reorder_level ?? existing?.reorder_level;
+    const reorderLevel = rawReorder != null ? Number(rawReorder) : 10;
     const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
+    const warehouseName = item.warehouseName ?? item.warehouse_name ?? existing?.warehouse_name ?? '';
+    const location = item.location ?? existing?.location ?? warehouseName ?? '';
+    const preferredVendorId = item.preferredVendorId ?? item.preferred_vendor_id ?? existing?.preferred_vendor_id ?? '';
+    const preferredVendorName = item.preferredVendorName ?? item.preferred_vendor_name ?? existing?.preferred_vendor_name ?? '';
+    let existingStocks: Record<string, number> = {};
+    try { if (existing?.warehouse_stocks_json) existingStocks = JSON.parse(existing.warehouse_stocks_json) || {}; } catch {}
+    const warehouseStocks = (item.warehouseStocks && typeof item.warehouseStocks === 'object') ? item.warehouseStocks : existingStocks;
+    const warehouseStocksJson = JSON.stringify(warehouseStocks);
     const status = item.status ?? existing?.status ?? 'ACTIVE';
 
     const sql = `
       INSERT INTO \`solar_products\` (
         \`id\`, \`name\`, \`sku\`, \`category\`, \`brand\`, \`model\`,
         \`specifications\`, \`unit\`, \`hsn_code\`, \`gst_rate\`,
-        \`unit_price\`, \`current_stock\`, \`reorder_level\`, \`warehouse_id\`, \`status\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`unit_price\`, \`selling_price\`, \`current_stock\`, \`reorder_level\`,
+        \`location\`, \`warehouse_id\`, \`warehouse_name\`, \`warehouse_stocks_json\`,
+        \`preferred_vendor_id\`, \`preferred_vendor_name\`, \`status\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`name\` = VALUES(\`name\`), \`sku\` = VALUES(\`sku\`),
         \`category\` = VALUES(\`category\`), \`brand\` = VALUES(\`brand\`),
         \`model\` = VALUES(\`model\`), \`specifications\` = VALUES(\`specifications\`),
         \`unit\` = VALUES(\`unit\`), \`hsn_code\` = VALUES(\`hsn_code\`),
         \`gst_rate\` = VALUES(\`gst_rate\`), \`unit_price\` = VALUES(\`unit_price\`),
-        \`current_stock\` = VALUES(\`current_stock\`), \`reorder_level\` = VALUES(\`reorder_level\`),
-        \`warehouse_id\` = VALUES(\`warehouse_id\`), \`status\` = VALUES(\`status\`)
+        \`selling_price\` = VALUES(\`selling_price\`), \`current_stock\` = VALUES(\`current_stock\`),
+        \`reorder_level\` = VALUES(\`reorder_level\`), \`location\` = VALUES(\`location\`),
+        \`warehouse_id\` = VALUES(\`warehouse_id\`), \`warehouse_name\` = VALUES(\`warehouse_name\`),
+        \`warehouse_stocks_json\` = VALUES(\`warehouse_stocks_json\`),
+        \`preferred_vendor_id\` = VALUES(\`preferred_vendor_id\`),
+        \`preferred_vendor_name\` = VALUES(\`preferred_vendor_name\`),
+        \`status\` = VALUES(\`status\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
+      id, name, sku, category, brand, model,
+      specifications, unit, hsnCode, gstRate,
+      unitPrice, sellingPrice, currentStock, reorderLevel,
+      location, warehouseId, warehouseName, warehouseStocksJson,
+      preferredVendorId, preferredVendorName, status
+    ]);
+
+    const saved = {
+      ...item,
+      id,
       name,
       sku,
+      itemCode: sku,
       category,
       brand,
       model,
       specifications,
+      specification: specifications,
       unit,
       hsnCode,
       gstRate,
+      taxRate: gstRate,
       unitPrice,
+      sellingPrice,
       currentStock,
       reorderLevel,
+      minStockLevel: reorderLevel,
+      minStockThreshold: reorderLevel,
+      location,
       warehouseId,
-      status
-    ]);
-
+      warehouseName,
+      warehouseStocks,
+      preferredVendorId,
+      preferredVendorName,
+      status,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     const items = this.getFallbackItems('products');
-    const idx = items.findIndex(p => p.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(p => p.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('products', items);
-    return item;
+    return saved;
   }
 
   public async deleteProduct(id: string): Promise<boolean> {
@@ -4042,25 +4209,30 @@ class MySqlDatabaseManager {
     const [rows] = await this.pool!.query('SELECT * FROM `solar_vendors` ORDER BY `created_at` DESC');
     const mapped = (rows as any[]).map(r => {
       let cats: string[] = [];
-      try { if (r.categories_json) cats = JSON.parse(r.categories_json); } catch {}
+      try { if (r.categories_json) cats = JSON.parse(r.categories_json) || []; } catch {}
+      let bankDetails: any = undefined;
+      try { if (r.bank_details_json) bankDetails = JSON.parse(r.bank_details_json); } catch {}
+      const category = cats[0] || 'Solar Modules';
       return {
         id: r.id,
         name: r.name,
         vendorCode: r.vendor_code,
-        contactPerson: r.contact_person,
-        phone: r.phone,
-        email: r.email,
-        address: r.address,
-        city: r.city,
-        state: r.state,
-        gstNumber: r.gst_number,
-        panNumber: r.pan_number,
-        paymentTerms: r.payment_terms,
-        rating: Number(r.rating) || 4.5,
-        category: cats[0] || 'Modules',
-        categories: cats,
-        status: r.status,
-        createdAt: r.created_at
+        contactPerson: r.contact_person || '',
+        phone: r.phone || '',
+        email: r.email || '',
+        address: r.address || '',
+        city: r.city || '',
+        state: r.state || '',
+        gstNumber: r.gst_number || '',
+        panNumber: r.pan_number || '',
+        paymentTerms: r.payment_terms || '30 Days',
+        rating: r.rating != null ? Number(r.rating) : 4.5,
+        category,
+        categories: cats.length > 0 ? cats : [category],
+        bankDetails,
+        status: r.status || 'ACTIVE',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at || r.created_at
       };
     });
     this.setFallbackItems('vendors', mapped);
@@ -4069,9 +4241,10 @@ class MySqlDatabaseManager {
 
   public async saveVendor(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_vendors', item.id);
+    const id = item.id || `ven-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_vendors', id);
     const name = item.name ?? existing?.name ?? 'Solar Vendor';
-    const vendorCode = item.vendorCode ?? item.vendor_code ?? existing?.vendor_code ?? item.id;
+    const vendorCode = item.vendorCode ?? item.vendor_code ?? existing?.vendor_code ?? id;
     const contactPerson = item.contactPerson ?? item.contact_person ?? existing?.contact_person ?? '';
     const phone = item.phone ?? existing?.phone ?? '';
     const email = item.email ?? existing?.email ?? '';
@@ -4081,17 +4254,39 @@ class MySqlDatabaseManager {
     const gstNumber = item.gstNumber ?? item.gst_number ?? existing?.gst_number ?? '';
     const panNumber = item.panNumber ?? item.pan_number ?? existing?.pan_number ?? '';
     const paymentTerms = item.paymentTerms ?? item.payment_terms ?? existing?.payment_terms ?? '30 Days';
-    const rating = Number(item.rating ?? existing?.rating) || 4.5;
-    const rawCat = item.categoriesJson ?? item.category ?? (existing?.categories_json ? JSON.parse(existing.categories_json) : ['Modules']);
-    const categoriesJson = typeof rawCat === 'string' && rawCat.startsWith('[') ? rawCat : JSON.stringify(Array.isArray(rawCat) ? rawCat : [rawCat]);
+    const rating = item.rating != null ? Number(item.rating) : (existing?.rating != null ? Number(existing.rating) : 4.5);
+
+    let existingCats: string[] = [];
+    try { if (existing?.categories_json) existingCats = JSON.parse(existing.categories_json) || []; } catch {}
+    let categories: string[] = [];
+    if (Array.isArray(item.categories) && item.categories.length > 0) {
+      categories = item.categories.map((c: any) => String(c).trim()).filter(Boolean);
+    } else if (item.category) {
+      categories = [String(item.category).trim()];
+    } else if (typeof item.categoriesJson === 'string') {
+      try { categories = JSON.parse(item.categoriesJson) || []; } catch {}
+    } else {
+      categories = existingCats;
+    }
+    if (categories.length === 0) categories = ['Solar Modules'];
+    if (item.category && !categories.includes(String(item.category).trim())) {
+      categories = [String(item.category).trim(), ...categories];
+    }
+    const categoriesJson = JSON.stringify(categories);
+    const category = item.category || categories[0] || 'Solar Modules';
+
+    let existingBank: any = undefined;
+    try { if (existing?.bank_details_json) existingBank = JSON.parse(existing.bank_details_json); } catch {}
+    const bankDetails = item.bankDetails !== undefined ? item.bankDetails : existingBank;
+    const bankDetailsJson = bankDetails ? JSON.stringify(bankDetails) : null;
     const status = item.status ?? existing?.status ?? 'ACTIVE';
 
     const sql = `
       INSERT INTO \`solar_vendors\` (
         \`id\`, \`name\`, \`vendor_code\`, \`contact_person\`, \`phone\`, \`email\`,
         \`address\`, \`city\`, \`state\`, \`gst_number\`, \`pan_number\`,
-        \`payment_terms\`, \`rating\`, \`categories_json\`, \`status\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`payment_terms\`, \`rating\`, \`categories_json\`, \`bank_details_json\`, \`status\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`name\` = VALUES(\`name\`), \`vendor_code\` = VALUES(\`vendor_code\`),
         \`contact_person\` = VALUES(\`contact_person\`), \`phone\` = VALUES(\`phone\`),
@@ -4099,10 +4294,18 @@ class MySqlDatabaseManager {
         \`city\` = VALUES(\`city\`), \`state\` = VALUES(\`state\`),
         \`gst_number\` = VALUES(\`gst_number\`), \`pan_number\` = VALUES(\`pan_number\`),
         \`payment_terms\` = VALUES(\`payment_terms\`), \`rating\` = VALUES(\`rating\`),
-        \`categories_json\` = VALUES(\`categories_json\`), \`status\` = VALUES(\`status\`)
+        \`categories_json\` = VALUES(\`categories_json\`), \`bank_details_json\` = VALUES(\`bank_details_json\`),
+        \`status\` = VALUES(\`status\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
+      id, name, vendorCode, contactPerson, phone, email,
+      address, city, state, gstNumber, panNumber,
+      paymentTerms, rating, categoriesJson, bankDetailsJson, status
+    ]);
+
+    const saved = {
+      ...item,
+      id,
       name,
       vendorCode,
       contactPerson,
@@ -4115,16 +4318,19 @@ class MySqlDatabaseManager {
       panNumber,
       paymentTerms,
       rating,
-      categoriesJson,
-      status
-    ]);
-
+      category,
+      categories,
+      bankDetails,
+      status,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     const items = this.getFallbackItems('vendors');
-    const idx = items.findIndex(v => v.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(v => v.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('vendors', items);
-    return item;
+    return saved;
   }
 
   public async deleteVendor(id: string): Promise<boolean> {
@@ -4142,96 +4348,153 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('purchase_orders');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_purchase_orders` ORDER BY `created_at` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      poNumber: r.po_number,
-      vendorId: r.vendor_id,
-      vendorName: r.vendor_name,
-      projectId: r.project_id,
-      projectTitle: r.project_id || '',
-      orderDate: r.po_date,
-      poDate: r.po_date,
-      expectedDeliveryDate: r.expected_delivery_date,
-      subtotal: Number(r.subtotal) || 0,
-      gstAmount: Number(r.gst_amount) || 0,
-      taxAmount: Number(r.gst_amount) || 0,
-      totalAmount: Number(r.total_amount) || 0,
-      grandTotal: Number(r.total_amount) || 0,
-      status: r.status,
-      paymentStatus: r.payment_status,
-      items: r.items_json ? JSON.parse(r.items_json) : [],
-      receipts: r.receipts_json ? JSON.parse(r.receipts_json) : [],
-      notes: r.notes,
-      createdAt: r.created_at
-    }));
+    const mapped = (rows as any[]).map(r => {
+      const poDate = this.toSqlDate(r.po_date) || '';
+      const expDate = this.toSqlDate(r.expected_delivery_date) || '';
+      const payDue = this.toSqlDate(r.payment_due_date) || undefined;
+      const recDate = this.toSqlDate(r.received_date) || undefined;
+      const receipts = r.receipts_json ? JSON.parse(r.receipts_json) : [];
+      return {
+        id: r.id,
+        purchaseNumber: r.po_number,
+        poNumber: r.po_number,
+        vendorId: r.vendor_id,
+        vendorName: r.vendor_name,
+        projectId: r.project_id || '',
+        projectTitle: r.project_title || '',
+        warehouseId: r.warehouse_id || '',
+        warehouseName: r.warehouse_name || '',
+        purchaseDate: poDate,
+        orderDate: poDate,
+        poDate,
+        expectedDeliveryDate: expDate,
+        paymentDueDate: payDue,
+        invoiceReference: r.invoice_reference || '',
+        stockUpdated: Boolean(r.stock_updated),
+        receivedDate: recDate,
+        subtotal: Number(r.subtotal) || 0,
+        gstAmount: Number(r.gst_amount) || 0,
+        taxAmount: Number(r.gst_amount) || 0,
+        totalAmount: Number(r.total_amount) || 0,
+        grandTotal: Number(r.total_amount) || 0,
+        status: r.status || 'ISSUED',
+        paymentStatus: r.payment_status || 'PENDING',
+        items: r.items_json ? JSON.parse(r.items_json) : [],
+        deliveryReceipts: receipts,
+        receipts,
+        notes: r.notes || '',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at || r.created_at
+      };
+    });
     this.setFallbackItems('purchase_orders', mapped);
     return mapped;
   }
 
   public async savePurchaseOrder(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_purchase_orders', item.id);
-    const poNumber = item.poNumber ?? item.po_number ?? existing?.po_number ?? item.id;
-    const vendorId = item.vendorId ?? item.vendor_id ?? existing?.vendor_id ?? 'ven-1';
+    const id = item.id || `po-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_purchase_orders', id);
+    const poNumber = item.purchaseNumber ?? item.poNumber ?? item.po_number ?? existing?.po_number ?? id;
+    const vendorId = item.vendorId ?? item.vendor_id ?? existing?.vendor_id ?? '';
     const vendorName = item.vendorName ?? item.vendor_name ?? existing?.vendor_name ?? 'Vendor';
-    const rawDate = item.poDate ?? item.orderDate ?? item.po_date ?? item.order_date ?? existing?.po_date ?? existing?.order_date;
+    const rawDate = item.purchaseDate ?? item.poDate ?? item.orderDate ?? item.po_date ?? item.order_date ?? existing?.po_date;
     const poDate = this.toSqlDate(rawDate) ?? new Date().toISOString().split('T')[0];
     const rawExp = item.expectedDeliveryDate ?? item.expected_delivery_date ?? existing?.expected_delivery_date;
     const expectedDeliveryDate = this.toSqlDate(rawExp);
     const projectId = item.projectId ?? item.project_id ?? existing?.project_id ?? '';
     const projectTitle = item.projectTitle ?? item.project_title ?? existing?.project_title ?? '';
+    const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
+    const warehouseName = item.warehouseName ?? item.warehouse_name ?? existing?.warehouse_name ?? '';
+    const rawPayDue = item.paymentDueDate ?? item.payment_due_date ?? existing?.payment_due_date;
+    const paymentDueDate = this.toSqlDate(rawPayDue);
+    const invoiceReference = item.invoiceReference ?? item.invoice_reference ?? existing?.invoice_reference ?? '';
+    const stockUpdated = (item.stockUpdated !== undefined ? item.stockUpdated : Boolean(existing?.stock_updated)) ? 1 : 0;
+    const rawRecDate = item.receivedDate ?? item.received_date ?? existing?.received_date;
+    const receivedDate = this.toSqlDate(rawRecDate);
     const rawItems = item.items ?? (existing?.items_json ? JSON.parse(existing.items_json) : []);
+    const itemsArr = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
     const itemsJson = typeof rawItems === 'string' ? rawItems : JSON.stringify(rawItems);
     const subtotal = Number(item.subtotal ?? existing?.subtotal) || 0;
-    const gstAmount = Number(item.gstAmount ?? item.taxAmount ?? item.gst_amount ?? item.tax_amount ?? existing?.gst_amount ?? existing?.tax_amount) || 0;
-    const grandTotal = Number(item.grandTotal ?? item.grand_total ?? item.totalAmount ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount);
-    const totalAmount = grandTotal;
-    const taxAmount = gstAmount;
-    const orderDate = poDate;
+    const gstAmount = Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0;
+    const totalAmount = Number(item.totalAmount ?? item.grandTotal ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount);
     const status = item.status ?? existing?.status ?? 'ISSUED';
     const paymentStatus = item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'PENDING';
-    const rawReceipts = item.receipts ?? (existing?.receipts_json ? JSON.parse(existing.receipts_json) : []);
+    const rawReceipts = item.deliveryReceipts ?? item.receipts ?? (existing?.receipts_json ? JSON.parse(existing.receipts_json) : []);
+    const receiptsArr = typeof rawReceipts === 'string' ? JSON.parse(rawReceipts) : rawReceipts;
     const receiptsJson = typeof rawReceipts === 'string' ? rawReceipts : JSON.stringify(rawReceipts);
     const notes = item.notes ?? existing?.notes ?? '';
 
     const sql = `
       INSERT INTO \`solar_purchase_orders\` (
         \`id\`, \`po_number\`, \`vendor_id\`, \`vendor_name\`, \`po_date\`,
-        \`expected_delivery_date\`, \`project_id\`, \`items_json\`, \`subtotal\`,
-        \`gst_amount\`, \`total_amount\`, \`status\`, \`payment_status\`,
-        \`receipts_json\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`expected_delivery_date\`, \`project_id\`, \`project_title\`,
+        \`warehouse_id\`, \`warehouse_name\`, \`payment_due_date\`,
+        \`invoice_reference\`, \`stock_updated\`, \`received_date\`,
+        \`items_json\`, \`subtotal\`, \`gst_amount\`, \`total_amount\`,
+        \`status\`, \`payment_status\`, \`receipts_json\`, \`notes\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        \`vendor_name\` = VALUES(\`vendor_name\`), \`expected_delivery_date\` = VALUES(\`expected_delivery_date\`),
-        \`subtotal\` = VALUES(\`subtotal\`), \`gst_amount\` = VALUES(\`gst_amount\`),
-        \`total_amount\` = VALUES(\`total_amount\`), \`status\` = VALUES(\`status\`),
-        \`payment_status\` = VALUES(\`payment_status\`), \`items_json\` = VALUES(\`items_json\`),
+        \`po_number\` = VALUES(\`po_number\`), \`vendor_id\` = VALUES(\`vendor_id\`),
+        \`vendor_name\` = VALUES(\`vendor_name\`), \`po_date\` = VALUES(\`po_date\`),
+        \`expected_delivery_date\` = VALUES(\`expected_delivery_date\`),
+        \`project_id\` = VALUES(\`project_id\`), \`project_title\` = VALUES(\`project_title\`),
+        \`warehouse_id\` = VALUES(\`warehouse_id\`), \`warehouse_name\` = VALUES(\`warehouse_name\`),
+        \`payment_due_date\` = VALUES(\`payment_due_date\`), \`invoice_reference\` = VALUES(\`invoice_reference\`),
+        \`stock_updated\` = VALUES(\`stock_updated\`), \`received_date\` = VALUES(\`received_date\`),
+        \`items_json\` = VALUES(\`items_json\`), \`subtotal\` = VALUES(\`subtotal\`),
+        \`gst_amount\` = VALUES(\`gst_amount\`), \`total_amount\` = VALUES(\`total_amount\`),
+        \`status\` = VALUES(\`status\`), \`payment_status\` = VALUES(\`payment_status\`),
         \`receipts_json\` = VALUES(\`receipts_json\`), \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
+      id, poNumber, vendorId, vendorName, poDate,
+      expectedDeliveryDate, projectId, projectTitle,
+      warehouseId, warehouseName, paymentDueDate,
+      invoiceReference, stockUpdated, receivedDate,
+      itemsJson, subtotal, gstAmount, totalAmount,
+      status, paymentStatus, receiptsJson, notes
+    ]);
+
+    const saved = {
+      ...item,
+      id,
+      purchaseNumber: poNumber,
       poNumber,
       vendorId,
       vendorName,
+      purchaseDate: poDate,
       poDate,
-      expectedDeliveryDate,
+      orderDate: poDate,
+      expectedDeliveryDate: expectedDeliveryDate || '',
       projectId,
-      itemsJson,
+      projectTitle,
+      warehouseId,
+      warehouseName,
+      paymentDueDate: paymentDueDate || undefined,
+      invoiceReference,
+      stockUpdated: Boolean(stockUpdated),
+      receivedDate: receivedDate || undefined,
+      items: itemsArr,
       subtotal,
+      taxAmount: gstAmount,
       gstAmount,
       totalAmount,
+      grandTotal: totalAmount,
       status,
       paymentStatus,
-      receiptsJson,
-      notes
-    ]);
-
+      deliveryReceipts: receiptsArr,
+      receipts: receiptsArr,
+      notes,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     const items = this.getFallbackItems('purchase_orders');
-    const idx = items.findIndex(p => p.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(p => p.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('purchase_orders', items);
-    return item;
+    return saved;
   }
 
   public async deletePurchaseOrder(id: string): Promise<boolean> {
@@ -4249,66 +4512,124 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('boms');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_boms` ORDER BY `created_at` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      bomNumber: r.bom_number,
-      projectId: r.project_id,
-      projectTitle: r.project_title,
-      systemCapacityKw: Number(r.system_capacity_kw) || 0,
-      version: r.version,
-      status: r.status,
-      items: r.items_json ? JSON.parse(r.items_json) : [],
-      totalEstimatedCost: Number(r.total_estimated_cost) || 0,
-      createdBy: r.created_by,
-      approvedBy: r.approved_by,
-      notes: r.notes,
-      createdAt: r.created_at
-    }));
+    const mapped = (rows as any[]).map(r => {
+      const cap = Number(r.system_capacity_kw) || 0;
+      const cost = Number(r.total_estimated_cost) || 0;
+      return {
+        id: r.id,
+        bomNumber: r.bom_number,
+        projectId: r.project_id,
+        projectCode: r.project_code || '',
+        projectTitle: r.project_title,
+        customerName: r.customer_name || '',
+        capacityKw: cap,
+        systemCapacityKw: cap,
+        version: r.version || '1.0',
+        status: r.status || 'APPROVED',
+        warehouseId: r.warehouse_id || '',
+        warehouseName: r.warehouse_name || '',
+        stockAllocated: Boolean(r.stock_allocated),
+        ewayBillNumber: r.eway_bill_number || '',
+        ewayBillDate: r.eway_bill_date || '',
+        items: r.items_json ? JSON.parse(r.items_json) : [],
+        totalCost: cost,
+        totalEstimatedCost: cost,
+        createdBy: r.created_by || '',
+        approvedBy: r.approved_by || '',
+        approvedAt: r.approved_at || undefined,
+        notes: r.notes || '',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at || r.created_at
+      };
+    });
     this.setFallbackItems('boms', mapped);
     return mapped;
   }
 
   public async saveBOM(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_boms', item.id);
-    const bomNumber = item.bomNumber ?? item.bom_number ?? existing?.bom_number ?? item.id;
+    const id = item.id || `bom-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_boms', id);
+    const bomNumber = item.bomNumber ?? item.bom_number ?? existing?.bom_number ?? id;
     const projectId = item.projectId ?? item.project_id ?? existing?.project_id ?? '';
+    const projectCode = item.projectCode ?? item.project_code ?? existing?.project_code ?? '';
     const projectTitle = item.projectTitle ?? item.project_title ?? item.title ?? existing?.project_title ?? 'Solar Project Installation';
-    const systemCapacityKw = Number(item.systemCapacityKw ?? item.capacityKw ?? item.system_capacity_kw ?? existing?.system_capacity_kw) || 0;
+    const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? '';
+    const systemCapacityKw = Number(item.capacityKw ?? item.systemCapacityKw ?? item.system_capacity_kw ?? existing?.system_capacity_kw) || 0;
     const version = item.version ?? existing?.version ?? '1.0';
     const status = item.status ?? existing?.status ?? 'APPROVED';
+    const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
+    const warehouseName = item.warehouseName ?? item.warehouse_name ?? existing?.warehouse_name ?? '';
+    const stockAllocated = (item.stockAllocated !== undefined ? item.stockAllocated : Boolean(existing?.stock_allocated)) ? 1 : 0;
+    const ewayBillNumber = item.ewayBillNumber ?? item.eway_bill_number ?? existing?.eway_bill_number ?? '';
+    const ewayBillDate = item.ewayBillDate ?? item.eway_bill_date ?? existing?.eway_bill_date ?? '';
     const rawItems = item.items ?? (existing?.items_json ? JSON.parse(existing.items_json) : []);
+    const itemsArr = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
     const itemsJson = typeof rawItems === 'string' ? rawItems : JSON.stringify(rawItems);
-    const totalEstimatedCost = Number(item.totalEstimatedCost ?? item.totalCost ?? item.total_estimated_cost ?? existing?.total_estimated_cost) || 0;
+    const totalEstimatedCost = Number(item.totalCost ?? item.totalEstimatedCost ?? item.total_estimated_cost ?? existing?.total_estimated_cost) || 0;
+    const createdBy = item.createdBy ?? item.created_by ?? existing?.created_by ?? '';
+    const approvedBy = item.approvedBy ?? item.approved_by ?? existing?.approved_by ?? '';
+    const approvedAt = (item.approvedAt || existing?.approved_at) ? this.toSqlDateTime(item.approvedAt || existing?.approved_at) : null;
+    const notes = item.notes ?? existing?.notes ?? '';
 
     const sql = `
       INSERT INTO \`solar_boms\` (
-        \`id\`, \`bom_number\`, \`project_id\`, \`project_title\`, \`system_capacity_kw\`,
-        \`version\`, \`status\`, \`items_json\`, \`total_estimated_cost\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`id\`, \`bom_number\`, \`project_id\`, \`project_code\`, \`project_title\`, \`customer_name\`,
+        \`system_capacity_kw\`, \`version\`, \`status\`, \`warehouse_id\`, \`warehouse_name\`,
+        \`stock_allocated\`, \`eway_bill_number\`, \`eway_bill_date\`,
+        \`items_json\`, \`total_estimated_cost\`, \`created_by\`, \`approved_by\`, \`approved_at\`, \`notes\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        \`project_title\` = VALUES(\`project_title\`), \`system_capacity_kw\` = VALUES(\`system_capacity_kw\`),
-        \`status\` = VALUES(\`status\`), \`items_json\` = VALUES(\`items_json\`),
-        \`total_estimated_cost\` = VALUES(\`total_estimated_cost\`)
+        \`bom_number\` = VALUES(\`bom_number\`), \`project_id\` = VALUES(\`project_id\`),
+        \`project_code\` = VALUES(\`project_code\`), \`project_title\` = VALUES(\`project_title\`),
+        \`customer_name\` = VALUES(\`customer_name\`), \`system_capacity_kw\` = VALUES(\`system_capacity_kw\`),
+        \`version\` = VALUES(\`version\`), \`status\` = VALUES(\`status\`),
+        \`warehouse_id\` = VALUES(\`warehouse_id\`), \`warehouse_name\` = VALUES(\`warehouse_name\`),
+        \`stock_allocated\` = VALUES(\`stock_allocated\`), \`eway_bill_number\` = VALUES(\`eway_bill_number\`),
+        \`eway_bill_date\` = VALUES(\`eway_bill_date\`), \`items_json\` = VALUES(\`items_json\`),
+        \`total_estimated_cost\` = VALUES(\`total_estimated_cost\`), \`approved_by\` = VALUES(\`approved_by\`),
+        \`approved_at\` = VALUES(\`approved_at\`), \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
+      id, bomNumber, projectId, projectCode, projectTitle, customerName,
+      systemCapacityKw, version, status, warehouseId, warehouseName,
+      stockAllocated, ewayBillNumber, ewayBillDate,
+      itemsJson, totalEstimatedCost, createdBy, approvedBy, approvedAt, notes
+    ]);
+
+    const saved = {
+      ...item,
+      id,
       bomNumber,
       projectId,
+      projectCode,
       projectTitle,
+      customerName,
+      capacityKw: systemCapacityKw,
       systemCapacityKw,
       version,
       status,
-      itemsJson,
-      totalEstimatedCost
-    ]);
-
+      warehouseId,
+      warehouseName,
+      stockAllocated: Boolean(stockAllocated),
+      ewayBillNumber,
+      ewayBillDate,
+      items: itemsArr,
+      totalCost: totalEstimatedCost,
+      totalEstimatedCost,
+      createdBy,
+      approvedBy,
+      approvedAt: item.approvedAt || existing?.approved_at || undefined,
+      notes,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     const items = this.getFallbackItems('boms');
-    const idx = items.findIndex(b => b.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(b => b.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('boms', items);
-    return item;
+    return saved;
   }
 
   public async deleteBOM(id: string): Promise<boolean> {
@@ -4326,106 +4647,155 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('sales_invoices');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_sales_invoices` ORDER BY `created_at` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      invoiceNumber: r.invoice_number,
-      projectId: r.project_id,
-      customerId: r.customer_id,
-      customerName: r.customer_name,
-      invoiceDate: r.invoice_date,
-      dueDate: r.due_date,
-      subtotal: Number(r.subtotal) || 0,
-      gstAmount: Number(r.gst_amount) || 0,
-      taxAmount: Number(r.gst_amount) || 0,
-      totalAmount: Number(r.total_amount) || 0,
-      grandTotal: Number(r.total_amount) || 0,
-      paymentStatus: r.payment_status,
-      status: r.payment_status,
-      paidAmount: Number(r.paid_amount) || 0,
-      amountPaid: Number(r.paid_amount) || 0,
-      balanceAmount: Number(r.balance_amount) || 0,
-      balanceDue: Number(r.balance_amount) || 0,
-      ewayBillNumber: r.eway_bill_number,
-      warehouseId: r.warehouse_id,
-      notes: r.notes,
-      items: r.items_json ? JSON.parse(r.items_json) : [],
-      createdAt: r.created_at
-    }));
+    const mapped = (rows as any[]).map(r => {
+      const invDate = this.toSqlDate(r.invoice_date) || '';
+      const dueDate = this.toSqlDate(r.due_date) || '';
+      let ewayBillDetails: any = undefined;
+      try { if (r.eway_bill_details_json) ewayBillDetails = JSON.parse(r.eway_bill_details_json); } catch {}
+      return {
+        id: r.id,
+        invoiceNumber: r.invoice_number,
+        invoiceType: r.invoice_type || 'TAX_INVOICE',
+        projectId: r.project_id || '',
+        projectTitle: r.project_title || '',
+        customerId: r.customer_id,
+        customerName: r.customer_name,
+        customerGst: r.customer_gst || '',
+        customerAddress: r.customer_address || '',
+        invoiceDate: invDate,
+        dueDate,
+        paymentTerms: r.payment_terms || '15 Days Net',
+        subtotal: Number(r.subtotal) || 0,
+        gstAmount: Number(r.gst_amount) || 0,
+        taxAmount: Number(r.gst_amount) || 0,
+        totalAmount: Number(r.total_amount) || 0,
+        grandTotal: Number(r.total_amount) || 0,
+        paymentStatus: r.payment_status || 'ISSUED',
+        status: r.payment_status || 'ISSUED',
+        paidAmount: Number(r.paid_amount) || 0,
+        amountPaid: Number(r.paid_amount) || 0,
+        balanceAmount: Number(r.balance_amount) || 0,
+        balanceDue: Number(r.balance_amount) || 0,
+        ewayBillNumber: r.eway_bill_number || '',
+        ewayBillDetails,
+        warehouseId: r.warehouse_id || '',
+        deductStock: r.deduct_stock != null ? Boolean(r.deduct_stock) : true,
+        stockDeducted: Boolean(r.stock_deducted),
+        notes: r.notes || '',
+        items: r.items_json ? JSON.parse(r.items_json) : [],
+        createdAt: r.created_at,
+        updatedAt: r.updated_at || r.created_at
+      };
+    });
     this.setFallbackItems('sales_invoices', mapped);
     return mapped;
   }
 
   public async saveSalesInvoice(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_sales_invoices', item.id);
-    const invoiceNumber = item.invoiceNumber ?? item.invoice_number ?? existing?.invoice_number ?? item.id;
+    const id = item.id || `inv-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_sales_invoices', id);
+    const invoiceNumber = item.invoiceNumber ?? item.invoice_number ?? existing?.invoice_number ?? id;
+    const invoiceType = item.invoiceType ?? item.invoice_type ?? existing?.invoice_type ?? 'TAX_INVOICE';
     const projectId = item.projectId ?? item.project_id ?? existing?.project_id ?? '';
+    const projectTitle = item.projectTitle ?? item.project_title ?? existing?.project_title ?? '';
     const customerId = item.customerId ?? item.customer_id ?? existing?.customer_id ?? '';
     const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? 'Solar Customer';
+    const customerGst = item.customerGst ?? item.customer_gst ?? existing?.customer_gst ?? '';
+    const customerAddress = item.customerAddress ?? item.customer_address ?? existing?.customer_address ?? '';
     const rawInvDate = item.invoiceDate ?? item.invoice_date ?? existing?.invoice_date;
     const invoiceDate = this.toSqlDate(rawInvDate) ?? new Date().toISOString().split('T')[0];
     const rawDueDate = item.dueDate ?? item.due_date ?? existing?.due_date;
     const dueDate = this.toSqlDate(rawDueDate);
+    const paymentTerms = item.paymentTerms ?? item.payment_terms ?? existing?.payment_terms ?? '15 Days Net';
     const rawItems = item.items ?? (existing?.items_json ? JSON.parse(existing.items_json) : []);
+    const itemsArr = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
     const itemsJson = typeof rawItems === 'string' ? rawItems : JSON.stringify(rawItems);
     const subtotal = Number(item.subtotal ?? existing?.subtotal) || 0;
-    const gstAmount = Number(item.gstAmount ?? item.taxAmount ?? item.gst_amount ?? existing?.gst_amount) || 0;
+    const gstAmount = Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0;
     const totalAmount = Number(item.totalAmount ?? item.grandTotal ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount);
-    const grandTotal = totalAmount;
-    const taxAmount = gstAmount;
-    const paymentStatus = item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'UNPAID';
-    const status = paymentStatus;
+    const status = item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'ISSUED';
     const paidAmount = Number(item.amountPaid ?? item.paidAmount ?? item.paid_amount ?? existing?.paid_amount) || 0;
-    const amountPaid = paidAmount;
-    const balanceAmount = Number(item.balanceDue ?? item.balanceAmount ?? item.balance_amount ?? existing?.balance_amount) || (totalAmount - paidAmount);
-    const balanceDue = balanceAmount;
+    const balanceAmount = Number(item.balanceDue ?? item.balanceAmount ?? item.balance_amount ?? existing?.balance_amount) || Math.max(0, totalAmount - paidAmount);
     const ewayBillNumber = item.ewayBillNumber ?? item.eway_bill_number ?? existing?.eway_bill_number ?? '';
-    const ewayBillDetailsJson = item.ewayBillDetails ? JSON.stringify(item.ewayBillDetails) : (existing?.eway_bill_details_json ?? null);
+    const ewayObj = item.ewayBillDetails !== undefined ? item.ewayBillDetails : (existing?.eway_bill_details_json ? JSON.parse(existing.eway_bill_details_json) : null);
+    const ewayBillDetailsJson = ewayObj ? JSON.stringify(ewayObj) : null;
     const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
+    const deductStock = (item.deductStock !== undefined ? item.deductStock : (existing?.deduct_stock !== undefined ? Boolean(existing.deduct_stock) : true)) ? 1 : 0;
+    const stockDeducted = (item.stockDeducted !== undefined ? item.stockDeducted : Boolean(existing?.stock_deducted)) ? 1 : 0;
     const notes = item.notes ?? existing?.notes ?? '';
 
     const sql = `
       INSERT INTO \`solar_sales_invoices\` (
-        \`id\`, \`invoice_number\`, \`project_id\`, \`customer_id\`, \`customer_name\`,
-        \`invoice_date\`, \`due_date\`, \`items_json\`, \`subtotal\`, \`gst_amount\`,
+        \`id\`, \`invoice_number\`, \`invoice_type\`, \`project_id\`, \`project_title\`,
+        \`customer_id\`, \`customer_name\`, \`customer_gst\`, \`customer_address\`,
+        \`invoice_date\`, \`due_date\`, \`payment_terms\`, \`items_json\`, \`subtotal\`, \`gst_amount\`,
         \`total_amount\`, \`payment_status\`, \`paid_amount\`, \`balance_amount\`,
-        \`eway_bill_number\`, \`eway_bill_details_json\`, \`warehouse_id\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`eway_bill_number\`, \`eway_bill_details_json\`, \`warehouse_id\`, \`deduct_stock\`, \`stock_deducted\`, \`notes\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        \`customer_name\` = VALUES(\`customer_name\`), \`due_date\` = VALUES(\`due_date\`),
-        \`subtotal\` = VALUES(\`subtotal\`), \`gst_amount\` = VALUES(\`gst_amount\`),
-        \`total_amount\` = VALUES(\`total_amount\`), \`payment_status\` = VALUES(\`payment_status\`),
-        \`paid_amount\` = VALUES(\`paid_amount\`), \`balance_amount\` = VALUES(\`balance_amount\`),
-        \`eway_bill_number\` = VALUES(\`eway_bill_number\`), \`items_json\` = VALUES(\`items_json\`),
+        \`invoice_type\` = VALUES(\`invoice_type\`), \`project_id\` = VALUES(\`project_id\`),
+        \`project_title\` = VALUES(\`project_title\`), \`customer_id\` = VALUES(\`customer_id\`),
+        \`customer_name\` = VALUES(\`customer_name\`), \`customer_gst\` = VALUES(\`customer_gst\`),
+        \`customer_address\` = VALUES(\`customer_address\`), \`invoice_date\` = VALUES(\`invoice_date\`),
+        \`due_date\` = VALUES(\`due_date\`), \`payment_terms\` = VALUES(\`payment_terms\`),
+        \`items_json\` = VALUES(\`items_json\`), \`subtotal\` = VALUES(\`subtotal\`),
+        \`gst_amount\` = VALUES(\`gst_amount\`), \`total_amount\` = VALUES(\`total_amount\`),
+        \`payment_status\` = VALUES(\`payment_status\`), \`paid_amount\` = VALUES(\`paid_amount\`),
+        \`balance_amount\` = VALUES(\`balance_amount\`), \`eway_bill_number\` = VALUES(\`eway_bill_number\`),
+        \`eway_bill_details_json\` = VALUES(\`eway_bill_details_json\`), \`warehouse_id\` = VALUES(\`warehouse_id\`),
+        \`deduct_stock\` = VALUES(\`deduct_stock\`), \`stock_deducted\` = VALUES(\`stock_deducted\`),
         \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
-      invoiceNumber,
-      projectId,
-      customerId,
-      customerName,
-      invoiceDate,
-      dueDate,
-      itemsJson,
-      subtotal,
-      gstAmount,
-      totalAmount,
-      paymentStatus,
-      paidAmount,
-      balanceAmount,
-      ewayBillNumber,
-      ewayBillDetailsJson,
-      warehouseId,
-      notes
+      id, invoiceNumber, invoiceType, projectId, projectTitle,
+      customerId, customerName, customerGst, customerAddress,
+      invoiceDate, dueDate, paymentTerms, itemsJson, subtotal, gstAmount,
+      totalAmount, status, paidAmount, balanceAmount,
+      ewayBillNumber, ewayBillDetailsJson, warehouseId, deductStock, stockDeducted, notes
     ]);
 
+    const saved = {
+      ...item,
+      id,
+      invoiceNumber,
+      invoiceType,
+      projectId,
+      projectTitle,
+      customerId,
+      customerName,
+      customerGst,
+      customerAddress,
+      invoiceDate,
+      dueDate: dueDate || '',
+      paymentTerms,
+      items: itemsArr,
+      subtotal,
+      taxAmount: gstAmount,
+      gstAmount,
+      totalAmount,
+      grandTotal: totalAmount,
+      status,
+      paymentStatus: status,
+      paidAmount,
+      amountPaid: paidAmount,
+      balanceAmount,
+      balanceDue: balanceAmount,
+      ewayBillNumber,
+      ewayBillDetails: ewayObj || undefined,
+      warehouseId,
+      deductStock: Boolean(deductStock),
+      stockDeducted: Boolean(stockDeducted),
+      notes,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     const items = this.getFallbackItems('sales_invoices');
-    const idx = items.findIndex(i => i.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(i => i.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('sales_invoices', items);
-    return item;
+    return saved;
   }
 
   public async deleteSalesInvoice(id: string): Promise<boolean> {
@@ -4442,78 +4812,121 @@ class MySqlDatabaseManager {
   public async getWarehouses(): Promise<any[]> {
     if (!this.isConnected) return this.getFallbackItems('warehouses');
     this.assertDbConnected();
-    const [rows] = await this.pool!.query('SELECT * FROM `solar_warehouses` ORDER BY `created_at` ASC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      name: r.name,
-      code: r.code,
-      address: r.address,
-      city: r.city,
-      state: r.state,
-      pincode: r.pincode,
-      managerName: r.manager_name,
-      managerPhone: r.manager_phone,
-      gstNumber: r.gst_number,
-      isActive: Boolean(r.is_active),
-      isDefault: false,
-      capacitySqFt: 5000,
-      status: r.is_active ? 'ACTIVE' : 'INACTIVE',
-      createdAt: r.created_at
-    }));
+    const [rows] = await this.pool!.query('SELECT * FROM `solar_warehouses` ORDER BY `is_default` DESC, `created_at` ASC');
+    const mapped = (rows as any[]).map(r => {
+      const status = r.status || (r.is_active ? 'ACTIVE' : 'INACTIVE');
+      const contactPerson = r.manager_name || '';
+      const contactPhone = r.manager_phone || '';
+      return {
+        id: r.id,
+        name: r.name,
+        code: r.code,
+        address: r.address || '',
+        city: r.city || '',
+        state: r.state || '',
+        pincode: r.pincode || '',
+        contactPerson,
+        contactPhone,
+        managerName: contactPerson,
+        managerPhone: contactPhone,
+        email: r.email || '',
+        gstNumber: r.gst_number || '',
+        capacitySqFt: r.capacity_sq_ft != null ? Number(r.capacity_sq_ft) : 15000,
+        isActive: status === 'ACTIVE' || Boolean(r.is_active),
+        isDefault: Boolean(r.is_default),
+        status,
+        notes: r.notes || '',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at || r.created_at
+      };
+    });
     this.setFallbackItems('warehouses', mapped);
     return mapped;
   }
 
   public async saveWarehouse(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_warehouses', item.id);
+    const id = item.id || `wh-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_warehouses', id);
     const name = item.name ?? existing?.name ?? 'Solar Warehouse';
-    const code = item.code ?? existing?.code ?? item.id;
+    const code = item.code ?? existing?.code ?? id;
     const address = item.address ?? existing?.address ?? 'Not specified';
     const city = item.city ?? existing?.city ?? 'Not specified';
     const state = item.state ?? existing?.state ?? '';
     const pincode = item.pincode ?? existing?.pincode ?? '';
-    const managerName = item.managerName ?? item.manager_name ?? existing?.manager_name ?? '';
-    const managerPhone = item.managerPhone ?? item.manager_phone ?? existing?.manager_phone ?? '';
+    const contactPerson = item.contactPerson ?? item.managerName ?? item.manager_name ?? existing?.manager_name ?? '';
+    const contactPhone = item.contactPhone ?? item.managerPhone ?? item.manager_phone ?? existing?.manager_phone ?? '';
+    const email = item.email ?? existing?.email ?? '';
     const gstNumber = item.gstNumber ?? item.gst_number ?? existing?.gst_number ?? '';
-    const isActive = (item.isActive !== undefined ? item.isActive : (existing?.is_active !== undefined ? existing.is_active : true)) ? 1 : 0;
+    const capacitySqFt = item.capacitySqFt != null ? Number(item.capacitySqFt) : (existing?.capacity_sq_ft != null ? Number(existing.capacity_sq_ft) : 15000);
+    const status = item.status ?? (item.isActive === false ? 'INACTIVE' : (existing?.status ?? (existing?.is_active === 0 ? 'INACTIVE' : 'ACTIVE')));
+    const isActive = status === 'ACTIVE' ? 1 : 0;
+    const isDefault = (item.isDefault !== undefined ? Boolean(item.isDefault) : Boolean(existing?.is_default)) ? 1 : 0;
+    const notes = item.notes ?? existing?.notes ?? '';
+
+    if (isDefault) {
+      await this.pool!.query('UPDATE `solar_warehouses` SET `is_default` = 0 WHERE `id` != ?', [id]);
+    }
 
     const sql = `
       INSERT INTO \`solar_warehouses\` (
         \`id\`, \`name\`, \`code\`, \`address\`, \`city\`, \`state\`,
-        \`pincode\`, \`manager_name\`, \`manager_phone\`, \`gst_number\`, \`is_active\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`pincode\`, \`manager_name\`, \`manager_phone\`, \`email\`, \`gst_number\`,
+        \`capacity_sq_ft\`, \`is_active\`, \`status\`, \`is_default\`, \`notes\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`name\` = VALUES(\`name\`), \`code\` = VALUES(\`code\`),
         \`address\` = VALUES(\`address\`), \`city\` = VALUES(\`city\`),
         \`state\` = VALUES(\`state\`), \`pincode\` = VALUES(\`pincode\`),
         \`manager_name\` = VALUES(\`manager_name\`), \`manager_phone\` = VALUES(\`manager_phone\`),
-        \`gst_number\` = VALUES(\`gst_number\`), \`is_active\` = VALUES(\`is_active\`)
+        \`email\` = VALUES(\`email\`), \`gst_number\` = VALUES(\`gst_number\`),
+        \`capacity_sq_ft\` = VALUES(\`capacity_sq_ft\`), \`is_active\` = VALUES(\`is_active\`),
+        \`status\` = VALUES(\`status\`), \`is_default\` = VALUES(\`is_default\`),
+        \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
+      id, name, code, address, city, state,
+      pincode, contactPerson, contactPhone, email, gstNumber,
+      capacitySqFt, isActive, status, isDefault, notes
+    ]);
+
+    const saved = {
+      ...item,
+      id,
       name,
       code,
       address,
       city,
       state,
       pincode,
-      managerName,
-      managerPhone,
+      contactPerson,
+      contactPhone,
+      managerName: contactPerson,
+      managerPhone: contactPhone,
+      email,
       gstNumber,
-      isActive
-    ]);
-
-    const items = this.getFallbackItems('warehouses');
-    const idx = items.findIndex(w => w.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.push(item);
+      capacitySqFt,
+      isActive: Boolean(isActive),
+      status,
+      isDefault: Boolean(isDefault),
+      notes,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const items = this.getFallbackItems('warehouses').map(w => isDefault && w.id !== id ? { ...w, isDefault: false } : w);
+    const idx = items.findIndex(w => w.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.push(saved);
     this.setFallbackItems('warehouses', items);
-    return item;
+    return saved;
   }
 
   public async deleteWarehouse(id: string): Promise<boolean> {
     this.assertDbConnected();
+    const existing = await this.getExistingRow('solar_warehouses', id);
+    if (existing && Boolean(existing.is_default)) {
+      throw new Error('Cannot delete the Primary/Default warehouse. Assign another default warehouse first.');
+    }
     await this.pool!.query('DELETE FROM `solar_warehouses` WHERE `id` = ?', [id]);
     const items = this.getFallbackItems('warehouses').filter(w => w.id !== id);
     this.setFallbackItems('warehouses', items);
@@ -4529,19 +4942,22 @@ class MySqlDatabaseManager {
       id: r.id,
       productId: r.product_id,
       productName: r.product_name,
-      sku: r.sku,
+      sku: r.sku || '',
       type: r.movement_type,
       movementType: r.movement_type,
       quantity: Number(r.quantity) || 0,
       balanceAfter: Number(r.balance_after) || 0,
-      referenceNumber: r.reference_number,
+      referenceNumber: r.reference_number || '',
+      referenceId: r.reference_id || '',
       movementNumber: r.reference_number || r.id,
-      warehouseId: r.warehouse_id,
-      warehouseName: 'Main Warehouse',
-      notes: r.notes,
+      warehouseId: r.warehouse_id || '',
+      warehouseName: r.warehouse_name || '',
+      targetWarehouseId: r.target_warehouse_id || undefined,
+      targetWarehouseName: r.target_warehouse_name || undefined,
+      notes: r.notes || '',
       timestamp: r.timestamp,
       movementDate: r.timestamp,
-      performedBy: r.performed_by
+      performedBy: r.performed_by || ''
     }));
     this.setFallbackItems('stock_movements', mapped);
     return mapped;
@@ -4549,15 +4965,20 @@ class MySqlDatabaseManager {
 
   public async saveStockMovement(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_stock_movements', item.id);
-    const productId = item.productId ?? item.product_id ?? existing?.product_id ?? 'prod-1';
+    const id = item.id || `sm-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_stock_movements', id);
+    const productId = item.productId ?? item.product_id ?? existing?.product_id ?? '';
     const productName = item.productName ?? item.product_name ?? existing?.product_name ?? 'Solar Product';
     const sku = item.sku ?? existing?.sku ?? '';
     const movementType = item.type ?? item.movementType ?? item.movement_type ?? existing?.movement_type ?? 'IN';
     const quantity = Number(item.quantity ?? existing?.quantity) || 0;
     const balanceAfter = Number(item.balanceAfter ?? item.balance_after ?? existing?.balance_after) || 0;
     const referenceNumber = item.referenceNumber ?? item.reference_number ?? item.movementNumber ?? existing?.reference_number ?? '';
+    const referenceId = item.referenceId ?? item.reference_id ?? existing?.reference_id ?? '';
     const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
+    const warehouseName = item.warehouseName ?? item.warehouse_name ?? existing?.warehouse_name ?? '';
+    const targetWarehouseId = item.targetWarehouseId ?? item.target_warehouse_id ?? existing?.target_warehouse_id ?? '';
+    const targetWarehouseName = item.targetWarehouseName ?? item.target_warehouse_name ?? existing?.target_warehouse_name ?? '';
     const notes = item.notes ?? existing?.notes ?? '';
     const rawTs = item.timestamp ?? item.movementDate ?? existing?.timestamp;
     const ts = this.toSqlDateTime(rawTs);
@@ -4566,38 +4987,55 @@ class MySqlDatabaseManager {
     const sql = `
       INSERT INTO \`solar_stock_movements\` (
         \`id\`, \`product_id\`, \`product_name\`, \`sku\`, \`movement_type\`,
-        \`quantity\`, \`balance_after\`, \`reference_number\`, \`warehouse_id\`,
+        \`quantity\`, \`balance_after\`, \`reference_number\`, \`reference_id\`,
+        \`warehouse_id\`, \`warehouse_name\`, \`target_warehouse_id\`, \`target_warehouse_name\`,
         \`notes\`, \`timestamp\`, \`performed_by\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`product_name\` = VALUES(\`product_name\`),
         \`movement_type\` = VALUES(\`movement_type\`),
         \`quantity\` = VALUES(\`quantity\`),
         \`balance_after\` = VALUES(\`balance_after\`),
+        \`warehouse_id\` = VALUES(\`warehouse_id\`),
+        \`warehouse_name\` = VALUES(\`warehouse_name\`),
+        \`target_warehouse_id\` = VALUES(\`target_warehouse_id\`),
+        \`target_warehouse_name\` = VALUES(\`target_warehouse_name\`),
         \`notes\` = VALUES(\`notes\`),
         \`reference_number\` = VALUES(\`reference_number\`)
     `;
     await this.pool!.query(sql, [
-      item.id || `sm-${Date.now()}`,
+      id, productId, productName, sku, movementType,
+      quantity, balanceAfter, referenceNumber, referenceId,
+      warehouseId, warehouseName, targetWarehouseId, targetWarehouseName,
+      notes, ts, performedBy
+    ]);
+
+    const saved = {
+      ...item,
+      id,
       productId,
       productName,
       sku,
+      type: movementType,
       movementType,
       quantity,
       balanceAfter,
       referenceNumber,
+      referenceId,
       warehouseId,
+      warehouseName,
+      targetWarehouseId: targetWarehouseId || undefined,
+      targetWarehouseName: targetWarehouseName || undefined,
       notes,
-      ts,
+      timestamp: item.timestamp || new Date().toISOString(),
       performedBy
-    ]);
-
+    };
     const items = this.getFallbackItems('stock_movements');
-    const idx = items.findIndex(s => s.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(s => s.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('stock_movements', items.slice(0, 200));
-    return item;
+    return saved;
   }
 
   public async deleteStockMovement(id: string): Promise<boolean> {
@@ -4612,71 +5050,98 @@ class MySqlDatabaseManager {
   public async getStockAudits(): Promise<any[]> {
     if (!this.isConnected) return this.getFallbackItems('stock_audits');
     this.assertDbConnected();
-    const [rows] = await this.pool!.query('SELECT * FROM `solar_stock_audits` ORDER BY `audit_date` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      auditNumber: r.audit_number,
-      warehouseId: r.warehouse_id,
-      warehouseName: r.warehouse_name,
-      auditDate: r.audit_date,
-      auditorName: r.auditor_name,
-      status: r.status,
-      discrepanciesCount: Number(r.discrepancies_count) || 0,
-      items: r.items_json ? JSON.parse(r.items_json) : [],
-      notes: r.notes,
-      createdAt: r.created_at
-    }));
+    const [rows] = await this.pool!.query('SELECT * FROM `solar_stock_audits` ORDER BY `audit_date` DESC, `created_at` DESC');
+    const mapped = (rows as any[]).map(r => {
+      const items = r.items_json ? JSON.parse(r.items_json) : [];
+      const discrepancies = Number(r.discrepancies_count) || 0;
+      const itemsAudited = r.items_audited != null ? Number(r.items_audited) : items.length;
+      return {
+        id: r.id,
+        auditNumber: r.audit_number,
+        warehouseId: r.warehouse_id,
+        warehouseName: r.warehouse_name,
+        auditDate: this.toSqlDate(r.audit_date) || '',
+        auditedBy: r.auditor_name,
+        auditorName: r.auditor_name,
+        status: r.status || 'COMPLETED',
+        itemsAudited,
+        discrepanciesFound: discrepancies,
+        discrepanciesCount: discrepancies,
+        netAdjustmentValue: Number(r.net_adjustment_value) || 0,
+        items,
+        notes: r.notes || '',
+        createdAt: r.created_at
+      };
+    });
     this.setFallbackItems('stock_audits', mapped);
     return mapped;
   }
 
   public async saveStockAudit(item: any): Promise<any> {
     this.assertDbConnected();
-    const existing = await this.getExistingRow('solar_stock_audits', item.id);
-    const auditNumber = item.auditNumber ?? item.audit_number ?? existing?.audit_number ?? item.id;
-    const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? 'wh-1';
+    const id = item.id || `audit-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_stock_audits', id);
+    const auditNumber = item.auditNumber ?? item.audit_number ?? existing?.audit_number ?? id;
+    const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
     const warehouseName = item.warehouseName ?? item.warehouse_name ?? existing?.warehouse_name ?? 'Main Warehouse';
     const rawDate = item.auditDate ?? item.audit_date ?? existing?.audit_date;
     const auditDate = this.toSqlDate(rawDate) ?? new Date().toISOString().split('T')[0];
-    const auditorName = item.auditorName ?? item.auditor_name ?? existing?.auditor_name ?? 'Auditor';
+    const auditorName = item.auditedBy ?? item.auditorName ?? item.auditor_name ?? existing?.auditor_name ?? 'Auditor';
     const status = item.status ?? existing?.status ?? 'COMPLETED';
-    const discrepanciesCount = Number(item.discrepanciesCount ?? item.discrepancies_count ?? item.discrepanciesFound ?? existing?.discrepancies_count) || 0;
     const rawItems = item.items ?? (existing?.items_json ? JSON.parse(existing.items_json) : []);
+    const itemsArr = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
     const itemsJson = typeof rawItems === 'string' ? rawItems : JSON.stringify(rawItems);
+    const discrepanciesCount = Number(item.discrepanciesFound ?? item.discrepanciesCount ?? item.discrepancies_count ?? existing?.discrepancies_count) || 0;
+    const itemsAudited = Number(item.itemsAudited ?? item.items_audited ?? existing?.items_audited ?? itemsArr.length) || 0;
+    const netAdjustmentValue = Number(item.netAdjustmentValue ?? item.net_adjustment_value ?? existing?.net_adjustment_value) || 0;
     const notes = item.notes ?? existing?.notes ?? '';
 
     const sql = `
       INSERT INTO \`solar_stock_audits\` (
         \`id\`, \`audit_number\`, \`warehouse_id\`, \`warehouse_name\`,
-        \`audit_date\`, \`auditor_name\`, \`status\`, \`discrepancies_count\`, \`items_json\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`audit_date\`, \`auditor_name\`, \`status\`, \`items_audited\`,
+        \`discrepancies_count\`, \`net_adjustment_value\`, \`items_json\`, \`notes\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`warehouse_name\` = VALUES(\`warehouse_name\`),
         \`auditor_name\` = VALUES(\`auditor_name\`),
         \`status\` = VALUES(\`status\`),
+        \`items_audited\` = VALUES(\`items_audited\`),
         \`discrepancies_count\` = VALUES(\`discrepancies_count\`),
+        \`net_adjustment_value\` = VALUES(\`net_adjustment_value\`),
         \`items_json\` = VALUES(\`items_json\`),
         \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
+      id, auditNumber, warehouseId, warehouseName,
+      auditDate, auditorName, status, itemsAudited,
+      discrepanciesCount, netAdjustmentValue, itemsJson, notes
+    ]);
+
+    const saved = {
+      ...item,
+      id,
       auditNumber,
       warehouseId,
       warehouseName,
       auditDate,
+      auditedBy: auditorName,
       auditorName,
       status,
+      itemsAudited,
+      discrepanciesFound: discrepanciesCount,
       discrepanciesCount,
-      itemsJson,
-      notes
-    ]);
-
+      netAdjustmentValue,
+      items: itemsArr,
+      notes,
+      createdAt: item.createdAt || existing?.created_at || new Date().toISOString()
+    };
     const items = this.getFallbackItems('stock_audits');
-    const idx = items.findIndex(a => a.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(a => a.id === id);
+    if (idx >= 0) items[idx] = saved;
+    else items.unshift(saved);
     this.setFallbackItems('stock_audits', items);
-    return item;
+    return saved;
   }
 
   public async deleteStockAudit(id: string): Promise<boolean> {

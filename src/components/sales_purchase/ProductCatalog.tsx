@@ -16,7 +16,8 @@ import {
   DollarSign,
   Boxes,
   MapPin,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Loader2
 } from 'lucide-react';
 
 export const ProductCatalog: React.FC = () => {
@@ -27,14 +28,20 @@ export const ProductCatalog: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Form states
   const [formSku, setFormSku] = useState('');
   const [formName, setFormName] = useState('');
-  const [formCategory, setFormCategory] = useState<ProductItem['category']>('Solar Panels');
+  const [formCategory, setFormCategory] = useState<string>('Solar Panels');
+  const [useCustomCategory, setUseCustomCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState('');
   const [formBrand, setFormBrand] = useState('');
   const [formSpec, setFormSpec] = useState('');
-  const [formUnit, setFormUnit] = useState<ProductItem['unit']>('NOS');
+  const [formUnit, setFormUnit] = useState<string>('NOS');
+  const [useCustomUnit, setUseCustomUnit] = useState(false);
+  const [customUnit, setCustomUnit] = useState('');
   const [formHsn, setFormHsn] = useState('85414011');
   const [formUnitPrice, setFormUnitPrice] = useState<number>(0);
   const [formSellingPrice, setFormSellingPrice] = useState<number>(0);
@@ -48,7 +55,7 @@ export const ProductCatalog: React.FC = () => {
   const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger]);
   const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
 
-  const categories: ProductItem['category'][] = [
+  const presetCategories: string[] = [
     'Solar Panels',
     'Inverters',
     'Mounting Structures',
@@ -57,6 +64,28 @@ export const ProductCatalog: React.FC = () => {
     'Safety & Accessories',
     'Monitoring & Sensors'
   ];
+
+  const categories = useMemo(() => {
+    const merged = [...presetCategories];
+    products.forEach(p => {
+      const cat = (p.category || '').trim();
+      if (cat && !merged.includes(cat)) {
+        merged.push(cat);
+      }
+    });
+    return merged;
+  }, [products]);
+
+  const availableUnits = useMemo(() => {
+    const merged = ['NOS', 'SETS', 'METERS', 'PACKS', 'KG'];
+    products.forEach(p => {
+      const unit = (p.unit || '').trim().toUpperCase();
+      if (unit && !merged.includes(unit)) {
+        merged.push(unit);
+      }
+    });
+    return merged;
+  }, [products]);
 
   const filteredProducts = useMemo(() => {
     const q = (searchQuery || '').toLowerCase().trim();
@@ -74,85 +103,109 @@ export const ProductCatalog: React.FC = () => {
   }, [products, searchQuery, categoryFilter]);
 
   const handleOpenAdd = () => {
+    const defaultWh = storageService.getDefaultWarehouse();
     setEditingProduct(null);
     setFormErrors({});
     setFormSku(`PRD-${Date.now().toString().slice(-4)}`);
     setFormName('');
     setFormCategory('Solar Panels');
+    setUseCustomCategory(false);
+    setCustomCategory('');
     setFormBrand('');
     setFormSpec('');
     setFormUnit('NOS');
+    setUseCustomUnit(false);
+    setCustomUnit('');
     setFormHsn('85414011');
     setFormUnitPrice(0);
     setFormSellingPrice(0);
     setFormStock(50);
     setFormMinThreshold(10);
     setFormLocation('Warehouse A - Bay 1');
-    setFormWarehouseId(warehouses[0]?.id || 'wh-1');
+    setFormWarehouseId(defaultWh?.id || warehouses[0]?.id || '');
     setFormVendorId(vendors[0]?.id || '');
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (p: ProductItem) => {
+    const defaultWh = storageService.getDefaultWarehouse();
     setEditingProduct(p);
     setFormErrors({});
     setFormSku(p.sku);
     setFormName(p.name);
-    setFormCategory(p.category);
+    setFormCategory(p.category || 'Solar Panels');
+    setUseCustomCategory(false);
+    setCustomCategory('');
     setFormBrand(p.brand);
     setFormSpec(p.specification);
-    setFormUnit(p.unit);
+    setFormUnit(p.unit || 'NOS');
+    setUseCustomUnit(false);
+    setCustomUnit('');
     setFormHsn(p.hsnCode);
     setFormUnitPrice(p.unitPrice);
     setFormSellingPrice(p.sellingPrice);
     setFormStock(p.currentStock);
     setFormMinThreshold(p.minStockThreshold);
     setFormLocation(p.location);
-    setFormWarehouseId(p.warehouseId || warehouses[0]?.id || 'wh-1');
+    setFormWarehouseId(p.warehouseId || defaultWh?.id || warehouses[0]?.id || '');
     setFormVendorId(p.preferredVendorId || '');
     setIsModalOpen(true);
   };
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setFormErrors({});
+
+    const resolvedCategory = useCustomCategory ? customCategory.trim() : formCategory.trim();
+    const resolvedUnit = (useCustomUnit ? customUnit.trim() : formUnit.trim()).toUpperCase();
 
     const errs: Record<string, string> = {};
     if (!formSku.trim()) errs.sku = 'SKU code is required';
     if (!formName.trim()) errs.name = 'Product name is required';
+    if (!resolvedCategory) errs.category = 'Category is required';
+    if (!resolvedUnit) errs.unit = 'Unit of measure is required';
 
     if (Object.keys(errs).length > 0) {
       setFormErrors(errs);
-      showToast('SKU and Product Name are required', 'warning');
+      showToast('Please complete all required fields', 'warning');
       return;
     }
 
     const preferredVendor = vendors.find(v => v.id === formVendorId);
-    const selectedWh = warehouses.find(w => w.id === formWarehouseId) || storageService.getDefaultWarehouse();
+    const defaultWh = storageService.getDefaultWarehouse();
+    const selectedWh = warehouses.find(w => w.id === formWarehouseId) || (defaultWh?.id ? defaultWh : undefined);
+    const warehouseId = selectedWh?.id || formWarehouseId || undefined;
+    const warehouseName = selectedWh?.name || (editingProduct?.warehouseName || undefined);
+
+    const nextWhStocks = { ...(editingProduct?.warehouseStocks || {}) };
+    if (warehouseId && (!editingProduct || Object.keys(nextWhStocks).length === 0)) {
+      nextWhStocks[warehouseId] = Math.max(0, Number(formStock) || 0);
+    }
 
     const productToSave: ProductItem = {
       id: editingProduct ? editingProduct.id : `prod-${Date.now()}`,
-      sku: formSku.toUpperCase(),
-      name: formName,
-      category: formCategory,
-      brand: formBrand,
-      specification: formSpec,
-      unit: formUnit,
-      hsnCode: formHsn,
-      unitPrice: formUnitPrice,
-      sellingPrice: formSellingPrice,
-      currentStock: formStock,
-      minStockThreshold: formMinThreshold,
-      location: formLocation,
-      warehouseId: selectedWh.id,
-      warehouseName: selectedWh.name,
+      sku: formSku.trim().toUpperCase(),
+      name: formName.trim(),
+      category: resolvedCategory as ProductItem['category'],
+      brand: formBrand.trim(),
+      specification: formSpec.trim(),
+      unit: resolvedUnit as ProductItem['unit'],
+      hsnCode: formHsn.trim(),
+      unitPrice: Number(formUnitPrice) || 0,
+      sellingPrice: Number(formSellingPrice) || 0,
+      currentStock: Math.max(0, Number(formStock) || 0),
+      minStockThreshold: Math.max(0, Number(formMinThreshold) || 0),
+      location: formLocation.trim(),
+      warehouseId,
+      warehouseName,
+      warehouseStocks: Object.keys(nextWhStocks).length > 0 ? nextWhStocks : undefined,
       preferredVendorId: formVendorId || undefined,
       preferredVendorName: preferredVendor?.name || undefined,
       createdAt: editingProduct ? editingProduct.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
-    // Pre-validate for duplicates
     const dupCheck = validateProduct(productToSave, products, editingProduct?.id);
     if (!dupCheck.valid) {
       setFormErrors({ [dupCheck.field || 'general']: dupCheck.message });
@@ -160,28 +213,41 @@ export const ProductCatalog: React.FC = () => {
       return;
     }
 
+    setIsSaving(true);
     try {
-      storageService.saveProduct(productToSave);
+      const saved = await storageService.saveProductAsync(productToSave);
       triggerRefresh();
       showToast(
-        `Product ${productToSave.sku} ${editingProduct ? 'updated' : 'added'} to catalog`,
+        `Product ${saved.sku} ${editingProduct ? 'updated' : 'added'} to catalog`,
         'success'
       );
       setIsModalOpen(false);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to save product';
+      const msg = err instanceof Error ? err.message : 'Failed to save product to MySQL';
       showToast(msg, 'error');
       if (err instanceof DuplicateRecordError) {
         setFormErrors({ [err.field]: err.message });
+      } else {
+        setFormErrors({ general: msg });
       }
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDeleteProduct = (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to delete ${name}?`)) {
-      storageService.deleteProduct(id);
+  const handleDeleteProduct = async (id: string, name: string) => {
+    if (deletingId) return;
+    if (!window.confirm(`Are you sure you want to delete ${name}?`)) return;
+    setDeletingId(id);
+    try {
+      await storageService.deleteProductAsync(id);
       triggerRefresh();
       showToast(`Product deleted`, 'info');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete product';
+      showToast(msg, 'error');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -333,9 +399,9 @@ export const ProductCatalog: React.FC = () => {
                     </span>
                   </div>
                   <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                    <span className="text-slate-400">Warehouse Location:</span>
-                    <span className="text-slate-600 truncate max-w-[140px]">
-                      {product.location}
+                    <span className="text-slate-400">Warehouse Facility:</span>
+                    <span className="text-slate-600 truncate max-w-[160px]" title={product.warehouseName || product.location}>
+                      {product.warehouseName ? `${product.warehouseName}${product.location ? ` (${product.location})` : ''}` : product.location}
                     </span>
                   </div>
                 </div>
@@ -350,17 +416,23 @@ export const ProductCatalog: React.FC = () => {
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => handleOpenEdit(product)}
-                    className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                    disabled={deletingId === product.id}
+                    className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                     title="Edit Product"
                   >
                     <Edit className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => handleDeleteProduct(product.id, product.name)}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                    disabled={deletingId === product.id}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                     title="Delete Product"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    {deletingId === product.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -467,8 +539,17 @@ export const ProductCatalog: React.FC = () => {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Category *</label>
                   <select
-                    value={formCategory}
-                    onChange={e => setFormCategory(e.target.value as ProductItem['category'])}
+                    value={useCustomCategory ? '__CUSTOM__' : formCategory}
+                    onChange={e => {
+                      if (e.target.value === '__CUSTOM__') {
+                        setUseCustomCategory(true);
+                        setCustomCategory('');
+                      } else {
+                        setUseCustomCategory(false);
+                        setFormCategory(e.target.value);
+                      }
+                      if (formErrors.category) setFormErrors(prev => ({ ...prev, category: '' }));
+                    }}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
                     {categories.map(c => (
@@ -476,7 +557,21 @@ export const ProductCatalog: React.FC = () => {
                         {c}
                       </option>
                     ))}
+                    <option value="__CUSTOM__">+ Add Custom Category...</option>
                   </select>
+                  {useCustomCategory && (
+                    <input
+                      type="text"
+                      required
+                      value={customCategory}
+                      onChange={e => setCustomCategory(e.target.value)}
+                      placeholder="Enter new category name"
+                      className="mt-1.5 w-full px-3 py-1.5 text-xs bg-white border border-amber-400 rounded-xl"
+                    />
+                  )}
+                  {formErrors.category && (
+                    <p className="text-[11px] text-red-600 font-medium mt-1">{formErrors.category}</p>
+                  )}
                 </div>
 
                 <div>
@@ -491,18 +586,41 @@ export const ProductCatalog: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Unit of Measure</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Unit of Measure *</label>
                   <select
-                    value={formUnit}
-                    onChange={e => setFormUnit(e.target.value as ProductItem['unit'])}
+                    value={useCustomUnit ? '__CUSTOM__' : formUnit}
+                    onChange={e => {
+                      if (e.target.value === '__CUSTOM__') {
+                        setUseCustomUnit(true);
+                        setCustomUnit('');
+                      } else {
+                        setUseCustomUnit(false);
+                        setFormUnit(e.target.value);
+                      }
+                      if (formErrors.unit) setFormErrors(prev => ({ ...prev, unit: '' }));
+                    }}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
-                    <option value="NOS">NOS (Numbers)</option>
-                    <option value="SETS">SETS</option>
-                    <option value="METERS">METERS</option>
-                    <option value="PACKS">PACKS</option>
-                    <option value="KG">KG (Kilograms)</option>
+                    {availableUnits.map(u => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                    <option value="__CUSTOM__">+ Add Custom Unit...</option>
                   </select>
+                  {useCustomUnit && (
+                    <input
+                      type="text"
+                      required
+                      value={customUnit}
+                      onChange={e => setCustomUnit(e.target.value.toUpperCase())}
+                      placeholder="e.g. ROLL, BOX, KWP"
+                      className="mt-1.5 w-full px-3 py-1.5 text-xs bg-white border border-amber-400 rounded-xl font-mono uppercase"
+                    />
+                  )}
+                  {formErrors.unit && (
+                    <p className="text-[11px] text-red-600 font-medium mt-1">{formErrors.unit}</p>
+                  )}
                 </div>
               </div>
 
@@ -573,7 +691,7 @@ export const ProductCatalog: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Min Stock Reorder Alert
@@ -585,6 +703,26 @@ export const ProductCatalog: React.FC = () => {
                     onChange={e => setFormMinThreshold(Number(e.target.value))}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Assigned Warehouse
+                  </label>
+                  <select
+                    value={formWarehouseId}
+                    onChange={e => setFormWarehouseId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                  >
+                    {warehouses.length === 0 && (
+                      <option value="">Default Warehouse</option>
+                    )}
+                    {warehouses.map(w => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} ({w.code})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -622,16 +760,19 @@ export const ProductCatalog: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
-                  {editingProduct ? 'Save Changes' : 'Add to Catalog'}
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSaving ? 'Saving to MySQL...' : editingProduct ? 'Save Changes' : 'Add to Catalog'}
                 </button>
               </div>
             </form>

@@ -320,6 +320,26 @@ class StorageService {
     }
   }
 
+  private notifyStorageUpdated(): void {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('solarpulse_storage_updated'));
+    }
+  }
+
+  private async confirmSyncPush<T = any>(collection: string, item: T): Promise<T> {
+    const saved = await apiClient.syncPush(collection, { item });
+    this.lastSyncError = null;
+    if (saved && typeof saved === 'object') {
+      return saved as T;
+    }
+    return item;
+  }
+
+  private async confirmSyncDelete(collection: string, id: string): Promise<void> {
+    await apiClient.syncPush(collection, { item: { id }, action: 'delete' });
+    this.lastSyncError = null;
+  }
+
   // --- Leads ---
   getLeads(): Lead[] {
     return this.get<Lead[]>(STORAGE_KEYS.LEADS, initialLeads);
@@ -1844,23 +1864,67 @@ class StorageService {
     return this.get<ProductItem[]>(STORAGE_KEYS.PRODUCTS, initialProducts);
   }
 
+  async saveProductAsync(product: ProductItem): Promise<ProductItem> {
+    const products = this.getProducts();
+    const validation = validateProduct(product, products, product.id);
+    assertValid(validation);
+
+    const now = new Date().toISOString();
+    const existingIdx = products.findIndex(p => p.id === product.id);
+    const existingProd = existingIdx >= 0 ? products[existingIdx] : undefined;
+    const whId = product.warehouseId || existingProd?.warehouseId || this.getDefaultWarehouse()?.id;
+    const whStocks = { ...(existingProd?.warehouseStocks || {}), ...(product.warehouseStocks || {}) };
+    if (whId && (existingIdx < 0 || Object.keys(whStocks).length === 0)) {
+      whStocks[whId] = Math.max(0, Number(product.currentStock) || 0);
+    }
+
+    const candidate: ProductItem = {
+      ...product,
+      id: product.id || `prod-${Date.now()}`,
+      warehouseId: whId || product.warehouseId,
+      warehouseStocks: Object.keys(whStocks).length > 0 ? whStocks : undefined,
+      createdAt: product.createdAt || existingProd?.createdAt || now,
+      updatedAt: now
+    };
+
+    const committed = await this.confirmSyncPush('products', candidate);
+    const nextList = [...products];
+    const idx = nextList.findIndex(p => p.id === committed.id);
+    if (idx >= 0) {
+      nextList[idx] = committed;
+    } else {
+      nextList.unshift(committed);
+    }
+    this.memStore.set(STORAGE_KEYS.PRODUCTS, nextList);
+    this.notifyStorageUpdated();
+    return committed;
+  }
+
+  async deleteProductAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('products', id);
+    const nextList = this.getProducts().filter(p => p.id !== id);
+    this.memStore.set(STORAGE_KEYS.PRODUCTS, nextList);
+    this.notifyStorageUpdated();
+  }
+
   saveProduct(product: ProductItem): void {
     const products = this.getProducts();
     const validation = validateProduct(product, products, product.id);
     assertValid(validation);
 
     const idx = products.findIndex(p => p.id === product.id);
+    const nextList = [...products];
     if (idx >= 0) {
-      products[idx] = { ...product, updatedAt: new Date().toISOString() };
+      nextList[idx] = { ...product, updatedAt: new Date().toISOString() };
     } else {
-      products.unshift({
+      nextList.unshift({
         ...product,
         id: product.id || `prod-${Date.now()}`,
         createdAt: product.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
     }
-    this.set(STORAGE_KEYS.PRODUCTS, products, product);
+    this.set(STORAGE_KEYS.PRODUCTS, nextList, product);
   }
 
   deleteProduct(id: string): void {
@@ -1883,8 +1947,79 @@ class StorageService {
     const result = await apiClient.importProducts(products);
     if (result.importedRecords && result.importedRecords.length > 0) {
       await this.hydrateFromBackend();
+      this.notifyStorageUpdated();
     }
     return result;
+  }
+
+  async adjustStockAsync(
+    productId: string,
+    newQty: number,
+    reason: string,
+    performedBy: string = 'Operations Team',
+    warehouseId?: string,
+    warehouseName?: string
+  ): Promise<{ product: ProductItem; movement: StockMovement }> {
+    const products = this.getProducts();
+    const prodIdx = products.findIndex(p => p.id === productId);
+    if (prodIdx < 0) {
+      throw new Error('Selected product record was not found in MySQL.');
+    }
+    const existingProd = products[prodIdx];
+
+    const warehouses = this.getWarehouses();
+    const wh = warehouseId ? warehouses.find(w => w.id === warehouseId) : this.getDefaultWarehouse();
+    const targetWhId = warehouseId || wh?.id || 'wh-1';
+    const targetWhName = warehouseName || wh?.name || 'Central Solar Logistics Hub';
+
+    const nextWhStocks = { ...(existingProd.warehouseStocks || {}) };
+    const previousWhQty = nextWhStocks[targetWhId] ?? (wh?.isDefault || !existingProd.warehouseStocks ? existingProd.currentStock : 0);
+    const clampedNewQty = Math.max(0, Number(newQty) || 0);
+    const diff = clampedNewQty - previousWhQty;
+    nextWhStocks[targetWhId] = clampedNewQty;
+
+    const nextTotalStock = Math.max(0, (existingProd.currentStock || 0) + diff);
+    const updatedProd: ProductItem = {
+      ...existingProd,
+      warehouseStocks: nextWhStocks,
+      currentStock: nextTotalStock,
+      updatedAt: new Date().toISOString()
+    };
+
+    const isAudit = reason.toLowerCase().includes('audit') || reason.toLowerCase().includes('physical');
+    const movement: StockMovement = {
+      id: `sm-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      productId: updatedProd.id,
+      productName: updatedProd.name,
+      sku: updatedProd.sku,
+      movementType: isAudit ? 'AUDIT_RECONCILIATION' : 'ADJUSTMENT',
+      quantity: diff,
+      balanceAfter: updatedProd.currentStock,
+      warehouseId: targetWhId,
+      warehouseName: targetWhName,
+      notes: reason || `Inventory count adjustment at ${targetWhName} from ${previousWhQty} to ${clampedNewQty}`,
+      performedBy,
+      timestamp: new Date().toISOString()
+    };
+
+    const committedProd = await this.confirmSyncPush('products', updatedProd);
+    const committedMovement = await this.confirmSyncPush('stock_movements', movement);
+
+    const nextProducts = [...this.getProducts()];
+    const refreshIdx = nextProducts.findIndex(p => p.id === committedProd.id);
+    if (refreshIdx >= 0) {
+      nextProducts[refreshIdx] = committedProd;
+    } else {
+      nextProducts.unshift(committedProd);
+    }
+    this.memStore.set(STORAGE_KEYS.PRODUCTS, nextProducts);
+    this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, [
+      committedMovement,
+      ...this.getStockMovements().filter(m => m.id !== committedMovement.id)
+    ]);
+    this.notifyStorageUpdated();
+
+    return { product: committedProd, movement: committedMovement };
   }
 
   adjustStock(
@@ -1909,8 +2044,7 @@ class StorageService {
     const diff = newQty - previousWhQty;
 
     prod.warehouseStocks[targetWhId] = Math.max(0, newQty);
-    
-    // Total current stock updated
+
     const previousTotal = prod.currentStock;
     prod.currentStock = Math.max(0, previousTotal + diff);
     prod.updatedAt = new Date().toISOString();
@@ -1939,23 +2073,58 @@ class StorageService {
     return this.get<Vendor[]>(STORAGE_KEYS.VENDORS, initialVendors);
   }
 
+  async saveVendorAsync(vendor: Vendor): Promise<Vendor> {
+    const vendors = this.getVendors();
+    const validation = validateVendor(vendor, vendors, vendor.id);
+    assertValid(validation);
+
+    const now = new Date().toISOString();
+    const existing = vendors.find(v => v.id === vendor.id);
+    const candidate: Vendor = {
+      ...vendor,
+      id: vendor.id || `vnd-${Date.now()}`,
+      createdAt: vendor.createdAt || existing?.createdAt || now,
+      updatedAt: now
+    };
+
+    const committed = await this.confirmSyncPush('vendors', candidate);
+    const nextList = [...vendors];
+    const idx = nextList.findIndex(v => v.id === committed.id);
+    if (idx >= 0) {
+      nextList[idx] = committed;
+    } else {
+      nextList.unshift(committed);
+    }
+    this.memStore.set(STORAGE_KEYS.VENDORS, nextList);
+    this.notifyStorageUpdated();
+    return committed;
+  }
+
+  async deleteVendorAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('vendors', id);
+    const nextList = this.getVendors().filter(v => v.id !== id);
+    this.memStore.set(STORAGE_KEYS.VENDORS, nextList);
+    this.notifyStorageUpdated();
+  }
+
   saveVendor(vendor: Vendor): void {
     const vendors = this.getVendors();
     const validation = validateVendor(vendor, vendors, vendor.id);
     assertValid(validation);
 
     const idx = vendors.findIndex(v => v.id === vendor.id);
+    const nextList = [...vendors];
     if (idx >= 0) {
-      vendors[idx] = { ...vendor, updatedAt: new Date().toISOString() };
+      nextList[idx] = { ...vendor, updatedAt: new Date().toISOString() };
     } else {
-      vendors.unshift({
+      nextList.unshift({
         ...vendor,
         id: vendor.id || `vnd-${Date.now()}`,
         createdAt: vendor.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
     }
-    this.set(STORAGE_KEYS.VENDORS, vendors, vendor);
+    this.set(STORAGE_KEYS.VENDORS, nextList, vendor);
   }
 
   deleteVendor(id: string): void {
@@ -1978,6 +2147,7 @@ class StorageService {
     const result = await apiClient.importVendors(vendors);
     if (result.importedRecords && result.importedRecords.length > 0) {
       await this.hydrateFromBackend();
+      this.notifyStorageUpdated();
     }
     return result;
   }
@@ -2026,14 +2196,7 @@ class StorageService {
     });
   }
 
-  savePurchaseOrder(order: PurchaseOrder, _autoSyncStock: boolean = false, _performedBy: string = 'Purchase Manager'): void {
-    const orders = this.getPurchaseOrders();
-    const validation = validatePurchaseOrder(order, orders, order.id);
-    assertValid(validation);
-
-    const idx = orders.findIndex(o => o.id === order.id);
-
-    // Compute accurate line-item totals and derived quantities
+  private normalizePurchaseOrderForSave(order: PurchaseOrder): PurchaseOrder {
     const items: PurchaseLineItem[] = (order.items || []).map((item, i) => {
       const orderedQty = Math.max(0, Number(item.orderedQuantity ?? item.quantity ?? 0));
       const receivedQty = Math.max(0, Number(item.receivedQuantity ?? 0));
@@ -2065,7 +2228,6 @@ class StorageService {
     const taxAmount = items.reduce((sum, it) => sum + it.taxAmount, 0);
     const totalAmount = subtotal + taxAmount;
 
-    // Determine accurate status based on received vs ordered
     let status = order.status;
     if (status !== 'CANCELLED' && status !== 'DRAFT') {
       const allReceived = items.length > 0 && items.every(it => it.receivedQuantity >= it.orderedQuantity);
@@ -2079,28 +2241,262 @@ class StorageService {
       }
     }
 
-    const updatedOrder: PurchaseOrder = {
+    const now = new Date().toISOString();
+    return {
       ...order,
+      id: order.id || `po-${Date.now()}`,
       items,
       subtotal,
       taxAmount,
       totalAmount,
       status,
       deliveryReceipts: order.deliveryReceipts || [],
-      updatedAt: new Date().toISOString()
+      createdAt: order.createdAt || now,
+      updatedAt: now
+    };
+  }
+
+  async savePurchaseOrderAsync(
+    order: PurchaseOrder,
+    _autoSyncStock: boolean = false,
+    _performedBy: string = 'Purchase Manager'
+  ): Promise<PurchaseOrder> {
+    const orders = this.getPurchaseOrders();
+    const validation = validatePurchaseOrder(order, orders, order.id);
+    assertValid(validation);
+
+    const updatedOrder = this.normalizePurchaseOrderForSave(order);
+    const committed = await this.confirmSyncPush('purchase_orders', updatedOrder);
+
+    const nextList = [...orders];
+    const idx = nextList.findIndex(o => o.id === committed.id);
+    if (idx >= 0) {
+      nextList[idx] = committed;
+    } else {
+      nextList.unshift(committed);
+    }
+    this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, nextList);
+    this.notifyStorageUpdated();
+    return committed;
+  }
+
+  async recordPurchaseReceiptAsync(
+    orderId: string,
+    receiptInput: {
+      receiptDate: string;
+      deliveryChallanNo?: string;
+      transporterName?: string;
+      receivedBy: string;
+      notes?: string;
+      items: {
+        lineItemId: string;
+        receivedQuantity: number;
+        rejectedQuantity?: number;
+        rejectionReason?: string;
+        isExcessApproved?: boolean;
+        excessApprovalReason?: string;
+      }[];
+    },
+    performedBy: string = 'Store Incharge'
+  ): Promise<PurchaseOrder> {
+    const orders = this.getPurchaseOrders();
+    const existingOrder = orders.find(o => o.id === orderId);
+    if (!existingOrder) {
+      throw new Error('Purchase order not found in MySQL.');
+    }
+
+    const currentProducts = this.getProducts();
+    const productClones = new Map<string, ProductItem>();
+    const newMovements: StockMovement[] = [];
+    const now = new Date().toISOString();
+
+    const receiptId = `grn-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const receiptNumber = `GRN-${new Date().getFullYear()}-${String((existingOrder.deliveryReceipts?.length || 0) + 1).padStart(3, '0')}`;
+    const receiptItems: DeliveryReceiptItem[] = [];
+
+    const updatedLineItems: PurchaseLineItem[] = existingOrder.items.map(lineItem => {
+      const inputItem = receiptInput.items.find(i => i.lineItemId === lineItem.id);
+      if (!inputItem) return { ...lineItem };
+
+      const arrivingQty = Math.max(0, Number(inputItem.receivedQuantity || 0));
+      const rejectedQty = Math.max(0, Number(inputItem.rejectedQuantity || 0));
+
+      if (arrivingQty > 0 || rejectedQty > 0) {
+        receiptItems.push({
+          lineItemId: lineItem.id,
+          productId: lineItem.productId,
+          productName: lineItem.productName,
+          sku: lineItem.sku,
+          unit: lineItem.unit,
+          receivedQuantity: arrivingQty,
+          rejectedQuantity: rejectedQty,
+          rejectionReason: inputItem.rejectionReason,
+          isExcessApproved: inputItem.isExcessApproved,
+          excessApprovalReason: inputItem.excessApprovalReason
+        });
+      }
+
+      if (arrivingQty > 0) {
+        const baseProd = currentProducts.find(p => p.id === lineItem.productId || p.sku === lineItem.sku);
+        if (baseProd) {
+          const prod = productClones.get(baseProd.id) || {
+            ...baseProd,
+            warehouseStocks: { ...(baseProd.warehouseStocks || {}) }
+          };
+          prod.currentStock = (prod.currentStock || 0) + arrivingQty;
+          if (existingOrder.warehouseId) {
+            prod.warehouseStocks = prod.warehouseStocks || {};
+            prod.warehouseStocks[existingOrder.warehouseId] = (prod.warehouseStocks[existingOrder.warehouseId] || 0) + arrivingQty;
+          }
+          prod.updatedAt = now;
+          productClones.set(prod.id, prod);
+
+          newMovements.push({
+            id: `sm-${Date.now()}-${newMovements.length}-${Math.floor(Math.random() * 1000)}`,
+            productId: prod.id,
+            productName: prod.name,
+            sku: prod.sku,
+            movementType: 'PURCHASE_RECEIPT',
+            quantity: arrivingQty,
+            balanceAfter: prod.currentStock,
+            warehouseId: existingOrder.warehouseId,
+            warehouseName: existingOrder.warehouseName,
+            referenceId: existingOrder.id,
+            referenceNumber: existingOrder.purchaseNumber,
+            notes: `Goods Receipt ${receiptNumber}${receiptInput.deliveryChallanNo ? ' (DC: ' + receiptInput.deliveryChallanNo + ')' : ''} from ${existingOrder.vendorName}${existingOrder.warehouseName ? ' into ' + existingOrder.warehouseName : ''}`,
+            performedBy: performedBy || receiptInput.receivedBy,
+            timestamp: now
+          });
+        }
+      }
+
+      const nextReceived = (lineItem.receivedQuantity || 0) + arrivingQty;
+      const nextRejected = (lineItem.rejectedQuantity || 0) + rejectedQty;
+      return {
+        ...lineItem,
+        receivedQuantity: nextReceived,
+        rejectedQuantity: nextRejected,
+        pendingQuantity: Math.max(0, lineItem.orderedQuantity - nextReceived),
+        quantity: lineItem.orderedQuantity
+      };
+    });
+
+    const newReceipt: PurchaseDeliveryReceipt = {
+      id: receiptId,
+      receiptNumber,
+      receiptDate: receiptInput.receiptDate || new Date().toISOString().slice(0, 10),
+      deliveryChallanNo: receiptInput.deliveryChallanNo,
+      transporterName: receiptInput.transporterName,
+      receivedBy: receiptInput.receivedBy || performedBy,
+      notes: receiptInput.notes,
+      items: receiptItems,
+      createdAt: now
     };
 
-    if (!updatedOrder.id) {
-      updatedOrder.id = `po-${Date.now()}`;
-      updatedOrder.createdAt = new Date().toISOString();
+    const allReceived = updatedLineItems.length > 0 && updatedLineItems.every(it => it.receivedQuantity >= it.orderedQuantity);
+    const anyReceived = updatedLineItems.some(it => it.receivedQuantity > 0);
+
+    const updatedOrder: PurchaseOrder = {
+      ...existingOrder,
+      items: updatedLineItems,
+      deliveryReceipts: [newReceipt, ...(existingOrder.deliveryReceipts || [])],
+      status: allReceived ? 'RECEIVED' : anyReceived ? 'PARTIALLY_RECEIVED' : existingOrder.status,
+      receivedDate: allReceived ? (receiptInput.receiptDate || new Date().toISOString().slice(0, 10)) : existingOrder.receivedDate,
+      stockUpdated: anyReceived || existingOrder.stockUpdated,
+      updatedAt: now
+    };
+
+    // Persist to MySQL BEFORE mutating memStore
+    const committedProducts = await Promise.all(
+      Array.from(productClones.values()).map(p => this.confirmSyncPush('products', p))
+    );
+    const committedMovements = await Promise.all(
+      newMovements.map(m => this.confirmSyncPush('stock_movements', m))
+    );
+    const committedOrder = await this.confirmSyncPush('purchase_orders', updatedOrder);
+
+    if (committedProducts.length > 0) {
+      const nextProducts = [...this.getProducts()];
+      committedProducts.forEach(cp => {
+        const idx = nextProducts.findIndex(p => p.id === cp.id);
+        if (idx >= 0) nextProducts[idx] = cp;
+      });
+      this.memStore.set(STORAGE_KEYS.PRODUCTS, nextProducts);
     }
 
-    if (idx >= 0) {
-      orders[idx] = updatedOrder;
-    } else {
-      orders.unshift(updatedOrder);
+    if (committedMovements.length > 0) {
+      const committedIds = new Set(committedMovements.map(m => m.id));
+      this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, [
+        ...committedMovements.reverse(),
+        ...this.getStockMovements().filter(m => !committedIds.has(m.id))
+      ]);
     }
-    this.set(STORAGE_KEYS.PURCHASE_ORDERS, orders, updatedOrder);
+
+    const nextOrders = [...this.getPurchaseOrders()];
+    const orderIdx = nextOrders.findIndex(o => o.id === committedOrder.id);
+    if (orderIdx >= 0) {
+      nextOrders[orderIdx] = committedOrder;
+    } else {
+      nextOrders.unshift(committedOrder);
+    }
+    this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, nextOrders);
+    this.notifyStorageUpdated();
+    return committedOrder;
+  }
+
+  async receivePurchaseOrderAsync(id: string, performedBy: string = 'Store Incharge'): Promise<PurchaseOrder | null> {
+    const order = this.getPurchaseOrders().find(o => o.id === id);
+    if (!order) return null;
+
+    const pendingItemsToReceive = order.items.map(it => ({
+      lineItemId: it.id,
+      receivedQuantity: it.pendingQuantity > 0 ? it.pendingQuantity : (it.receivedQuantity === 0 ? it.orderedQuantity : 0),
+      rejectedQuantity: 0
+    })).filter(it => it.receivedQuantity > 0);
+
+    if (pendingItemsToReceive.length > 0) {
+      return this.recordPurchaseReceiptAsync(
+        id,
+        {
+          receiptDate: new Date().toISOString().slice(0, 10),
+          deliveryChallanNo: order.invoiceReference || 'Direct Delivery',
+          receivedBy: performedBy,
+          notes: 'Full goods delivery receipt recorded',
+          items: pendingItemsToReceive
+        },
+        performedBy
+      );
+    }
+
+    return this.savePurchaseOrderAsync({
+      ...order,
+      status: 'RECEIVED',
+      stockUpdated: true,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  async deletePurchaseOrderAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('purchase_orders', id);
+    const nextOrders = this.getPurchaseOrders().filter(o => o.id !== id);
+    this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, nextOrders);
+    this.notifyStorageUpdated();
+  }
+
+  savePurchaseOrder(order: PurchaseOrder, _autoSyncStock: boolean = false, _performedBy: string = 'Purchase Manager'): void {
+    const orders = this.getPurchaseOrders();
+    const validation = validatePurchaseOrder(order, orders, order.id);
+    assertValid(validation);
+
+    const idx = orders.findIndex(o => o.id === order.id);
+    const updatedOrder = this.normalizePurchaseOrderForSave(order);
+    const nextList = [...orders];
+    if (idx >= 0) {
+      nextList[idx] = updatedOrder;
+    } else {
+      nextList.unshift(updatedOrder);
+    }
+    this.set(STORAGE_KEYS.PURCHASE_ORDERS, nextList, updatedOrder);
   }
 
   recordPurchaseReceipt(
@@ -2154,7 +2550,6 @@ class StorageService {
         });
       }
 
-      // Increase stock in warehouse ONLY for arrivingQty
       if (arrivingQty > 0) {
         const prod = products.find(p => p.id === lineItem.productId || p.sku === lineItem.sku);
         if (prod) {
@@ -2181,17 +2576,14 @@ class StorageService {
         }
       }
 
-      // Update line item accumulators
       lineItem.receivedQuantity = (lineItem.receivedQuantity || 0) + arrivingQty;
       lineItem.rejectedQuantity = (lineItem.rejectedQuantity || 0) + rejectedQty;
       lineItem.pendingQuantity = Math.max(0, lineItem.orderedQuantity - lineItem.receivedQuantity);
       lineItem.quantity = lineItem.orderedQuantity;
     });
 
-    // Save updated products to storage
     this.set(STORAGE_KEYS.PRODUCTS, products);
 
-    // Create the receipt record
     const newReceipt: PurchaseDeliveryReceipt = {
       id: receiptId,
       receiptNumber,
@@ -2209,7 +2601,6 @@ class StorageService {
     }
     order.deliveryReceipts.unshift(newReceipt);
 
-    // Determine updated order status
     const allReceived = order.items.length > 0 && order.items.every(it => it.receivedQuantity >= it.orderedQuantity);
     const anyReceived = order.items.some(it => it.receivedQuantity > 0);
 
@@ -2232,7 +2623,6 @@ class StorageService {
     const order = orders.find(o => o.id === id);
     if (!order) return;
 
-    // Collect all pending items to receive
     const pendingItemsToReceive = order.items.map(it => ({
       lineItemId: it.id,
       receivedQuantity: it.pendingQuantity > 0 ? it.pendingQuantity : (it.receivedQuantity === 0 ? it.orderedQuantity : 0),
@@ -2272,23 +2662,165 @@ class StorageService {
     return this.get<BillOfMaterials[]>(STORAGE_KEYS.BOMS, initialBOMs);
   }
 
+  async saveBOMAsync(bom: BillOfMaterials): Promise<BillOfMaterials> {
+    const boms = this.getBOMs();
+    const validation = validateBOM(bom, boms, bom.id);
+    assertValid(validation);
+
+    const now = new Date().toISOString();
+    const existing = boms.find(b => b.id === bom.id);
+    const candidate: BillOfMaterials = {
+      ...bom,
+      id: bom.id || `bom-${Date.now()}`,
+      createdAt: bom.createdAt || existing?.createdAt || now,
+      updatedAt: now
+    };
+
+    const committed = await this.confirmSyncPush('boms', candidate);
+    const nextList = [...boms];
+    const idx = nextList.findIndex(b => b.id === committed.id);
+    if (idx >= 0) {
+      nextList[idx] = committed;
+    } else {
+      nextList.unshift(committed);
+    }
+    this.memStore.set(STORAGE_KEYS.BOMS, nextList);
+    this.notifyStorageUpdated();
+    return committed;
+  }
+
+  async allocateBOMStockAsync(bomId: string, performedBy: string = 'Project Engineer'): Promise<BillOfMaterials> {
+    const boms = this.getBOMs();
+    const existingBom = boms.find(b => b.id === bomId);
+    if (!existingBom) {
+      throw new Error('Bill of Materials not found in MySQL.');
+    }
+
+    const currentProducts = this.getProducts();
+    const productClones = new Map<string, ProductItem>();
+    const newMovements: StockMovement[] = [];
+    const now = new Date().toISOString();
+    let hasUpdatedStock = false;
+
+    const updatedItems = existingBom.items.map(item => {
+      const baseProd = currentProducts.find(p => p.id === item.productId || p.sku === item.sku);
+      if (baseProd && item.requiredQty > 0) {
+        const prod = productClones.get(baseProd.id) || {
+          ...baseProd,
+          warehouseStocks: { ...(baseProd.warehouseStocks || {}) }
+        };
+        prod.currentStock = Math.max(0, (prod.currentStock || 0) - item.requiredQty);
+        if (existingBom.warehouseId) {
+          prod.warehouseStocks = prod.warehouseStocks || {};
+          prod.warehouseStocks[existingBom.warehouseId] = Math.max(
+            0,
+            (prod.warehouseStocks[existingBom.warehouseId] ?? prod.currentStock) - item.requiredQty
+          );
+        }
+        prod.updatedAt = now;
+        productClones.set(prod.id, prod);
+        hasUpdatedStock = true;
+
+        newMovements.push({
+          id: `sm-${Date.now()}-${newMovements.length}-${Math.floor(Math.random() * 1000)}`,
+          productId: prod.id,
+          productName: prod.name,
+          sku: prod.sku,
+          movementType: 'BOM_ALLOCATION',
+          quantity: -item.requiredQty,
+          balanceAfter: prod.currentStock,
+          warehouseId: existingBom.warehouseId,
+          warehouseName: existingBom.warehouseName,
+          referenceId: existingBom.id,
+          referenceNumber: existingBom.bomNumber,
+          notes: `BOM allocation for ${existingBom.projectTitle} (${existingBom.customerName})${existingBom.warehouseName ? ' from ' + existingBom.warehouseName : ''}`,
+          performedBy,
+          timestamp: now
+        });
+
+        return {
+          ...item,
+          allocatedQty: item.requiredQty,
+          status: 'ALLOCATED' as const
+        };
+      }
+      return { ...item };
+    });
+
+    if (!hasUpdatedStock) {
+      throw new Error('Could not allocate stock. Ensure BOM items link to existing inventory catalog products.');
+    }
+
+    const updatedBom: BillOfMaterials = {
+      ...existingBom,
+      items: updatedItems,
+      stockAllocated: true,
+      status: existingBom.status === 'DRAFT' ? 'APPROVED' : existingBom.status,
+      updatedAt: now
+    };
+
+    const committedProducts = await Promise.all(
+      Array.from(productClones.values()).map(p => this.confirmSyncPush('products', p))
+    );
+    const committedMovements = await Promise.all(
+      newMovements.map(m => this.confirmSyncPush('stock_movements', m))
+    );
+    const committedBom = await this.confirmSyncPush('boms', updatedBom);
+
+    if (committedProducts.length > 0) {
+      const nextProducts = [...this.getProducts()];
+      committedProducts.forEach(cp => {
+        const idx = nextProducts.findIndex(p => p.id === cp.id);
+        if (idx >= 0) nextProducts[idx] = cp;
+      });
+      this.memStore.set(STORAGE_KEYS.PRODUCTS, nextProducts);
+    }
+
+    if (committedMovements.length > 0) {
+      const committedIds = new Set(committedMovements.map(m => m.id));
+      this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, [
+        ...committedMovements.reverse(),
+        ...this.getStockMovements().filter(m => !committedIds.has(m.id))
+      ]);
+    }
+
+    const nextBoms = [...this.getBOMs()];
+    const bomIdx = nextBoms.findIndex(b => b.id === committedBom.id);
+    if (bomIdx >= 0) {
+      nextBoms[bomIdx] = committedBom;
+    } else {
+      nextBoms.unshift(committedBom);
+    }
+    this.memStore.set(STORAGE_KEYS.BOMS, nextBoms);
+    this.notifyStorageUpdated();
+    return committedBom;
+  }
+
+  async deleteBOMAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('boms', id);
+    const nextBoms = this.getBOMs().filter(b => b.id !== id);
+    this.memStore.set(STORAGE_KEYS.BOMS, nextBoms);
+    this.notifyStorageUpdated();
+  }
+
   saveBOM(bom: BillOfMaterials): void {
     const boms = this.getBOMs();
     const validation = validateBOM(bom, boms, bom.id);
     assertValid(validation);
 
     const idx = boms.findIndex(b => b.id === bom.id);
+    const nextList = [...boms];
     if (idx >= 0) {
-      boms[idx] = { ...bom, updatedAt: new Date().toISOString() };
+      nextList[idx] = { ...bom, updatedAt: new Date().toISOString() };
     } else {
-      boms.unshift({
+      nextList.unshift({
         ...bom,
         id: bom.id || `bom-${Date.now()}`,
         createdAt: bom.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
     }
-    this.set(STORAGE_KEYS.BOMS, boms, bom);
+    this.set(STORAGE_KEYS.BOMS, nextList, bom);
   }
 
   allocateBOMStock(bomId: string, performedBy: string = 'Project Engineer'): boolean {
@@ -2302,7 +2834,6 @@ class StorageService {
     bom.items.forEach(item => {
       const prod = products.find(p => p.id === item.productId || p.sku === item.sku);
       if (prod && item.requiredQty > 0) {
-        const alloc = Math.min(item.requiredQty, prod.currentStock);
         prod.currentStock = Math.max(0, prod.currentStock - item.requiredQty);
         if (bom.warehouseId) {
           prod.warehouseStocks = prod.warehouseStocks || {};
@@ -2354,6 +2885,116 @@ class StorageService {
   // ==========================================
   getSalesInvoices(): SalesInvoice[] {
     return this.get<SalesInvoice[]>(STORAGE_KEYS.SALES_INVOICES, initialSalesInvoices);
+  }
+
+  async saveSalesInvoiceAsync(
+    invoice: SalesInvoice,
+    deductStockNow: boolean = false,
+    performedBy: string = 'Accounts Officer'
+  ): Promise<SalesInvoice> {
+    const invoices = this.getSalesInvoices();
+    const now = new Date().toISOString();
+    const existingInv = invoices.find(i => i.id === invoice.id);
+
+    const updated: SalesInvoice = {
+      ...invoice,
+      id: invoice.id || `inv-${Date.now()}`,
+      createdAt: invoice.createdAt || existingInv?.createdAt || now,
+      updatedAt: now
+    };
+
+    const productClones = new Map<string, ProductItem>();
+    const newMovements: StockMovement[] = [];
+    const shouldDeduct = (deductStockNow || updated.deductStock) && !updated.stockDeducted;
+
+    if (shouldDeduct) {
+      const currentProducts = this.getProducts();
+      const defaultWh = this.getDefaultWarehouse();
+
+      updated.items.forEach(item => {
+        if (item.productId && item.quantity > 0) {
+          const baseProd = currentProducts.find(p => p.id === item.productId);
+          if (baseProd) {
+            const prod = productClones.get(baseProd.id) || {
+              ...baseProd,
+              warehouseStocks: { ...(baseProd.warehouseStocks || {}) }
+            };
+            prod.currentStock = Math.max(0, (prod.currentStock || 0) - item.quantity);
+            const targetWhId = prod.warehouseId || defaultWh?.id;
+            const targetWhName = prod.warehouseName || defaultWh?.name;
+            if (targetWhId && prod.warehouseStocks && prod.warehouseStocks[targetWhId] !== undefined) {
+              prod.warehouseStocks[targetWhId] = Math.max(0, prod.warehouseStocks[targetWhId] - item.quantity);
+            }
+            prod.updatedAt = now;
+            productClones.set(prod.id, prod);
+
+            newMovements.push({
+              id: `sm-${Date.now()}-${newMovements.length}-${Math.floor(Math.random() * 1000)}`,
+              productId: prod.id,
+              productName: prod.name,
+              sku: prod.sku,
+              movementType: 'INVOICE_SALE',
+              quantity: -item.quantity,
+              balanceAfter: prod.currentStock,
+              warehouseId: targetWhId,
+              warehouseName: targetWhName,
+              referenceId: updated.id,
+              referenceNumber: updated.invoiceNumber,
+              notes: `Dispatched to ${updated.customerName} via Invoice ${updated.invoiceNumber}`,
+              performedBy,
+              timestamp: now
+            });
+          }
+        }
+      });
+
+      if (productClones.size > 0) {
+        updated.stockDeducted = true;
+      }
+    }
+
+    const committedProducts = await Promise.all(
+      Array.from(productClones.values()).map(p => this.confirmSyncPush('products', p))
+    );
+    const committedMovements = await Promise.all(
+      newMovements.map(m => this.confirmSyncPush('stock_movements', m))
+    );
+    const committedInvoice = await this.confirmSyncPush('sales_invoices', updated);
+
+    if (committedProducts.length > 0) {
+      const nextProducts = [...this.getProducts()];
+      committedProducts.forEach(cp => {
+        const idx = nextProducts.findIndex(p => p.id === cp.id);
+        if (idx >= 0) nextProducts[idx] = cp;
+      });
+      this.memStore.set(STORAGE_KEYS.PRODUCTS, nextProducts);
+    }
+
+    if (committedMovements.length > 0) {
+      const committedIds = new Set(committedMovements.map(m => m.id));
+      this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, [
+        ...committedMovements.reverse(),
+        ...this.getStockMovements().filter(m => !committedIds.has(m.id))
+      ]);
+    }
+
+    const nextInvoices = [...this.getSalesInvoices()];
+    const idx = nextInvoices.findIndex(i => i.id === committedInvoice.id);
+    if (idx >= 0) {
+      nextInvoices[idx] = committedInvoice;
+    } else {
+      nextInvoices.unshift(committedInvoice);
+    }
+    this.memStore.set(STORAGE_KEYS.SALES_INVOICES, nextInvoices);
+    this.notifyStorageUpdated();
+    return committedInvoice;
+  }
+
+  async deleteSalesInvoiceAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('sales_invoices', id);
+    const nextInvoices = this.getSalesInvoices().filter(i => i.id !== id);
+    this.memStore.set(STORAGE_KEYS.SALES_INVOICES, nextInvoices);
+    this.notifyStorageUpdated();
   }
 
   saveSalesInvoice(invoice: SalesInvoice, deductStockNow: boolean = false, performedBy: string = 'Accounts Officer'): void {
@@ -2421,6 +3062,21 @@ class StorageService {
   // ==========================================
   getStockMovements(): StockMovement[] {
     return this.get<StockMovement[]>(STORAGE_KEYS.STOCK_MOVEMENTS, initialStockMovements);
+  }
+
+  async addStockMovementAsync(movement: Omit<StockMovement, 'id' | 'timestamp'>): Promise<StockMovement> {
+    const newMovement: StockMovement = {
+      ...movement,
+      id: `sm-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      timestamp: new Date().toISOString()
+    };
+    const committed = await this.confirmSyncPush('stock_movements', newMovement);
+    this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, [
+      committed,
+      ...this.getStockMovements().filter(m => m.id !== committed.id)
+    ]);
+    this.notifyStorageUpdated();
+    return committed;
   }
 
   addStockMovement(movement: Omit<StockMovement, 'id' | 'timestamp'>): void {
@@ -2553,20 +3209,59 @@ class StorageService {
     return this.get<Warehouse[]>(STORAGE_KEYS.WAREHOUSES, initialWarehouses);
   }
 
+  async saveWarehouseAsync(warehouse: Warehouse): Promise<Warehouse> {
+    const list = this.getWarehouses();
+    const now = new Date().toISOString();
+    const existing = list.find(w => w.id === warehouse.id);
+    const candidate: Warehouse = {
+      ...warehouse,
+      id: warehouse.id || `wh-${Date.now()}`,
+      createdAt: warehouse.createdAt || existing?.createdAt || now,
+      updatedAt: now
+    };
+
+    const committed = await this.confirmSyncPush('warehouses', candidate);
+    let nextList = list.map(w =>
+      committed.isDefault && w.id !== committed.id ? { ...w, isDefault: false } : w
+    );
+    const idx = nextList.findIndex(w => w.id === committed.id);
+    if (idx >= 0) {
+      nextList[idx] = committed;
+    } else {
+      nextList = [committed, ...nextList];
+    }
+    this.memStore.set(STORAGE_KEYS.WAREHOUSES, nextList);
+    this.notifyStorageUpdated();
+    return committed;
+  }
+
+  async deleteWarehouseAsync(id: string): Promise<void> {
+    const list = this.getWarehouses();
+    const target = list.find(w => w.id === id);
+    if (!target) {
+      throw new Error('Warehouse not found in MySQL.');
+    }
+    if (target.isDefault) {
+      throw new Error('Cannot delete the default warehouse. Please mark another warehouse as default first.');
+    }
+    await this.confirmSyncDelete('warehouses', id);
+    const nextList = list.filter(w => w.id !== id);
+    this.memStore.set(STORAGE_KEYS.WAREHOUSES, nextList);
+    this.notifyStorageUpdated();
+  }
+
   saveWarehouse(warehouse: Warehouse): void {
     const list = this.getWarehouses();
     const idx = list.findIndex(w => w.id === warehouse.id);
-    if (warehouse.isDefault) {
-      list.forEach(w => {
-        if (w.id !== warehouse.id) w.isDefault = false;
-      });
-    }
+    const nextList = list.map(w =>
+      warehouse.isDefault && w.id !== warehouse.id ? { ...w, isDefault: false } : w
+    );
     if (idx >= 0) {
-      list[idx] = { ...warehouse, updatedAt: new Date().toISOString() };
+      nextList[idx] = { ...warehouse, updatedAt: new Date().toISOString() };
     } else {
-      list.push({ ...warehouse, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      nextList.push({ ...warehouse, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     }
-    this.set(STORAGE_KEYS.WAREHOUSES, list, warehouse);
+    this.set(STORAGE_KEYS.WAREHOUSES, nextList, warehouse);
   }
 
   deleteWarehouse(id: string): { success: boolean; message?: string } {
@@ -2591,15 +3286,133 @@ class StorageService {
     return this.get<StockAuditRecord[]>(STORAGE_KEYS.STOCK_AUDITS, initialStockAudits);
   }
 
+  async saveStockAuditAsync(audit: StockAuditRecord): Promise<StockAuditRecord> {
+    const list = this.getStockAudits();
+    const candidate: StockAuditRecord = {
+      ...audit,
+      id: audit.id || `audit-${Date.now()}`,
+      createdAt: audit.createdAt || new Date().toISOString()
+    };
+    const committed = await this.confirmSyncPush('stock_audits', candidate);
+    const nextList = [...list];
+    const idx = nextList.findIndex(a => a.id === committed.id);
+    if (idx >= 0) {
+      nextList[idx] = committed;
+    } else {
+      nextList.unshift(committed);
+    }
+    this.memStore.set(STORAGE_KEYS.STOCK_AUDITS, nextList);
+    this.notifyStorageUpdated();
+    return committed;
+  }
+
   saveStockAudit(audit: StockAuditRecord): void {
     const list = this.getStockAudits();
     const idx = list.findIndex(a => a.id === audit.id);
+    const nextList = [...list];
     if (idx >= 0) {
-      list[idx] = audit;
+      nextList[idx] = audit;
     } else {
-      list.unshift(audit);
+      nextList.unshift(audit);
     }
-    this.set(STORAGE_KEYS.STOCK_AUDITS, list, audit);
+    this.set(STORAGE_KEYS.STOCK_AUDITS, nextList, audit);
+  }
+
+  async transferStockAsync(
+    productId: string,
+    fromWarehouseId: string,
+    toWarehouseId: string,
+    quantity: number,
+    notes: string,
+    performedBy: string = 'Inventory Manager'
+  ): Promise<{ product: ProductItem; movements: StockMovement[] }> {
+    const products = this.getProducts();
+    const prod = products.find(p => p.id === productId);
+    if (!prod) {
+      throw new Error('Product not found in MySQL.');
+    }
+    if (quantity <= 0) {
+      throw new Error('Transfer quantity must be greater than 0.');
+    }
+    if (fromWarehouseId === toWarehouseId) {
+      throw new Error('Source and destination warehouses must be different.');
+    }
+
+    const warehouses = this.getWarehouses();
+    const fromWh = warehouses.find(w => w.id === fromWarehouseId);
+    const toWh = warehouses.find(w => w.id === toWarehouseId);
+    if (!fromWh || !toWh) {
+      throw new Error('Source or destination warehouse is invalid.');
+    }
+
+    const nextWhStocks = { ...(prod.warehouseStocks || {}) };
+    const currentFromStock = nextWhStocks[fromWarehouseId] ?? (fromWh.isDefault || !prod.warehouseStocks ? prod.currentStock : 0);
+    if (currentFromStock < quantity) {
+      throw new Error(`Insufficient stock at ${fromWh.name}. Available: ${currentFromStock} ${prod.unit}`);
+    }
+
+    nextWhStocks[fromWarehouseId] = currentFromStock - quantity;
+    nextWhStocks[toWarehouseId] = (nextWhStocks[toWarehouseId] ?? 0) + quantity;
+    const now = new Date().toISOString();
+
+    const updatedProd: ProductItem = {
+      ...prod,
+      warehouseStocks: nextWhStocks,
+      updatedAt: now
+    };
+
+    const outMovement: StockMovement = {
+      id: `sm-${Date.now()}-out-${Math.floor(Math.random() * 1000)}`,
+      productId: updatedProd.id,
+      productName: updatedProd.name,
+      sku: updatedProd.sku,
+      movementType: 'WAREHOUSE_TRANSFER',
+      quantity: -quantity,
+      balanceAfter: nextWhStocks[fromWarehouseId],
+      warehouseId: fromWarehouseId,
+      warehouseName: fromWh.name,
+      targetWarehouseId: toWarehouseId,
+      targetWarehouseName: toWh.name,
+      notes: notes || `Transferred ${quantity} ${updatedProd.unit} from ${fromWh.name} to ${toWh.name}`,
+      performedBy,
+      timestamp: now
+    };
+
+    const inMovement: StockMovement = {
+      id: `sm-${Date.now()}-in-${Math.floor(Math.random() * 1000)}`,
+      productId: updatedProd.id,
+      productName: updatedProd.name,
+      sku: updatedProd.sku,
+      movementType: 'WAREHOUSE_TRANSFER',
+      quantity: quantity,
+      balanceAfter: nextWhStocks[toWarehouseId],
+      warehouseId: toWarehouseId,
+      warehouseName: toWh.name,
+      targetWarehouseId: fromWarehouseId,
+      targetWarehouseName: fromWh.name,
+      notes: notes || `Received transfer of ${quantity} ${updatedProd.unit} from ${fromWh.name}`,
+      performedBy,
+      timestamp: now
+    };
+
+    const committedProd = await this.confirmSyncPush('products', updatedProd);
+    const committedOut = await this.confirmSyncPush('stock_movements', outMovement);
+    const committedIn = await this.confirmSyncPush('stock_movements', inMovement);
+
+    const nextProducts = [...this.getProducts()];
+    const idx = nextProducts.findIndex(p => p.id === committedProd.id);
+    if (idx >= 0) nextProducts[idx] = committedProd;
+    this.memStore.set(STORAGE_KEYS.PRODUCTS, nextProducts);
+
+    const committedIds = new Set([committedOut.id, committedIn.id]);
+    this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, [
+      committedIn,
+      committedOut,
+      ...this.getStockMovements().filter(m => !committedIds.has(m.id))
+    ]);
+    this.notifyStorageUpdated();
+
+    return { product: committedProd, movements: [committedOut, committedIn] };
   }
 
   transferStock(

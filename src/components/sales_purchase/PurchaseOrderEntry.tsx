@@ -22,7 +22,8 @@ import {
   Layers,
   Edit3,
   CheckCircle2,
-  PackageCheck
+  PackageCheck,
+  Loader2
 } from 'lucide-react';
 import { GoodsReceiptModal } from './purchase_order/GoodsReceiptModal';
 import { EditPurchaseOrderModal } from './purchase_order/EditPurchaseOrderModal';
@@ -37,9 +38,11 @@ export const PurchaseOrderEntry: React.FC = () => {
 
   // Modal states
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [viewingPO, setViewingPO] = useState<PurchaseOrder | null>(null);
-  const [editingPO, setEditingPO] = useState<PurchaseOrder | null>(null);
-  const [receivingPO, setReceivingPO] = useState<PurchaseOrder | null>(null);
+  const [viewingPOId, setViewingPOId] = useState<string | null>(null);
+  const [editingPOId, setEditingPOId] = useState<string | null>(null);
+  const [receivingPOId, setReceivingPOId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Form states for creating new PO
   const [formVendorId, setFormVendorId] = useState('');
@@ -70,6 +73,19 @@ export const PurchaseOrderEntry: React.FC = () => {
   const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
   const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
   const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
+
+  const viewingPO = useMemo(
+    () => (viewingPOId ? orders.find(o => o.id === viewingPOId) || null : null),
+    [orders, viewingPOId]
+  );
+  const editingPO = useMemo(
+    () => (editingPOId ? orders.find(o => o.id === editingPOId) || null : null),
+    [orders, editingPOId]
+  );
+  const receivingPO = useMemo(
+    () => (receivingPOId ? orders.find(o => o.id === receivingPOId) || null : null),
+    [orders, receivingPOId]
+  );
 
   const metrics = useMemo(() => {
     const totalPurchases = orders.reduce((sum, o) => sum + o.totalAmount, 0);
@@ -199,8 +215,9 @@ export const PurchaseOrderEntry: React.FC = () => {
 
   const formGrandTotal = formSubtotal + formTaxTotal;
 
-  const handleSavePO = (e: React.FormEvent) => {
+  const handleSavePO = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setFormError('');
 
     if (!formVendorId) {
@@ -215,7 +232,6 @@ export const PurchaseOrderEntry: React.FC = () => {
       return;
     }
 
-    // Strict duplicate check on line items before creating PO
     const duplicateValidation = validatePOLineItems(lineItems);
     if (!duplicateValidation.valid) {
       const msg = duplicateValidation.message || 'Duplicate products found in Purchase Order.';
@@ -254,47 +270,55 @@ export const PurchaseOrderEntry: React.FC = () => {
       updatedAt: new Date().toISOString()
     };
 
+    setIsSaving(true);
     try {
-      storageService.savePurchaseOrder(newPO, false);
+      const saved = await storageService.savePurchaseOrderAsync(newPO, false);
       triggerRefresh();
-      showToast(`Purchase Order ${newPO.purchaseNumber} submitted to ${newPO.vendorName}`, 'success');
+      showToast(`Purchase Order ${saved.purchaseNumber} submitted to ${saved.vendorName}`, 'success');
       setIsCreateModalOpen(false);
 
-      // Reset form
       setFormVendorId('');
       setFormProjectId('');
+      setFormWarehouseId('');
       setLineItems([]);
       setFormNotes('');
       setFormInvoiceRef('');
       setLineItemError('');
       setFormError('');
-    } catch (err: any) {
-      const msg = err.message || 'Failed to save purchase order.';
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save purchase order.';
       setFormError(msg);
       showToast(msg, 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDeletePO = (id: string, poNum: string) => {
-    if (window.confirm(`Are you sure you want to delete purchase order ${poNum}?`)) {
-      storageService.deletePurchaseOrder(id);
+  const handleDeletePO = async (id: string, poNum: string) => {
+    if (deletingId) return;
+    if (!window.confirm(`Are you sure you want to delete purchase order ${poNum}?`)) return;
+    setDeletingId(id);
+    try {
+      await storageService.deletePurchaseOrderAsync(id);
+      if (viewingPOId === id) setViewingPOId(null);
+      if (editingPOId === id) setEditingPOId(null);
+      if (receivingPOId === id) setReceivingPOId(null);
       triggerRefresh();
       showToast(`Purchase Order ${poNum} deleted`, 'info');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete purchase order';
+      showToast(msg, 'error');
+    } finally {
+      setDeletingId(null);
     }
   };
 
-  const handleOrderSavedFromModal = (updated: PurchaseOrder) => {
+  const handleOrderSavedFromModal = (_updated: PurchaseOrder) => {
     triggerRefresh();
-    if (viewingPO?.id === updated.id) {
-      setViewingPO(updated);
-    }
   };
 
-  const handleReceiptRecordedFromModal = (updated: PurchaseOrder) => {
+  const handleReceiptRecordedFromModal = (_updated: PurchaseOrder) => {
     triggerRefresh();
-    if (viewingPO?.id === updated.id) {
-      setViewingPO(updated);
-    }
   };
 
   return (
@@ -450,7 +474,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                   <tr key={order.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="p-3.5 font-mono font-bold text-amber-600 whitespace-nowrap">
                       <button
-                        onClick={() => setViewingPO(order)}
+                        onClick={() => setViewingPOId(order.id)}
                         className="hover:underline text-left cursor-pointer"
                         title="View PO Summary"
                       >
@@ -529,8 +553,8 @@ export const PurchaseOrderEntry: React.FC = () => {
                         </span>
                       ) : order.status === 'PARTIALLY_RECEIVED' ? (
                         <button
-                          onClick={() => setReceivingPO(order)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] rounded-lg border border-amber-200 transition-colors shadow-2xs"
+                          onClick={() => setReceivingPOId(order.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] rounded-lg border border-amber-200 transition-colors shadow-2xs cursor-pointer"
                           title="Record arrival of next delivery batch"
                         >
                           <Truck className="w-3 h-3 text-amber-600" />
@@ -538,8 +562,8 @@ export const PurchaseOrderEntry: React.FC = () => {
                         </button>
                       ) : (
                         <button
-                          onClick={() => setReceivingPO(order)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[10px] rounded-lg border border-blue-200 transition-colors shadow-2xs"
+                          onClick={() => setReceivingPOId(order.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[10px] rounded-lg border border-blue-200 transition-colors shadow-2xs cursor-pointer"
                         >
                           <PackagePlus className="w-3 h-3" />
                           Receive Goods (GRN)
@@ -551,23 +575,23 @@ export const PurchaseOrderEntry: React.FC = () => {
                     <td className="p-3.5 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
                         <button
-                          onClick={() => setViewingPO(order)}
-                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                          onClick={() => setViewingPOId(order.id)}
+                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                           title="View PO Summary & Receipts"
                         >
                           <Eye className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => setEditingPO(order)}
-                          className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors"
+                          onClick={() => setEditingPOId(order.id)}
+                          className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
                           title="Edit PO Summary & Quantities"
                         >
                           <Edit3 className="w-4 h-4" />
                         </button>
                         {totalPending > 0 && (
                           <button
-                            onClick={() => setReceivingPO(order)}
-                            className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
+                            onClick={() => setReceivingPOId(order.id)}
+                            className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
                             title="Record Delivery Receipt"
                           >
                             <Truck className="w-4 h-4" />
@@ -575,10 +599,15 @@ export const PurchaseOrderEntry: React.FC = () => {
                         )}
                         <button
                           onClick={() => handleDeletePO(order.id, order.purchaseNumber)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          disabled={deletingId === order.id}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                           title="Delete PO"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {deletingId === order.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
                         </button>
                       </div>
                     </td>
@@ -908,21 +937,23 @@ export const PurchaseOrderEntry: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => {
                     setIsCreateModalOpen(false);
                     setLineItemError('');
                     setFormError('');
                   }}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={lineItems.length === 0 || !validatePOLineItems(lineItems).valid}
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                  disabled={isSaving || lineItems.length === 0 || !validatePOLineItems(lineItems).valid}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
                 >
-                  Confirm & Place PO
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isSaving ? 'Saving to MySQL...' : 'Confirm & Place PO'}
                 </button>
               </div>
             </form>
@@ -934,14 +965,14 @@ export const PurchaseOrderEntry: React.FC = () => {
       {viewingPO && (
         <PurchaseOrderSummaryModal
           order={viewingPO}
-          onClose={() => setViewingPO(null)}
+          onClose={() => setViewingPOId(null)}
           onEditPO={order => {
-            setViewingPO(null);
-            setEditingPO(order);
+            setViewingPOId(null);
+            setEditingPOId(order.id);
           }}
           onReceiveGoods={order => {
-            setViewingPO(null);
-            setReceivingPO(order);
+            setViewingPOId(null);
+            setReceivingPOId(order.id);
           }}
         />
       )}
@@ -953,7 +984,7 @@ export const PurchaseOrderEntry: React.FC = () => {
           vendors={vendors}
           products={products}
           projects={projects}
-          onClose={() => setEditingPO(null)}
+          onClose={() => setEditingPOId(null)}
           onOrderSaved={handleOrderSavedFromModal}
           showToast={showToast}
         />
@@ -964,7 +995,7 @@ export const PurchaseOrderEntry: React.FC = () => {
         <GoodsReceiptModal
           order={receivingPO}
           currentUser={currentUser}
-          onClose={() => setReceivingPO(null)}
+          onClose={() => setReceivingPOId(null)}
           onReceiptRecorded={handleReceiptRecordedFromModal}
           showToast={showToast}
         />

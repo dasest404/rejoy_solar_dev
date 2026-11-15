@@ -11,7 +11,8 @@ import {
   FileText,
   Calendar,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Loader2
 } from 'lucide-react';
 
 interface GoodsReceiptModalProps {
@@ -43,6 +44,8 @@ export const GoodsReceiptModal: React.FC<GoodsReceiptModalProps> = ({
   const [transporterName, setTransporterName] = useState('');
   const [receivedBy, setReceivedBy] = useState(currentUser?.name || 'Store Incharge');
   const [receiptNotes, setReceiptNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
 
   // Initial receipt state per line item: default arrivingQuantity to remaining pending
   const [receiptItems, setReceiptItems] = useState<Record<string, ItemReceiptState>>(() => {
@@ -184,8 +187,10 @@ export const GoodsReceiptModal: React.FC<GoodsReceiptModalProps> = ({
     };
   }, [order.items, receiptItems]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setFormError('');
 
     if (summary.totalArriving === 0 && summary.totalRejected === 0) {
       showToast('Please enter arriving or rejected quantities for at least one item', 'warning');
@@ -216,28 +221,33 @@ export const GoodsReceiptModal: React.FC<GoodsReceiptModalProps> = ({
       })
       .filter((it): it is NonNullable<typeof it> => it !== null);
 
-    const updated = storageService.recordPurchaseReceipt(
-      order.id,
-      {
-        receiptDate,
-        deliveryChallanNo: deliveryChallanNo.trim() || undefined,
-        transporterName: transporterName.trim() || undefined,
-        receivedBy: receivedBy.trim() || 'Store Incharge',
-        notes: receiptNotes.trim() || undefined,
-        items: payloadItems
-      },
-      currentUser?.name || 'Store Incharge'
-    );
+    setIsSubmitting(true);
+    try {
+      const updated = await storageService.recordPurchaseReceiptAsync(
+        order.id,
+        {
+          receiptDate,
+          deliveryChallanNo: deliveryChallanNo.trim() || undefined,
+          transporterName: transporterName.trim() || undefined,
+          receivedBy: receivedBy.trim() || 'Store Incharge',
+          notes: receiptNotes.trim() || undefined,
+          items: payloadItems
+        },
+        currentUser?.name || 'Store Incharge'
+      );
 
-    if (updated) {
       showToast(
         `Goods Receipt recorded! Added ${summary.totalArriving} units into warehouse inventory.`,
         'success'
       );
       onReceiptRecorded(updated);
       onClose();
-    } else {
-      showToast('Failed to record delivery receipt', 'error');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to record delivery receipt in MySQL';
+      setFormError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -276,6 +286,12 @@ export const GoodsReceiptModal: React.FC<GoodsReceiptModalProps> = ({
 
         {/* Modal Form Content */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+          {formError && (
+            <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
           {/* Instructions banner */}
           <div className="bg-blue-50/80 border border-blue-200/80 rounded-xl p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
             <PackageCheck className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
@@ -599,19 +615,20 @@ export const GoodsReceiptModal: React.FC<GoodsReceiptModalProps> = ({
           <div className="flex items-center justify-between pt-4 border-t border-slate-200">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={onClose}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors"
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
             >
               Cancel
             </button>
 
             <button
               type="submit"
-              disabled={summary.hasExcessWithoutApproval || (summary.totalArriving === 0 && summary.totalRejected === 0)}
-              className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+              disabled={isSubmitting || summary.hasExcessWithoutApproval || (summary.totalArriving === 0 && summary.totalRejected === 0)}
+              className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
             >
-              <CheckCircle2 className="w-4 h-4" />
-              Confirm Delivery & Update Inventory
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              {isSubmitting ? 'Recording Receipt...' : 'Confirm Delivery & Update Inventory'}
             </button>
           </div>
         </form>
