@@ -23,7 +23,7 @@ import {
 
 export const LiveFieldTrackingView: React.FC = () => {
   const { setActiveView } = useApp();
-  const { isAdmin } = useAuth();
+  const { canAccessModule } = useAuth();
 
   const [locations, setLocations] = useState<LiveEmployeeLocation[]>(() =>
     liveLocationService.getLocations()
@@ -49,8 +49,8 @@ export const LiveFieldTrackingView: React.FC = () => {
     assignment: 'ALL'
   });
 
-  // Strict role check: Workforce tracking map is exclusively accessible to Admin
-  if (!isAdmin) {
+  // RBAC check: Workforce tracking map requires live_tracking.view permission
+  if (!canAccessModule('live_tracking')) {
     return (
       <div className="min-h-[400px] flex flex-col items-center justify-center p-8 bg-white rounded-3xl border border-slate-200 text-center shadow-xs">
         <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mb-4 shadow-xs">
@@ -58,7 +58,7 @@ export const LiveFieldTrackingView: React.FC = () => {
         </div>
         <h2 className="text-xl font-black text-slate-900 mb-1">Access Restricted</h2>
         <p className="text-sm text-slate-500 max-w-md mb-6 leading-relaxed">
-          The Central Live Field Workforce Tracking Console is restricted to Administrator personnel.
+          The Central Live Field Workforce Tracking Console requires Live Field Tracking permission in Role-Based Access Control.
         </p>
         <button
           onClick={() => setActiveView('dashboard')}

@@ -510,7 +510,7 @@ export const RoleBasedAccessControlPanel: React.FC = () => {
                 onChange={e => setMatrixDomainFilter(e.target.value as any)}
                 className="text-xs font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5"
               >
-                <option value="ALL">All 9 Domains</option>
+                <option value="ALL">All {ACL_DOMAINS.length} Domains</option>
                 {ACL_DOMAINS.map(d => (
                   <option key={d.id} value={d.id}>
                     {d.label}

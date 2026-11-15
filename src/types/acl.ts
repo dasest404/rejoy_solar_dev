@@ -1,15 +1,18 @@
 import { UserRole } from './solar';
 
 export type AclDomain =
+  | 'dashboard'
   | 'crm'
   | 'projects'
   | 'survey'
+  | 'tracking'
   | 'inventory'
   | 'finance'
   | 'hrms'
   | 'service'
   | 'reports'
-  | 'settings';
+  | 'settings'
+  | 'users';
 
 export type PermissionAction = 'view' | 'create' | 'edit' | 'delete' | 'approve';
 

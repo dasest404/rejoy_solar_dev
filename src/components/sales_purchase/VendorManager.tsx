@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
 import { Vendor } from '../../types/solar';
 import { validateVendor, DuplicateRecordError } from '../../services/validation';
@@ -22,6 +23,8 @@ import {
 
 export const VendorManager: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast, openImportExportModal } = useApp();
+  const { hasPermission } = useAuth();
+  const canManageVendors = hasPermission('inventory.vendors_manage');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
@@ -244,14 +247,16 @@ export const VendorManager: React.FC = () => {
             <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
             <span>Excel Hub</span>
           </button>
-          <button
-            id="btn-add-vendor"
-            onClick={handleOpenAdd}
-            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Add New Vendor
-          </button>
+          {canManageVendors && (
+            <button
+              id="btn-add-vendor"
+              onClick={handleOpenAdd}
+              className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              Add New Vendor
+            </button>
+          )}
         </div>
       </div>
 
@@ -381,28 +386,30 @@ export const VendorManager: React.FC = () => {
                 </a>
               </div>
 
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handleOpenEdit(vendor)}
-                  disabled={deletingId === vendor.id}
-                  className="p-2 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
-                  title="Edit Vendor"
-                >
-                  <Edit className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleDeleteVendor(vendor.id, vendor.name)}
-                  disabled={deletingId === vendor.id}
-                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
-                  title="Delete Vendor"
-                >
-                  {deletingId === vendor.id ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
-                  ) : (
-                    <Trash2 className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
+              {canManageVendors && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => handleOpenEdit(vendor)}
+                    disabled={deletingId === vendor.id}
+                    className="p-2 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
+                    title="Edit Vendor"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteVendor(vendor.id, vendor.name)}
+                    disabled={deletingId === vendor.id}
+                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
+                    title="Delete Vendor"
+                  >
+                    {deletingId === vendor.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -414,13 +421,15 @@ export const VendorManager: React.FC = () => {
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
               Add your equipment suppliers and service vendors to manage purchasing.
             </p>
-            <button
-              onClick={handleOpenAdd}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600"
-            >
-              <Plus className="w-4 h-4" />
-              Add First Vendor
-            </button>
+            {canManageVendors && (
+              <button
+                onClick={handleOpenAdd}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600"
+              >
+                <Plus className="w-4 h-4" />
+                Add First Vendor
+              </button>
+            )}
           </div>
         )}
       </div>

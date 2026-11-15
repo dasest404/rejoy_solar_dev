@@ -24,10 +24,41 @@ import {
 
 export const SettingsView: React.FC = () => {
   const { settings, updateSettings, showToast, triggerRefresh, activeSettingsTab, setActiveSettingsTab } = useApp();
+  const { hasPermission } = useAuth();
   const [form, setForm] = useState<SystemSettings>({ ...settings });
   const [isTestingTally, setIsTestingTally] = useState(false);
 
-  const currentTab: SettingsTab = activeSettingsTab || 'general';
+  const canGeneral = hasPermission('settings.manage');
+  const canTally = hasPermission('settings.tally');
+  const canWhatsapp = hasPermission('settings.whatsapp');
+  const canAcl = hasPermission('settings.acl_manage');
+  const canDatabase = hasPermission('settings.database');
+
+  const requestedTab: SettingsTab = activeSettingsTab || 'general';
+  const isTabAllowed = (tab: SettingsTab): boolean => {
+    switch (tab) {
+      case 'general':
+        return canGeneral;
+      case 'tally':
+        return canTally;
+      case 'whatsapp':
+        return canWhatsapp;
+      case 'acl':
+        return canAcl;
+      case 'database':
+        return canDatabase;
+      default:
+        return false;
+    }
+  };
+  const fallbackTab: SettingsTab =
+    (canGeneral && 'general') ||
+    (canTally && 'tally') ||
+    (canWhatsapp && 'whatsapp') ||
+    (canAcl && 'acl') ||
+    (canDatabase && 'database') ||
+    'general';
+  const currentTab: SettingsTab = isTabAllowed(requestedTab) ? requestedTab : fallbackTab;
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,80 +111,90 @@ export const SettingsView: React.FC = () => {
 
       {/* Main Settings Tabs Bar */}
       <div className="flex items-center gap-2 bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/70 overflow-x-auto no-scrollbar">
-        <button
-          type="button"
-          onClick={() => setActiveSettingsTab('general')}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
-            currentTab === 'general'
-              ? 'bg-white text-slate-900 shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-          }`}
-        >
-          <Building2 className="w-4 h-4 text-amber-500" />
-          <span>General & EPC Profile</span>
-        </button>
+        {canGeneral && (
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('general')}
+            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
+              currentTab === 'general'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+            }`}
+          >
+            <Building2 className="w-4 h-4 text-amber-500" />
+            <span>General & EPC Profile</span>
+          </button>
+        )}
 
-        <button
-          type="button"
-          onClick={() => setActiveSettingsTab('tally')}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
-            currentTab === 'tally'
-              ? 'bg-white text-slate-900 shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-          }`}
-        >
-          <Server className="w-4 h-4 text-amber-600" />
-          <span>Tally Prime Integration</span>
-        </button>
+        {canTally && (
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('tally')}
+            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
+              currentTab === 'tally'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+            }`}
+          >
+            <Server className="w-4 h-4 text-amber-600" />
+            <span>Tally Prime Integration</span>
+          </button>
+        )}
 
-        <button
-          type="button"
-          onClick={() => setActiveSettingsTab('whatsapp')}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
-            currentTab === 'whatsapp'
-              ? 'bg-white text-slate-900 shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-          }`}
-        >
-          <MessageSquare className="w-4 h-4 text-emerald-600" />
-          <span>WhatsApp Cloud API</span>
-        </button>
+        {canWhatsapp && (
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('whatsapp')}
+            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
+              currentTab === 'whatsapp'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4 text-emerald-600" />
+            <span>WhatsApp Cloud API</span>
+          </button>
+        )}
 
-        <button
-          type="button"
-          onClick={() => setActiveSettingsTab('acl')}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
-            currentTab === 'acl'
-              ? 'bg-purple-600 text-white shadow-xs'
-              : 'text-purple-700 hover:text-purple-900 hover:bg-purple-50'
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4" />
-          <span>Role-Based Access Control</span>
-          <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
-            currentTab === 'acl' ? 'bg-purple-700 text-white' : 'bg-purple-100 text-purple-800'
-          }`}>
-            ACL
-          </span>
-        </button>
+        {canAcl && (
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('acl')}
+            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
+              currentTab === 'acl'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-purple-700 hover:text-purple-900 hover:bg-purple-50'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Role-Based Access Control</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
+              currentTab === 'acl' ? 'bg-purple-700 text-white' : 'bg-purple-100 text-purple-800'
+            }`}>
+              ACL
+            </span>
+          </button>
+        )}
 
-        <button
-          type="button"
-          onClick={() => setActiveSettingsTab('database')}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
-            currentTab === 'database'
-              ? 'bg-amber-600 text-white shadow-xs'
-              : 'text-amber-800 hover:text-amber-950 hover:bg-amber-50'
-          }`}
-        >
-          <Database className="w-4 h-4" />
-          <span>MySQL Database & APIs</span>
-          <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
-            currentTab === 'database' ? 'bg-amber-700 text-white' : 'bg-amber-100 text-amber-900'
-          }`}>
-            SQL
-          </span>
-        </button>
+        {canDatabase && (
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('database')}
+            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
+              currentTab === 'database'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'text-amber-800 hover:text-amber-950 hover:bg-amber-50'
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            <span>MySQL Database & APIs</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
+              currentTab === 'database' ? 'bg-amber-700 text-white' : 'bg-amber-100 text-amber-900'
+            }`}>
+              SQL
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Conditional Content based on active tab */}

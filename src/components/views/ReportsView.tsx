@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
 import { ReportCategory, REPORT_CATEGORIES, ReportFilterState } from '../../types/reports';
 import {
@@ -32,6 +33,19 @@ import { ProjectReport } from '../reports/ProjectReport';
 
 export const ReportsView: React.FC = () => {
   const { showToast, refreshTrigger, activeReportCategory, setActiveReportCategory } = useApp();
+  const { hasPermission } = useAuth();
+
+  const allowedCategories = REPORT_CATEGORIES.filter(cat => hasPermission(`reports.${cat.id}`));
+  const effectiveCategory: ReportCategory | null =
+    allowedCategories.find(c => c.id === activeReportCategory)?.id ||
+    allowedCategories[0]?.id ||
+    null;
+
+  useEffect(() => {
+    if (effectiveCategory && effectiveCategory !== activeReportCategory) {
+      setActiveReportCategory(effectiveCategory);
+    }
+  }, [effectiveCategory, activeReportCategory, setActiveReportCategory]);
 
   // Consistent filter state across reporting center
   const [filters, setFilters] = useState<ReportFilterState>({
@@ -76,8 +90,12 @@ export const ReportsView: React.FC = () => {
   const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
 
   const currentMeta = useMemo(() => {
-    return REPORT_CATEGORIES.find(c => c.id === activeReportCategory) || REPORT_CATEGORIES[0];
-  }, [activeReportCategory]);
+    return (
+      allowedCategories.find(c => c.id === effectiveCategory) ||
+      REPORT_CATEGORIES.find(c => c.id === activeReportCategory) ||
+      REPORT_CATEGORIES[0]
+    );
+  }, [allowedCategories, effectiveCategory, activeReportCategory]);
 
   const getCategoryIcon = (id: ReportCategory) => {
     switch (id) {
@@ -148,32 +166,42 @@ export const ReportsView: React.FC = () => {
         </div>
       </div>
 
-      {/* 11 Reports Navigation Pill Bar */}
-      <div className="bg-white rounded-2xl p-2 border border-slate-200/80 shadow-2xs overflow-x-auto">
-        <div className="flex items-center gap-1 min-w-max">
-          {REPORT_CATEGORIES.map(cat => {
-            const isActive = activeReportCategory === cat.id;
-            return (
-              <button
-                key={cat.id}
-                onClick={() => handleSelectCategory(cat.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                  isActive
-                    ? 'bg-amber-500 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
-                }`}
-              >
-                {getCategoryIcon(cat.id)}
-                <span>{cat.label}</span>
-              </button>
-            );
-          })}
+      {/* Permitted Reports Navigation Pill Bar */}
+      {allowedCategories.length === 0 ? (
+        <div className="bg-white rounded-2xl p-10 text-center border border-slate-200/80 shadow-2xs">
+          <BarChart3 className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+          <h3 className="text-sm font-bold text-slate-900">No Report Categories Permitted</h3>
+          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+            Your current role has general reporting visibility, but no individual report categories are enabled in Role-Based Access Control.
+          </p>
         </div>
-      </div>
+      ) : (
+        <>
+          <div className="bg-white rounded-2xl p-2 border border-slate-200/80 shadow-2xs overflow-x-auto">
+            <div className="flex items-center gap-1 min-w-max">
+              {allowedCategories.map(cat => {
+                const isActive = effectiveCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => handleSelectCategory(cat.id)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      isActive
+                        ? 'bg-amber-500 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+                    }`}
+                  >
+                    {getCategoryIcon(cat.id)}
+                    <span>{cat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-      {/* Active Report Component */}
-      <div>
-        {activeReportCategory === 'sales' && (
+          {/* Active Report Component */}
+          <div>
+            {effectiveCategory === 'sales' && (
           <SalesReport
             invoices={salesInvoices}
             filters={filters}
@@ -184,7 +212,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'purchase' && (
+        {effectiveCategory === 'purchase' && (
           <PurchaseReport
             orders={purchaseOrders}
             filters={filters}
@@ -195,7 +223,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'product_stock' && (
+        {effectiveCategory === 'product_stock' && (
           <ProductStockReport
             products={products}
             filters={filters}
@@ -206,7 +234,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'customer_ledger' && (
+        {effectiveCategory === 'customer_ledger' && (
           <CustomerLedgerReport
             customers={customers}
             invoices={salesInvoices}
@@ -219,7 +247,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'vendor_ledger' && (
+        {effectiveCategory === 'vendor_ledger' && (
           <VendorLedgerReport
             vendors={vendors}
             purchaseOrders={purchaseOrders}
@@ -231,7 +259,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'income_summary' && (
+        {effectiveCategory === 'income_summary' && (
           <IncomeSummaryReport
             payments={payments}
             customers={customers}
@@ -243,7 +271,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'expense_summary' && (
+        {effectiveCategory === 'expense_summary' && (
           <ExpenseSummaryReport
             expenses={expenses}
             projects={projects}
@@ -255,7 +283,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'payroll' && (
+        {effectiveCategory === 'payroll' && (
           <PayrollReport
             payslips={payslips}
             employees={employees}
@@ -267,7 +295,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'monthly_attendance' && (
+        {effectiveCategory === 'monthly_attendance' && (
           <MonthlyAttendanceReport
             attendance={attendance}
             employees={employees}
@@ -279,7 +307,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'leads' && (
+        {effectiveCategory === 'leads' && (
           <LeadsReport
             leads={leads}
             filters={filters}
@@ -290,7 +318,7 @@ export const ReportsView: React.FC = () => {
           />
         )}
 
-        {activeReportCategory === 'projects' && (
+        {effectiveCategory === 'projects' && (
           <ProjectReport
             projects={projects}
             customers={customers}
@@ -301,7 +329,9 @@ export const ReportsView: React.FC = () => {
             showToast={showToast}
           />
         )}
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };

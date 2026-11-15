@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
 import { ProductItem, Vendor } from '../../types/solar';
 import { validateProduct, DuplicateRecordError } from '../../services/validation';
@@ -22,6 +23,8 @@ import {
 
 export const ProductCatalog: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast, openImportExportModal } = useApp();
+  const { hasPermission } = useAuth();
+  const canManageProducts = hasPermission('inventory.products_manage');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
@@ -274,14 +277,16 @@ export const ProductCatalog: React.FC = () => {
             <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
             <span>Excel Hub</span>
           </button>
-          <button
-            id="btn-add-product"
-            onClick={handleOpenAdd}
-            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Add New Product
-          </button>
+          {canManageProducts && (
+            <button
+              id="btn-add-product"
+              onClick={handleOpenAdd}
+              className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              Add New Product
+            </button>
+          )}
         </div>
       </div>
 
@@ -413,28 +418,30 @@ export const ProductCatalog: React.FC = () => {
                   HSN: {product.hsnCode}
                 </span>
 
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => handleOpenEdit(product)}
-                    disabled={deletingId === product.id}
-                    className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
-                    title="Edit Product"
-                  >
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteProduct(product.id, product.name)}
-                    disabled={deletingId === product.id}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
-                    title="Delete Product"
-                  >
-                    {deletingId === product.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
-                    ) : (
-                      <Trash2 className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
+                {canManageProducts && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleOpenEdit(product)}
+                      disabled={deletingId === product.id}
+                      className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
+                      title="Edit Product"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteProduct(product.id, product.name)}
+                      disabled={deletingId === product.id}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
+                      title="Delete Product"
+                    >
+                      {deletingId === product.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -447,13 +454,15 @@ export const ProductCatalog: React.FC = () => {
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
               Add products to your catalog to link with BOMs and purchase entries.
             </p>
-            <button
-              onClick={handleOpenAdd}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600"
-            >
-              <Plus className="w-4 h-4" />
-              Add First Product
-            </button>
+            {canManageProducts && (
+              <button
+                onClick={handleOpenAdd}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600"
+              >
+                <Plus className="w-4 h-4" />
+                Add First Product
+              </button>
+            )}
           </div>
         )}
       </div>

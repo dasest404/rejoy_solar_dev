@@ -16,6 +16,13 @@ export interface AclDomainMetadata {
 
 export const ACL_DOMAINS: AclDomainMetadata[] = [
   {
+    id: 'dashboard',
+    label: 'Dashboard, Control Center & Portal',
+    description: 'Executive overview dashboards, central customer control hub, and client self-service portal',
+    icon: 'LayoutDashboard',
+    badgeColor: 'bg-slate-100 text-slate-800 border-slate-300'
+  },
+  {
     id: 'crm',
     label: 'CRM & Sales Pipeline',
     description: 'Leads, prospective client follow-ups, quotation builder, and commercial negotiations',
@@ -35,6 +42,13 @@ export const ACL_DOMAINS: AclDomainMetadata[] = [
     description: 'Roof dimensions, shadow obstruction analysis, GPS logging, and transformer specs',
     icon: 'Compass',
     badgeColor: 'bg-amber-50 text-amber-800 border-amber-200'
+  },
+  {
+    id: 'tracking',
+    label: 'Live Field Workforce Tracking',
+    description: 'Real-time GPS field workforce map, presence status, and telemetry monitoring',
+    icon: 'Navigation',
+    badgeColor: 'bg-teal-50 text-teal-800 border-teal-200'
   },
   {
     id: 'inventory',
@@ -77,6 +91,13 @@ export const ACL_DOMAINS: AclDomainMetadata[] = [
     description: 'Company credentials, Tally/WhatsApp gateways, audit logs, and ACL access rules',
     icon: 'ShieldCheck',
     badgeColor: 'bg-purple-50 text-purple-800 border-purple-200'
+  },
+  {
+    id: 'users',
+    label: 'User Management & Administration',
+    description: 'System login accounts, employee credentials, password resets, and role allocations',
+    icon: 'UserCog',
+    badgeColor: 'bg-violet-50 text-violet-800 border-violet-200'
   }
 ];
 
@@ -205,6 +226,35 @@ export const ACL_ROLES_METADATA: AclRoleMetadata[] = [
 ];
 
 export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
+  // Dashboard, Control Center & Portal
+  {
+    id: 'dashboard.view',
+    domain: 'dashboard',
+    domainLabel: 'Dashboard, Control Center & Portal',
+    name: 'View Operational Dashboard',
+    description: 'Access the role-specific ERP overview dashboard, KPIs, and summary widgets',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'control_center.view',
+    domain: 'dashboard',
+    domainLabel: 'Dashboard, Control Center & Portal',
+    name: 'Access Customer Control Center',
+    description: 'Open the central 360-degree Customer Control Center tracking timeline, team, docs, and finances',
+    actions: ['view'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'customer_portal.view',
+    domain: 'dashboard',
+    domainLabel: 'Dashboard, Control Center & Portal',
+    name: 'Access Client Customer Portal',
+    description: 'View the external customer self-service solar installation portal and project summary',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+
   // CRM & Sales
   {
     id: 'crm.leads.view',
@@ -225,6 +275,42 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     riskLevel: 'MEDIUM'
   },
   {
+    id: 'crm.leads.delete',
+    domain: 'crm',
+    domainLabel: 'CRM & Sales',
+    name: 'Delete Inquiries & Leads',
+    description: 'Permanently delete solar leads and inquiry records from the CRM pipeline',
+    actions: ['delete'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'crm.customers.view',
+    domain: 'crm',
+    domainLabel: 'CRM & Sales',
+    name: 'View Customer Directory',
+    description: 'Browse onboarded EPC customers, site locations, sanctioned load, and project links',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'crm.customers.manage',
+    domain: 'crm',
+    domainLabel: 'CRM & Sales',
+    name: 'Manage Customers & Portal Access',
+    description: 'Create new customer accounts, edit customer records, and update client portal passwords',
+    actions: ['create', 'edit', 'delete'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'crm.quotations.view',
+    domain: 'crm',
+    domainLabel: 'CRM & Sales',
+    name: 'View Quotations & Proposals',
+    description: 'Inspect commercial solar proposals, BOM line items, subsidies, and PDF previews',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
     id: 'crm.quotations.create',
     domain: 'crm',
     domainLabel: 'CRM & Sales',
@@ -240,6 +326,15 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     name: 'Approve Commercial Discounts',
     description: 'Authorize high-value price reductions, custom PPA terms, and contractual discount margins',
     actions: ['approve'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'crm.quotations.delete',
+    domain: 'crm',
+    domainLabel: 'CRM & Sales',
+    name: 'Delete Quotations & Proposals',
+    description: 'Permanently remove draft or issued commercial quotation proposals',
+    actions: ['delete'],
     riskLevel: 'HIGH'
   },
 
@@ -307,6 +402,15 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     actions: ['approve'],
     riskLevel: 'CRITICAL'
   },
+  {
+    id: 'projects.workflows_view',
+    domain: 'projects',
+    domainLabel: 'Projects & Engineering',
+    name: 'View Stage Workflows & Checklists',
+    description: 'Filter projects by operational stage workflows and view site engineering checklists',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
 
   // Site Survey & Feasibility
   {
@@ -337,7 +441,27 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     riskLevel: 'HIGH'
   },
 
+  // Live Field Workforce Tracking
+  {
+    id: 'live_tracking.view',
+    domain: 'tracking',
+    domainLabel: 'Live Field Workforce Tracking',
+    name: 'View Live Field Tracking & Map',
+    description: 'Access the live GPS field workforce tracking console, presence feed, and employee telemetry',
+    actions: ['view'],
+    riskLevel: 'HIGH'
+  },
+
   // Material & Inventory
+  {
+    id: 'inventory.hub_view',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'View Sales & Purchase Hub',
+    description: 'Open the Sales & Purchase ERP synchronization hub and overview workspace',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
   {
     id: 'inventory.view',
     domain: 'inventory',
@@ -357,6 +481,15 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     riskLevel: 'HIGH'
   },
   {
+    id: 'inventory.products_manage',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'Manage Purchased Products Catalog',
+    description: 'Create, edit, and delete solar product catalog items, pricing, and HSN specifications',
+    actions: ['create', 'edit', 'delete'],
+    riskLevel: 'HIGH'
+  },
+  {
     id: 'inventory.bom_edit',
     domain: 'inventory',
     domainLabel: 'Material & Inventory',
@@ -364,6 +497,33 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     description: 'Add or modify bill of materials components allocated to an active installation project',
     actions: ['edit'],
     riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'inventory.bom_manage',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'Create & Delete Project BOMs',
+    description: 'View Bill of Materials section, create new project BOMs, generate E-Way bills, and delete BOMs',
+    actions: ['view', 'create', 'delete'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'inventory.vendors_view',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'View Vendor Management Directory',
+    description: 'Browse solar equipment suppliers, GSTIN profiles, payment terms, and banking details',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'inventory.vendors_manage',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'Manage Vendors & Suppliers',
+    description: 'Create, edit, and delete vendor master records in the supply chain directory',
+    actions: ['create', 'edit', 'delete'],
+    riskLevel: 'HIGH'
   },
   {
     id: 'inventory.purchase_orders',
@@ -430,6 +590,15 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     actions: ['view', 'approve'],
     riskLevel: 'CRITICAL'
   },
+  {
+    id: 'finance.expenses',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Manage Vendor & Project Expenses',
+    description: 'View vendor expense vouchers, material purchase outflows, and Tally expense XML sync',
+    actions: ['view', 'create', 'edit', 'delete'],
+    riskLevel: 'HIGH'
+  },
 
   // HRMS & Attendance
   {
@@ -466,6 +635,24 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     name: 'Calculate & Process Payroll',
     description: 'Generate monthly payroll register, deductions (PF/ESIC/PT), and salary slips',
     actions: ['approve'],
+    riskLevel: 'CRITICAL'
+  },
+  {
+    id: 'hrms.holidays',
+    domain: 'hrms',
+    domainLabel: 'HRMS, Attendance & Payroll',
+    name: 'Manage Holiday Calendar & Rules',
+    description: 'Add, edit, delete, and reset official company holiday schedules',
+    actions: ['view', 'create', 'edit', 'delete'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'hrms.delete',
+    domain: 'hrms',
+    domainLabel: 'HRMS, Attendance & Payroll',
+    name: 'Delete HRMS Staff, Attendance & Payslips',
+    description: 'Permanently delete employee directory records, attendance logs, and generated payslip vouchers',
+    actions: ['delete'],
     riskLevel: 'CRITICAL'
   },
 
@@ -518,6 +705,105 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     riskLevel: 'LOW'
   },
   {
+    id: 'reports.sales',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Sales Report',
+    description: 'Access invoiced revenue, customer sales orders, GST breakdowns, and collection statuses',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'reports.purchase',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Purchase Report',
+    description: 'Access procurement orders, vendor commitments, input tax credits, and delivery fulfillment',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'reports.product_stock',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Product Stock Report',
+    description: 'Access solar equipment stock balances, valuation, threshold alerts, and movements',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'reports.customer_ledger',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Customer Ledger Report',
+    description: 'Access party-wise customer ledger with invoices billed, receipts credited, and dues',
+    actions: ['view'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'reports.vendor_ledger',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Vendor Ledger Report',
+    description: 'Access supplier payables ledger with procurement bills, disbursements, and pending dues',
+    actions: ['view'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'reports.income_summary',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Income Summary Report',
+    description: 'Access cash inflows, milestone payment receipts, modes, and Tally sync reconciliation',
+    actions: ['view'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'reports.expense_summary',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Expense Summary Report',
+    description: 'Access project material purchases, civil/electrical outflows, and vendor expense summaries',
+    actions: ['view'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'reports.payroll',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Payroll Report',
+    description: 'Access monthly employee compensation statements, overtime earnings, and statutory deductions',
+    actions: ['view'],
+    riskLevel: 'CRITICAL'
+  },
+  {
+    id: 'reports.monthly_attendance',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Monthly Attendance Report',
+    description: 'Access daily check-in/out logs, GPS field verifications, and shift attendance summaries',
+    actions: ['view'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'reports.leads',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Leads Report',
+    description: 'Access CRM inquiry velocity, acquisition sources, conversion rates, and pipeline capacity',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'reports.projects',
+    domain: 'reports',
+    domainLabel: 'Analytics & Executive Reports',
+    name: 'Project Report',
+    description: 'Access EPC solar installations, stage progression, completion timelines, and valuations',
+    actions: ['view'],
+    riskLevel: 'LOW'
+  },
+  {
     id: 'reports.export',
     domain: 'reports',
     domainLabel: 'Analytics & Executive Reports',
@@ -547,12 +833,59 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     riskLevel: 'HIGH'
   },
   {
+    id: 'settings.tally',
+    domain: 'settings',
+    domainLabel: 'System Admin & Security',
+    name: 'Tally Prime Integration Settings',
+    description: 'Configure Tally Prime company name, ODBC/XML endpoint, and gateway connection test',
+    actions: ['view', 'edit'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'settings.whatsapp',
+    domain: 'settings',
+    domainLabel: 'System Admin & Security',
+    name: 'WhatsApp Cloud API Settings',
+    description: 'Configure WhatsApp Business phone ID and Meta Cloud API integration mode',
+    actions: ['view', 'edit'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'settings.database',
+    domain: 'settings',
+    domainLabel: 'System Admin & Security',
+    name: 'MySQL Database & APIs Console',
+    description: 'Inspect production MySQL schema, run diagnostics, sync tools, and database controls',
+    actions: ['view', 'edit', 'delete'],
+    riskLevel: 'CRITICAL'
+  },
+  {
     id: 'settings.acl_manage',
     domain: 'settings',
     domainLabel: 'System Admin & Security',
     name: 'Modify Role-Based Access Control',
     description: 'Grant or revoke permissions, edit ACL matrices, reassign user roles, and enforce security policies',
     actions: ['edit', 'approve'],
+    riskLevel: 'CRITICAL'
+  },
+
+  // User Management & Administration
+  {
+    id: 'users.view',
+    domain: 'users',
+    domainLabel: 'User Management & Administration',
+    name: 'View User Management Directory',
+    description: 'Browse ERP system login accounts, employee role allocations, and active session status',
+    actions: ['view'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'users.manage',
+    domain: 'users',
+    domainLabel: 'User Management & Administration',
+    name: 'Create, Edit & Delete System Users',
+    description: 'Provision ERP accounts, modify user roles, reset passwords, suspend or delete system users',
+    actions: ['create', 'edit', 'delete'],
     riskLevel: 'CRITICAL'
   }
 ];
@@ -569,6 +902,22 @@ const createPermissions = (grantList: string[]): Record<string, boolean> => {
 // All permissions array for Admin (Root Authority)
 const ALL_PERMISSION_IDS = ACL_PERMISSIONS_CATALOG.map(p => p.id);
 
+const ALL_REPORT_PERMISSIONS = [
+  'reports.view',
+  'reports.sales',
+  'reports.purchase',
+  'reports.product_stock',
+  'reports.customer_ledger',
+  'reports.vendor_ledger',
+  'reports.income_summary',
+  'reports.expense_summary',
+  'reports.payroll',
+  'reports.monthly_attendance',
+  'reports.leads',
+  'reports.projects',
+  'reports.export'
+];
+
 /**
  * Standard Production-Grade Solar EPC Default Access Control List (ACL)
  */
@@ -576,28 +925,32 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
   'Admin': createPermissions(ALL_PERMISSION_IDS),
 
   'Project Manager': createPermissions([
-    'crm.leads.view', 'crm.quotations.create',
+    'dashboard.view', 'control_center.view',
+    'crm.leads.view', 'crm.customers.view', 'crm.quotations.view', 'crm.quotations.create',
     'projects.view', 'projects.create', 'projects.edit_specs', 'projects.assign_team',
-    'projects.stage_checklist', 'projects.stage_photos', 'projects.stage_approve',
+    'projects.stage_checklist', 'projects.stage_photos', 'projects.stage_approve', 'projects.workflows_view',
     'survey.view', 'survey.approve',
-    'inventory.view', 'inventory.bom_edit', 'inventory.purchase_orders',
-    'finance.view',
+    'inventory.hub_view', 'inventory.view', 'inventory.products_manage', 'inventory.bom_edit', 'inventory.bom_manage',
+    'inventory.vendors_view', 'inventory.purchase_orders',
+    'finance.view', 'finance.expenses',
     'hrms.view', 'hrms.attendance_punch',
     'service.tickets_view', 'service.tickets_create',
-    'reports.view', 'reports.export',
+    ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
 
   'Site Survey Engineer': createPermissions([
+    'dashboard.view',
     'crm.leads.view',
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'survey.view', 'survey.submit',
     'hrms.attendance_punch',
     'settings.view'
   ]),
 
   'Site Inspector': createPermissions([
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'dashboard.view',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'survey.view', 'survey.submit',
     'service.tickets_view', 'service.tickets_resolve',
     'hrms.attendance_punch',
@@ -605,55 +958,66 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
   ]),
 
   'Sales Manager': createPermissions([
-    'crm.leads.view', 'crm.leads.manage', 'crm.quotations.create', 'crm.quotations.approve',
-    'projects.view',
+    'dashboard.view',
+    'crm.leads.view', 'crm.leads.manage', 'crm.leads.delete',
+    'crm.customers.view', 'crm.customers.manage',
+    'crm.quotations.view', 'crm.quotations.create', 'crm.quotations.approve', 'crm.quotations.delete',
+    'projects.view', 'projects.workflows_view',
     'survey.view',
-    'inventory.view',
+    'inventory.hub_view', 'inventory.view', 'inventory.bom_manage', 'inventory.vendors_view',
     'finance.view',
     'hrms.view', 'hrms.attendance_punch',
-    'reports.view', 'reports.export',
+    ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
 
   'Sales Executive': createPermissions([
-    'crm.leads.view', 'crm.leads.manage', 'crm.quotations.create',
-    'projects.view',
+    'dashboard.view',
+    'crm.leads.view', 'crm.leads.manage',
+    'crm.customers.view', 'crm.customers.manage',
+    'crm.quotations.view', 'crm.quotations.create',
+    'projects.view', 'projects.workflows_view',
     'survey.view',
-    'inventory.view',
+    'inventory.hub_view', 'inventory.view',
     'hrms.attendance_punch',
     'settings.view'
   ]),
 
   'Civil Team': createPermissions([
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'dashboard.view',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
     'hrms.attendance_punch',
     'settings.view'
   ]),
 
   'Structure Team': createPermissions([
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'dashboard.view',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
     'hrms.attendance_punch',
     'settings.view'
   ]),
 
   'Installation Team': createPermissions([
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'dashboard.view',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
     'hrms.attendance_punch',
     'settings.view'
   ]),
 
   'Electrical Team': createPermissions([
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'dashboard.view',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
     'hrms.attendance_punch',
     'settings.view'
   ]),
 
   'Technician': createPermissions([
-    'projects.view', 'projects.stage_checklist', 'projects.stage_photos',
+    'dashboard.view',
+    'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
     'hrms.attendance_punch',
     'service.tickets_view', 'service.tickets_resolve',
@@ -661,32 +1025,36 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
   ]),
 
   'Service Manager': createPermissions([
-    'projects.view',
-    'inventory.view',
+    'dashboard.view', 'control_center.view',
+    'projects.view', 'projects.workflows_view',
+    'inventory.hub_view', 'inventory.view',
     'hrms.view', 'hrms.attendance_punch',
     'service.tickets_view', 'service.tickets_create', 'service.tickets_resolve', 'service.amc_manage',
-    'reports.view', 'reports.export',
+    ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
 
   'Accountant': createPermissions([
-    'crm.leads.view',
-    'projects.view',
-    'inventory.view', 'inventory.purchase_orders',
-    'finance.view', 'finance.invoices', 'finance.receipts', 'finance.tally_sync', 'finance.audit',
+    'dashboard.view',
+    'crm.leads.view', 'crm.customers.view', 'crm.quotations.view',
+    'projects.view', 'projects.workflows_view',
+    'inventory.hub_view', 'inventory.view', 'inventory.vendors_view', 'inventory.vendors_manage', 'inventory.purchase_orders',
+    'finance.view', 'finance.invoices', 'finance.receipts', 'finance.tally_sync', 'finance.audit', 'finance.expenses',
     'hrms.view', 'hrms.attendance_punch', 'hrms.payroll',
-    'reports.view', 'reports.export',
+    ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
 
   'HR Manager': createPermissions([
-    'projects.view',
-    'hrms.view', 'hrms.attendance_punch', 'hrms.manage', 'hrms.payroll',
-    'reports.view', 'reports.export',
+    'dashboard.view',
+    'projects.view', 'projects.workflows_view',
+    'hrms.view', 'hrms.attendance_punch', 'hrms.manage', 'hrms.payroll', 'hrms.holidays', 'hrms.delete',
+    ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
 
   'Customer': createPermissions([
+    'customer_portal.view',
     'projects.view',
     'finance.view',
     'service.tickets_view', 'service.tickets_create'

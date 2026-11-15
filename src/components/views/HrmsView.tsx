@@ -51,12 +51,13 @@ const formatINR = (val: number | string | undefined | null): string => {
 
 export const HrmsView: React.FC = () => {
   const { showToast, openImportExportModal, triggerRefresh, refreshTrigger } = useApp();
-  const { currentUser } = useAuth();
+  const { currentUser, hasPermission } = useAuth();
 
-  const isAdmin = Boolean(
-    currentUser?.role === 'Admin' ||
-    currentUser?.role === 'HR Manager'
-  );
+  const canManageHr = hasPermission('hrms.manage');
+  const canProcessPayroll = hasPermission('hrms.payroll');
+  const canManageHolidays = hasPermission('hrms.holidays');
+  const canDeleteHr = hasPermission('hrms.delete');
+  const canPunchAttendance = hasPermission('hrms.attendance_punch') || canManageHr;
 
   const [activeTab, setActiveTab] = useState<
     'EMPLOYEES' | 'ATTENDANCE' | 'PAYROLL' | 'HOLIDAYS' | 'HOLIDAY_MANAGEMENT'
@@ -526,38 +527,44 @@ export const HrmsView: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Add Employee Button */}
-          <button
-            type="button"
-            onClick={handleOpenAddEmployee}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-800 bg-amber-100/80 hover:bg-amber-200/80 border border-amber-300/80 rounded-xl transition-all shadow-2xs cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4 text-amber-800" />
-            <span>Add Employee</span>
-          </button>
+          {canManageHr && (
+            <button
+              type="button"
+              onClick={handleOpenAddEmployee}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-800 bg-amber-100/80 hover:bg-amber-200/80 border border-amber-300/80 rounded-xl transition-all shadow-2xs cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4 text-amber-800" />
+              <span>Add Employee</span>
+            </button>
+          )}
 
           {/* Add Attendance Record Button */}
-          <button
-            type="button"
-            onClick={handleOpenAddAttendance}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-all shadow-2xs cursor-pointer"
-          >
-            <UserCheck className="w-4 h-4 text-amber-400" />
-            <span>Record Attendance</span>
-          </button>
+          {canManageHr && (
+            <button
+              type="button"
+              onClick={handleOpenAddAttendance}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-all shadow-2xs cursor-pointer"
+            >
+              <UserCheck className="w-4 h-4 text-amber-400" />
+              <span>Record Attendance</span>
+            </button>
+          )}
 
           {/* Quick GPS Punch In */}
-          <button
-            type="button"
-            onClick={handlePunchAttendance}
-            disabled={isPunching}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
-          >
-            <MapPin className="w-4 h-4" />
-            <span>{isPunching ? 'Verifying GPS...' : 'Punch In with Live GPS'}</span>
-          </button>
+          {canPunchAttendance && (
+            <button
+              type="button"
+              onClick={handlePunchAttendance}
+              disabled={isPunching}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
+            >
+              <MapPin className="w-4 h-4" />
+              <span>{isPunching ? 'Verifying GPS...' : 'Punch In with Live GPS'}</span>
+            </button>
+          )}
 
-          {/* Add Holiday button if Admin and on holiday tabs */}
-          {isAdmin && (activeTab === 'HOLIDAYS' || activeTab === 'HOLIDAY_MANAGEMENT') && (
+          {/* Add Holiday button if authorized and on holiday tabs */}
+          {canManageHolidays && (activeTab === 'HOLIDAYS' || activeTab === 'HOLIDAY_MANAGEMENT') && (
             <button
               type="button"
               onClick={handleOpenAddHoliday}
@@ -620,7 +627,7 @@ export const HrmsView: React.FC = () => {
             <Calendar className="w-3.5 h-3.5 text-amber-700" />
             <span>Holiday Calendar</span>
           </button>
-          {isAdmin && (
+          {canManageHolidays && (
             <button
               type="button"
               onClick={() => setActiveTab('HOLIDAY_MANAGEMENT')}
@@ -659,14 +666,16 @@ export const HrmsView: React.FC = () => {
             <span className="text-xs font-semibold text-slate-500">
               Showing {filteredEmployees.length} of {employees.length} team members
             </span>
-            <button
-              type="button"
-              onClick={handleOpenAddEmployee}
-              className="inline-flex items-center gap-1 text-xs font-bold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Employee</span>
-            </button>
+            {canManageHr && (
+              <button
+                type="button"
+                onClick={handleOpenAddEmployee}
+                className="inline-flex items-center gap-1 text-xs font-bold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Employee</span>
+              </button>
+            )}
           </div>
 
           {filteredEmployees.length === 0 ? (
@@ -678,14 +687,16 @@ export const HrmsView: React.FC = () => {
               <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
                 {searchTerm ? 'No staff matched your search filter.' : 'Your team directory is currently empty.'}
               </p>
-              <button
-                type="button"
-                onClick={handleOpenAddEmployee}
-                className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-all cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Register First Employee</span>
-              </button>
+              {canManageHr && (
+                <button
+                  type="button"
+                  onClick={handleOpenAddEmployee}
+                  className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Register First Employee</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -712,26 +723,30 @@ export const HrmsView: React.FC = () => {
                         </span>
 
                         {/* Edit Employee Action */}
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditEmployee(e)}
-                          aria-label={`Edit ${e.name}`}
-                          title="Edit Employee"
-                          className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
+                        {canManageHr && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditEmployee(e)}
+                            aria-label={`Edit ${e.name}`}
+                            title="Edit Employee"
+                            className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
 
                         {/* Delete Employee Action */}
-                        <button
-                          type="button"
-                          onClick={() => handleOpenDeleteEmployee(e)}
-                          aria-label={`Delete ${e.name}`}
-                          title="Delete Employee"
-                          className="p-1.5 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {canDeleteHr && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDeleteEmployee(e)}
+                            aria-label={`Delete ${e.name}`}
+                            title="Delete Employee"
+                            className="p-1.5 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -832,14 +847,16 @@ export const HrmsView: React.FC = () => {
                 Live geotagged site check-ins, time tracking, and verification
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleOpenAddAttendance}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Record Field Check-In</span>
-            </button>
+            {canManageHr && (
+              <button
+                type="button"
+                onClick={handleOpenAddAttendance}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Record Field Check-In</span>
+              </button>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -928,7 +945,7 @@ export const HrmsView: React.FC = () => {
                               }`}>
                                 {a.fuelExpense?.approvalStatus || 'APPROVED'}
                               </span>
-                              {isAdmin && a.fuelExpense?.approvalStatus !== 'APPROVED' && (
+                              {(canManageHr || canProcessPayroll) && a.fuelExpense?.approvalStatus !== 'APPROVED' && (
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateFuelApproval(a.id, 'APPROVED')}
@@ -938,7 +955,7 @@ export const HrmsView: React.FC = () => {
                                   Approve
                                 </button>
                               )}
-                              {isAdmin && a.fuelExpense?.approvalStatus !== 'REJECTED' && (
+                              {(canManageHr || canProcessPayroll) && a.fuelExpense?.approvalStatus !== 'REJECTED' && (
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateFuelApproval(a.id, 'REJECTED')}
@@ -954,24 +971,28 @@ export const HrmsView: React.FC = () => {
                       </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditAttendance(a)}
-                            aria-label={`Edit attendance for ${a.employeeName}`}
-                            title="Edit Attendance Record"
-                            className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenDeleteAttendance(a)}
-                            aria-label={`Delete attendance for ${a.employeeName}`}
-                            title="Delete Attendance Record"
-                            className="p-1.5 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {canManageHr && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditAttendance(a)}
+                              aria-label={`Edit attendance for ${a.employeeName}`}
+                              title="Edit Attendance Record"
+                              className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canDeleteHr && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDeleteAttendance(a)}
+                              aria-label={`Delete attendance for ${a.employeeName}`}
+                              title="Delete Attendance Record"
+                              className="p-1.5 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1058,14 +1079,16 @@ export const HrmsView: React.FC = () => {
               </div>
 
               {/* Top Generate Button */}
-              <button
-                type="button"
-                onClick={() => handleOpenGeneratePayslip()}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-colors cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Generate Payslip</span>
-              </button>
+              {canProcessPayroll && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenGeneratePayslip()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Generate Payslip</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1280,24 +1303,28 @@ export const HrmsView: React.FC = () => {
                                   <FileText className="w-3.5 h-3.5 text-amber-700" />
                                   <span>View Slip</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditPayslip(slip)}
-                                  title="Edit Payslip Breakdown"
-                                  className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenDeletePayslip(slip)}
-                                  title="Delete Payslip"
-                                  className="p-1.5 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                {canProcessPayroll && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditPayslip(slip)}
+                                    title="Edit Payslip Breakdown"
+                                    className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {canDeleteHr && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenDeletePayslip(slip)}
+                                    title="Delete Payslip"
+                                    className="p-1.5 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
-                            ) : (
+                            ) : canProcessPayroll ? (
                               <button
                                 type="button"
                                 onClick={() => handleOpenGeneratePayslip(emp)}
@@ -1306,6 +1333,8 @@ export const HrmsView: React.FC = () => {
                                 <Plus className="w-3 h-3" />
                                 <span>Generate Slip</span>
                               </button>
+                            ) : (
+                              <span className="text-[11px] text-slate-400 italic">Pending</span>
                             )}
                           </td>
                         </tr>
@@ -1324,16 +1353,16 @@ export const HrmsView: React.FC = () => {
         <HolidayCalendarView
           holidays={holidays}
           userDepartment={currentUser?.department}
-          isAdmin={isAdmin}
+          isAdmin={canManageHolidays}
           onNavigateToManagement={() => setActiveTab('HOLIDAY_MANAGEMENT')}
         />
       )}
 
-      {/* TAB 5: MANAGE HOLIDAYS (ADMIN ONLY) */}
-      {activeTab === 'HOLIDAY_MANAGEMENT' && (
+      {/* TAB 5: MANAGE HOLIDAYS */}
+      {activeTab === 'HOLIDAY_MANAGEMENT' && canManageHolidays && (
         <HolidayManagementView
           holidays={holidays}
-          isAdmin={isAdmin}
+          isAdmin={canManageHolidays}
           onAddHoliday={handleOpenAddHoliday}
           onEditHoliday={handleOpenEditHoliday}
           onDeleteHoliday={handleOpenDeleteHoliday}

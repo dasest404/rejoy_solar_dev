@@ -3094,13 +3094,27 @@ class StorageService {
   // ==========================================
   getAclConfig(): SystemAclConfig {
     const raw = this.get<any>(STORAGE_KEYS.ACL_CONFIG, DEFAULT_SYSTEM_ACL_CONFIG);
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object' && !Array.isArray(raw[0])) {
-        return { ...DEFAULT_SYSTEM_ACL_CONFIG, ...raw[0] };
-      }
+    let source: Record<string, any> | null = null;
+
+    if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object' && !Array.isArray(raw[0])) {
+      source = raw[0];
+    } else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      source = raw;
+    }
+
+    if (!source) {
       return DEFAULT_SYSTEM_ACL_CONFIG;
     }
-    return { ...DEFAULT_SYSTEM_ACL_CONFIG, ...raw };
+
+    const merged: Record<string, Record<string, boolean>> = {};
+    (Object.keys(DEFAULT_SYSTEM_ACL_CONFIG) as UserRole[]).forEach((role) => {
+      merged[role] = {
+        ...(DEFAULT_SYSTEM_ACL_CONFIG[role] || {}),
+        ...(source![role] && typeof source![role] === 'object' ? source![role] : {})
+      };
+    });
+
+    return merged as SystemAclConfig;
   }
 
   saveAclConfig(config: SystemAclConfig): void {

@@ -39,7 +39,8 @@ interface EmployeeFormData {
 
 export const UserManagementView: React.FC = () => {
   const { showToast, triggerRefresh } = useApp();
-  const { currentUser } = useAuth();
+  const { currentUser, hasPermission } = useAuth();
+  const canManageUsers = hasPermission('users.manage');
 
   const loadMergedPersonnel = (): Employee[] => {
     const rawUsers = storageService.getUsers();
@@ -544,13 +545,15 @@ export const UserManagementView: React.FC = () => {
           </button>
 
           {/* Add Employee button */}
-          <button
-            onClick={handleOpenCreate}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>+ Add Employee</span>
-          </button>
+          {canManageUsers && (
+            <button
+              onClick={handleOpenCreate}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>+ Add Employee</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -770,68 +773,72 @@ export const UserManagementView: React.FC = () => {
 
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
-                        <div className="inline-flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenResetPassword(emp)}
-                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                            title="Change / Reset Password in MySQL"
-                          >
-                            <KeyRound className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEdit(emp)}
-                            className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                            title="Edit Employee"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleStatus(emp)}
-                            disabled={isRootAdmin}
-                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                              isRootAdmin
-                                ? 'opacity-30 cursor-not-allowed text-slate-400'
-                                : isActive
-                                ? 'text-rose-500 hover:bg-rose-50 hover:text-rose-700'
-                                : 'text-emerald-600 hover:bg-emerald-50 hover:text-emerald-800'
-                            }`}
-                            title={
-                              isRootAdmin
-                                ? 'Root Admin cannot be disabled'
-                                : isActive
-                                ? 'Deactivate User Account'
-                                : 'Activate User Account'
-                            }
-                          >
-                            {isActive ? (
-                              <XCircle className="w-4 h-4" />
-                            ) : (
-                              <CheckCircle2 className="w-4 h-4" />
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteConfirmUser(emp)}
-                            disabled={isRootAdmin || emp.id === currentUser?.id}
-                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                              isRootAdmin || emp.id === currentUser?.id
-                                ? 'opacity-30 cursor-not-allowed text-slate-400'
-                                : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
-                            }`}
-                            title={
-                              emp.id === currentUser?.id
-                                ? 'Cannot delete currently signed-in account'
-                                : isRootAdmin
-                                ? 'Primary Root Admin cannot be deleted'
-                                : 'Permanently Delete User from MySQL'
-                            }
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        {canManageUsers ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenResetPassword(emp)}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                              title="Change / Reset Password in MySQL"
+                            >
+                              <KeyRound className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEdit(emp)}
+                              className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                              title="Edit Employee"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(emp)}
+                              disabled={isRootAdmin}
+                              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                isRootAdmin
+                                  ? 'opacity-30 cursor-not-allowed text-slate-400'
+                                  : isActive
+                                  ? 'text-rose-500 hover:bg-rose-50 hover:text-rose-700'
+                                  : 'text-emerald-600 hover:bg-emerald-50 hover:text-emerald-800'
+                              }`}
+                              title={
+                                isRootAdmin
+                                  ? 'Root Admin cannot be disabled'
+                                  : isActive
+                                  ? 'Deactivate User Account'
+                                  : 'Activate User Account'
+                              }
+                            >
+                              {isActive ? (
+                                <XCircle className="w-4 h-4" />
+                              ) : (
+                                <CheckCircle2 className="w-4 h-4" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteConfirmUser(emp)}
+                              disabled={isRootAdmin || emp.id === currentUser?.id}
+                              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                isRootAdmin || emp.id === currentUser?.id
+                                  ? 'opacity-30 cursor-not-allowed text-slate-400'
+                                  : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                              }`}
+                              title={
+                                emp.id === currentUser?.id
+                                  ? 'Cannot delete currently signed-in account'
+                                  : isRootAdmin
+                                  ? 'Primary Root Admin cannot be deleted'
+                                  : 'Permanently Delete User from MySQL'
+                              }
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">Read-only</span>
+                        )}
                       </td>
                     </tr>
                   );

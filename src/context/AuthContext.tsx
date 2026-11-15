@@ -519,60 +519,158 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (isAdmin) return true;
 
     if (isCustomer) {
-      return ['customer_portal', 'my_project', 'my_documents', 'my_payments', 'service_request'].includes(moduleName);
+      if (moduleName === 'customer_portal') return hasPermission('customer_portal.view');
+      if (moduleName === 'service' || moduleName === 'service_request') {
+        return hasPermission('service.tickets_view') || hasPermission('service.tickets_create');
+      }
+      if (moduleName === 'customer_control_center' || moduleName === 'my_project' || moduleName === 'my_documents') {
+        return hasPermission('projects.view') || hasPermission('customer_portal.view');
+      }
+      if (moduleName === 'my_payments') {
+        return hasPermission('finance.view') || hasPermission('customer_portal.view');
+      }
+      return false;
     }
 
-    // Role module mapping
+    // Specific report submodule checks (e.g. 'reports_sales', 'reports_payroll', etc.)
+    if (moduleName.startsWith('reports_')) {
+      const reportCat = moduleName.slice('reports_'.length);
+      return hasPermission(`reports.${reportCat}`);
+    }
+
+    // Role permission catalog mapping
     switch (moduleName) {
       case 'dashboard':
-        return true;
+        return hasPermission('dashboard.view');
+      case 'customer_control_center':
+        return hasPermission('control_center.view');
+      case 'customer_portal':
+        return hasPermission('customer_portal.view');
       case 'live_tracking':
       case 'field_tracking':
-        return isAdmin;
-      case 'crm':
+        return hasPermission('live_tracking.view');
       case 'crm_leads':
       case 'leads':
+        return hasPermission('crm.leads.view') || hasPermission('crm.leads.manage');
       case 'crm_customers':
       case 'customers':
+        return hasPermission('crm.customers.view') || hasPermission('crm.customers.manage');
       case 'crm_quotations':
       case 'quotations':
         return (
-          hasPermission('crm.leads.view') ||
+          hasPermission('crm.quotations.view') ||
           hasPermission('crm.quotations.create') ||
-          hasPermission('crm.quotations.approve') ||
-          ['Sales Manager', 'Sales Executive', 'Project Manager'].includes(currentRole)
+          hasPermission('crm.quotations.approve')
         );
+      case 'crm':
+        return (
+          hasPermission('crm.leads.view') ||
+          hasPermission('crm.leads.manage') ||
+          hasPermission('crm.customers.view') ||
+          hasPermission('crm.customers.manage') ||
+          hasPermission('crm.quotations.view') ||
+          hasPermission('crm.quotations.create') ||
+          hasPermission('crm.quotations.approve')
+        );
+      case 'sales_purchase_hub':
+        return hasPermission('inventory.hub_view');
+      case 'sales_bom':
+      case 'bom':
+        return hasPermission('inventory.bom_edit') || hasPermission('inventory.bom_manage');
+      case 'sales_invoices':
+        return hasPermission('finance.invoices') || hasPermission('finance.view');
+      case 'purchase_vendors':
+      case 'vendors':
+        return hasPermission('inventory.vendors_view') || hasPermission('inventory.vendors_manage');
+      case 'purchase_orders':
+      case 'purchase':
+        return hasPermission('inventory.purchase_orders');
+      case 'inventory_products':
+        return hasPermission('inventory.view') || hasPermission('inventory.products_manage');
+      case 'inventory_stock':
+      case 'inventory':
+        return hasPermission('inventory.view') || hasPermission('inventory.manage');
+      case 'warehouse_management':
+        return hasPermission('inventory.warehouses_manage') || hasPermission('inventory.view');
       case 'sales_purchase':
       case 'sales':
-      case 'purchase':
-      case 'inventory':
-      case 'bom':
-      case 'vendors':
-        return hasPermission('inventory.view') || ['Admin', 'Sales Manager', 'Project Manager', 'Accountant'].includes(currentRole);
-      case 'projects':
+        return (
+          hasPermission('inventory.hub_view') ||
+          hasPermission('inventory.bom_edit') ||
+          hasPermission('inventory.bom_manage') ||
+          hasPermission('inventory.vendors_view') ||
+          hasPermission('inventory.vendors_manage') ||
+          hasPermission('inventory.purchase_orders') ||
+          hasPermission('inventory.products_manage') ||
+          hasPermission('inventory.view') ||
+          hasPermission('inventory.manage') ||
+          hasPermission('inventory.warehouses_manage')
+        );
+      case 'projects_all':
+        return hasPermission('projects.view');
+      case 'projects_stage_filtered':
       case 'workflow':
-        return hasPermission('projects.view') || !isCustomer;
+        return hasPermission('projects.workflows_view');
+      case 'projects':
+        return hasPermission('projects.view') || hasPermission('projects.workflows_view');
       case 'site_survey':
-        return hasPermission('survey.view') || isAdmin || isProjectManager || currentRole === 'Site Survey Engineer' || currentRole.includes('Sales');
+        return hasPermission('survey.view') || hasPermission('survey.submit') || hasPermission('survey.approve');
       case 'finance':
       case 'invoices':
       case 'accounting':
       case 'tally':
-        return hasPermission('finance.view') || isAdmin || currentRole === 'Accountant';
+        return (
+          hasPermission('finance.view') ||
+          hasPermission('finance.invoices') ||
+          hasPermission('finance.receipts') ||
+          hasPermission('finance.tally_sync') ||
+          hasPermission('finance.audit') ||
+          hasPermission('finance.expenses')
+        );
       case 'hrms':
       case 'employees':
       case 'attendance':
       case 'payroll':
-        return hasPermission('hrms.view') || isAdmin || currentRole === 'HR Manager';
+        return (
+          hasPermission('hrms.view') ||
+          hasPermission('hrms.manage') ||
+          hasPermission('hrms.payroll') ||
+          hasPermission('hrms.holidays')
+        );
       case 'service':
       case 'amc':
-        return hasPermission('service.tickets_view') || isAdmin || isProjectManager || currentRole === 'Service Manager' || currentRole === 'Technician';
+        return (
+          hasPermission('service.tickets_view') ||
+          hasPermission('service.tickets_create') ||
+          hasPermission('service.tickets_resolve') ||
+          hasPermission('service.amc_manage')
+        );
       case 'reports':
-        return hasPermission('reports.view') || isAdmin || isProjectManager || currentRole === 'Sales Manager' || currentRole === 'Accountant';
+        return (
+          hasPermission('reports.sales') ||
+          hasPermission('reports.purchase') ||
+          hasPermission('reports.product_stock') ||
+          hasPermission('reports.customer_ledger') ||
+          hasPermission('reports.vendor_ledger') ||
+          hasPermission('reports.income_summary') ||
+          hasPermission('reports.expense_summary') ||
+          hasPermission('reports.payroll') ||
+          hasPermission('reports.monthly_attendance') ||
+          hasPermission('reports.leads') ||
+          hasPermission('reports.projects') ||
+          hasPermission('reports.view')
+        );
       case 'users':
+        return hasPermission('users.view') || hasPermission('users.manage');
       case 'settings':
       case 'roles':
-        return isAdmin;
+        return (
+          hasPermission('settings.manage') ||
+          hasPermission('settings.acl_manage') ||
+          hasPermission('settings.tally') ||
+          hasPermission('settings.whatsapp') ||
+          hasPermission('settings.database')
+        );
       default:
         return true;
     }

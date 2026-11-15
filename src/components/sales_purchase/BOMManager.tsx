@@ -27,7 +27,9 @@ import { EWayBillModal } from './EWayBillModal';
 
 export const BOMManager: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast } = useApp();
-  const { currentUser } = useAuth();
+  const { currentUser, hasPermission } = useAuth();
+  const canManageBom = hasPermission('inventory.bom_manage');
+  const canEditBom = hasPermission('inventory.bom_edit') || canManageBom;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -287,14 +289,16 @@ export const BOMManager: React.FC = () => {
           </p>
         </div>
 
-        <button
-          id="btn-create-bom"
-          onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Create New BOM
-        </button>
+        {canManageBom && (
+          <button
+            id="btn-create-bom"
+            onClick={() => setIsCreateModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Create New BOM
+          </button>
+        )}
       </div>
 
       {/* Filter and Search Bar */}
@@ -442,22 +446,24 @@ export const BOMManager: React.FC = () => {
                     Inspect Details
                   </button>
 
-                  <button
-                    onClick={() => handleDeleteBOM(bom.id, bom.bomNumber)}
-                    disabled={deletingId === bom.id}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
-                    title="Delete BOM"
-                  >
-                    {deletingId === bom.id ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-500" />
-                    ) : (
-                      <Trash2 className="w-3.5 h-3.5" />
-                    )}
-                  </button>
+                  {canManageBom && (
+                    <button
+                      onClick={() => handleDeleteBOM(bom.id, bom.bomNumber)}
+                      disabled={deletingId === bom.id}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
+                      title="Delete BOM"
+                    >
+                      {deletingId === bom.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-500" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 {/* Stock Allocation Button */}
-                {!isAllocated && (
+                {canEditBom && !isAllocated && (
                   <button
                     onClick={() => handleAllocateStock(bom)}
                     disabled={allocatingId === bom.id}
@@ -473,7 +479,7 @@ export const BOMManager: React.FC = () => {
                 )}
 
                 {/* Workflow Release */}
-                {bom.status === 'APPROVED' && (
+                {canEditBom && bom.status === 'APPROVED' && (
                   <button
                     onClick={() => handleUpdateStatus(bom, 'RELEASED_TO_SITE')}
                     disabled={updatingId === bom.id}
@@ -489,16 +495,18 @@ export const BOMManager: React.FC = () => {
                 )}
 
                 {/* Generate E-Way Bill Button */}
-                <button
-                  onClick={() => setEwayBOMId(bom.id)}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-                  title="Generate GST Form EWB-01 for this Bill of Materials"
-                >
-                  <Truck className="w-3.5 h-3.5 text-indigo-600" />
-                  Generate E-Way Bill
-                </button>
+                {canManageBom && (
+                  <button
+                    onClick={() => setEwayBOMId(bom.id)}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    title="Generate GST Form EWB-01 for this Bill of Materials"
+                  >
+                    <Truck className="w-3.5 h-3.5 text-indigo-600" />
+                    Generate E-Way Bill
+                  </button>
+                )}
 
-                {bom.status === 'DRAFT' && (
+                {canEditBom && bom.status === 'DRAFT' && (
                   <button
                     onClick={() => handleUpdateStatus(bom, 'APPROVED')}
                     disabled={updatingId === bom.id}
@@ -524,13 +532,15 @@ export const BOMManager: React.FC = () => {
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
               Get started by creating a new BOM for one of your ongoing solar installation projects.
             </p>
-            <button
-              onClick={() => setIsCreateModalOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Create First BOM
-            </button>
+            {canManageBom && (
+              <button
+                onClick={() => setIsCreateModalOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Create First BOM
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -932,18 +942,22 @@ export const BOMManager: React.FC = () => {
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const targetId = selectedBOMForView.id;
-                  setViewingBOMId(null);
-                  setEwayBOMId(targetId);
-                }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
-              >
-                <Truck className="w-3.5 h-3.5" />
-                <span>Generate E-Way Bill</span>
-              </button>
+              {canManageBom ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetId = selectedBOMForView.id;
+                    setViewingBOMId(null);
+                    setEwayBOMId(targetId);
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                >
+                  <Truck className="w-3.5 h-3.5" />
+                  <span>Generate E-Way Bill</span>
+                </button>
+              ) : (
+                <div />
+              )}
 
               <button
                 type="button"

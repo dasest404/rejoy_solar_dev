@@ -40,7 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     activeSettingsTab,
     openSettingsTab
   } = useApp();
-  const { currentUser, isCustomer, isAdmin, isFieldStaff, canAccessModule, currentRole, logout } = useAuth();
+  const { currentUser, isCustomer, isFieldStaff, canAccessModule, hasPermission, currentRole, logout } = useAuth();
 
   const [crmOpen, setCrmOpen] = useState(true);
   const [salesPurchaseOpen, setSalesPurchaseOpen] = useState(true);
@@ -111,58 +111,73 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
               <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
                 Client Portal Access
               </div>
-              <button
-                onClick={() => navigateTo('customer_portal')}
-                className={navItemClass(activeView === 'customer_portal')}
-              >
-                <SunMedium className="w-4 h-4" />
-                <span>My Solar Project</span>
-              </button>
-              <button
-                onClick={() => navigateTo('customer_control_center')}
-                className={navItemClass(activeView === 'customer_control_center')}
-              >
-                <Layers className="w-4 h-4" />
-                <span>Project Timeline & Docs</span>
-              </button>
-              <button
-                onClick={() => navigateTo('service')}
-                className={navItemClass(activeView === 'service')}
-              >
-                <Wrench className="w-4 h-4" />
-                <span>Service & Support</span>
-              </button>
+              {canAccessModule('customer_portal') && (
+                <button
+                  onClick={() => navigateTo('customer_portal')}
+                  className={navItemClass(activeView === 'customer_portal')}
+                >
+                  <SunMedium className="w-4 h-4" />
+                  <span>My Solar Project</span>
+                </button>
+              )}
+              {canAccessModule('customer_control_center') && (
+                <button
+                  onClick={() => navigateTo('customer_control_center')}
+                  className={navItemClass(activeView === 'customer_control_center')}
+                >
+                  <Layers className="w-4 h-4" />
+                  <span>Project Timeline & Docs</span>
+                </button>
+              )}
+              {canAccessModule('service') && (
+                <button
+                  onClick={() => navigateTo('service')}
+                  className={navItemClass(activeView === 'service')}
+                >
+                  <Wrench className="w-4 h-4" />
+                  <span>Service & Support</span>
+                </button>
+              )}
             </div>
           ) : (
             <>
               {/* Primary Section */}
-              <div className="space-y-1">
-                <button
-                  onClick={() => navigateTo('dashboard')}
-                  className={navItemClass(activeView === 'dashboard')}
-                >
-                  <LayoutDashboard className="w-4 h-4" />
-                  <span>Dashboard</span>
-                </button>
+              {(canAccessModule('dashboard') || canAccessModule('customer_control_center')) && (
+                <div className="space-y-1">
+                  {canAccessModule('dashboard') && (
+                    <button
+                      onClick={() => navigateTo('dashboard')}
+                      className={navItemClass(activeView === 'dashboard')}
+                    >
+                      <LayoutDashboard className="w-4 h-4" />
+                      <span>Dashboard</span>
+                    </button>
+                  )}
 
-                {/* Heart of the System: Customer Control Center */}
-                {(isAdmin || currentRole === 'Project Manager' || currentRole === 'Service Manager') && (
-                  <button
-                    onClick={() => navigateTo('customer_control_center')}
-                    className={navItemClass(activeView === 'customer_control_center')}
-                  >
-                    <Layers className="w-4 h-4" />
-                    <span>Control Center</span>
-                  </button>
-                )}
-              </div>
+                  {/* Heart of the System: Customer Control Center */}
+                  {canAccessModule('customer_control_center') && (
+                    <button
+                      onClick={() => navigateTo('customer_control_center')}
+                      className={navItemClass(activeView === 'customer_control_center')}
+                    >
+                      <Layers className="w-4 h-4" />
+                      <span>Control Center</span>
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* CRM Section */}
               {canAccessModule('crm') && (
                 <div className="space-y-1">
                   <div
                     onClick={() => {
-                      navigateTo('crm_leads');
+                      const firstCrmView: AppView = canAccessModule('crm_leads')
+                        ? 'crm_leads'
+                        : canAccessModule('crm_customers')
+                        ? 'crm_customers'
+                        : 'crm_quotations';
+                      navigateTo(firstCrmView);
                       setCrmOpen(true);
                     }}
                     className="flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-600 transition-colors select-none"
@@ -183,36 +198,42 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
                   {crmOpen && (
                     <div className="space-y-0.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigateTo('crm_leads');
-                        }}
-                        className={`${subNavItemClass(activeView === 'crm_leads')} cursor-pointer`}
-                      >
-                        <span>Leads Pipeline</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigateTo('crm_customers');
-                        }}
-                        className={`${subNavItemClass(activeView === 'crm_customers')} cursor-pointer`}
-                      >
-                        <span>Customer Directory</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigateTo('crm_quotations');
-                        }}
-                        className={`${subNavItemClass(activeView === 'crm_quotations')} cursor-pointer`}
-                      >
-                        <span>Quotations & Proposals</span>
-                      </button>
+                      {canAccessModule('crm_leads') && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigateTo('crm_leads');
+                          }}
+                          className={`${subNavItemClass(activeView === 'crm_leads')} cursor-pointer`}
+                        >
+                          <span>Leads Pipeline</span>
+                        </button>
+                      )}
+                      {canAccessModule('crm_customers') && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigateTo('crm_customers');
+                          }}
+                          className={`${subNavItemClass(activeView === 'crm_customers')} cursor-pointer`}
+                        >
+                          <span>Customer Directory</span>
+                        </button>
+                      )}
+                      {canAccessModule('crm_quotations') && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigateTo('crm_quotations');
+                          }}
+                          className={`${subNavItemClass(activeView === 'crm_quotations')} cursor-pointer`}
+                        >
+                          <span>Quotations & Proposals</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -223,7 +244,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                 <div className="space-y-1">
                   <div
                     onClick={() => {
-                      navigateTo('sales_purchase');
+                      const firstSalesView: AppView =
+                        (canAccessModule('sales_purchase_hub') && 'sales_purchase') ||
+                        (canAccessModule('sales_bom') && 'sales_bom') ||
+                        (canAccessModule('sales_invoices') && 'sales_invoices') ||
+                        (canAccessModule('purchase_vendors') && 'purchase_vendors') ||
+                        (canAccessModule('purchase_orders') && 'purchase_orders') ||
+                        (canAccessModule('inventory_products') && 'inventory_products') ||
+                        (canAccessModule('inventory_stock') && 'inventory_stock') ||
+                        'warehouse_management';
+                      navigateTo(firstSalesView);
                       setSalesPurchaseOpen(true);
                     }}
                     className={parentNavItemClass(
@@ -259,54 +289,70 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
                   {salesPurchaseOpen && (
                     <div className="space-y-0.5">
-                      <button
-                        onClick={() => navigateTo('sales_purchase')}
-                        className={subNavItemClass(activeView === 'sales_purchase')}
-                      >
-                        <span>Hub & Synchronization</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('sales_bom')}
-                        className={subNavItemClass(activeView === 'sales_bom')}
-                      >
-                        <span>Bill of Materials (BOM)</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('sales_invoices')}
-                        className={subNavItemClass(activeView === 'sales_invoices')}
-                      >
-                        <span>Invoice Creation</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('purchase_vendors')}
-                        className={subNavItemClass(activeView === 'purchase_vendors')}
-                      >
-                        <span>Vendor Management</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('purchase_orders')}
-                        className={subNavItemClass(activeView === 'purchase_orders')}
-                      >
-                        <span>Purchase Entry</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('inventory_products')}
-                        className={subNavItemClass(activeView === 'inventory_products')}
-                      >
-                        <span>Purchased Products</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('inventory_stock')}
-                        className={subNavItemClass(activeView === 'inventory_stock')}
-                      >
-                        <span>Inventory & Stock</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('warehouse_management')}
-                        className={subNavItemClass(activeView === 'warehouse_management')}
-                      >
-                        <span>Warehouse Management</span>
-                      </button>
+                      {canAccessModule('sales_purchase_hub') && (
+                        <button
+                          onClick={() => navigateTo('sales_purchase')}
+                          className={subNavItemClass(activeView === 'sales_purchase')}
+                        >
+                          <span>Hub & Synchronization</span>
+                        </button>
+                      )}
+                      {canAccessModule('sales_bom') && (
+                        <button
+                          onClick={() => navigateTo('sales_bom')}
+                          className={subNavItemClass(activeView === 'sales_bom')}
+                        >
+                          <span>Bill of Materials (BOM)</span>
+                        </button>
+                      )}
+                      {canAccessModule('sales_invoices') && (
+                        <button
+                          onClick={() => navigateTo('sales_invoices')}
+                          className={subNavItemClass(activeView === 'sales_invoices')}
+                        >
+                          <span>Invoice Creation</span>
+                        </button>
+                      )}
+                      {canAccessModule('purchase_vendors') && (
+                        <button
+                          onClick={() => navigateTo('purchase_vendors')}
+                          className={subNavItemClass(activeView === 'purchase_vendors')}
+                        >
+                          <span>Vendor Management</span>
+                        </button>
+                      )}
+                      {canAccessModule('purchase_orders') && (
+                        <button
+                          onClick={() => navigateTo('purchase_orders')}
+                          className={subNavItemClass(activeView === 'purchase_orders')}
+                        >
+                          <span>Purchase Entry</span>
+                        </button>
+                      )}
+                      {canAccessModule('inventory_products') && (
+                        <button
+                          onClick={() => navigateTo('inventory_products')}
+                          className={subNavItemClass(activeView === 'inventory_products')}
+                        >
+                          <span>Purchased Products</span>
+                        </button>
+                      )}
+                      {canAccessModule('inventory_stock') && (
+                        <button
+                          onClick={() => navigateTo('inventory_stock')}
+                          className={subNavItemClass(activeView === 'inventory_stock')}
+                        >
+                          <span>Inventory & Stock</span>
+                        </button>
+                      )}
+                      {canAccessModule('warehouse_management') && (
+                        <button
+                          onClick={() => navigateTo('warehouse_management')}
+                          className={subNavItemClass(activeView === 'warehouse_management')}
+                        >
+                          <span>Warehouse Management</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -325,18 +371,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
                   {projectsOpen && (
                     <div className="space-y-0.5">
-                      <button
-                        onClick={() => navigateTo('projects_all')}
-                        className={subNavItemClass(activeView === 'projects_all')}
-                      >
-                        <span>{isFieldStaff ? 'Assigned Projects' : 'All Projects'}</span>
-                      </button>
-                      <button
-                        onClick={() => navigateTo('projects_stage_filtered', 'site_survey')}
-                        className={subNavItemClass(activeView === 'projects_stage_filtered')}
-                      >
-                        <span>{isFieldStaff ? 'Site Checklists & Workflows' : 'Stage Workflows'}</span>
-                      </button>
+                      {canAccessModule('projects_all') && (
+                        <button
+                          onClick={() => navigateTo('projects_all')}
+                          className={subNavItemClass(activeView === 'projects_all')}
+                        >
+                          <span>{isFieldStaff ? 'Assigned Projects' : 'All Projects'}</span>
+                        </button>
+                      )}
+                      {canAccessModule('projects_stage_filtered') && (
+                        <button
+                          onClick={() => navigateTo('projects_stage_filtered', 'site_survey')}
+                          className={subNavItemClass(activeView === 'projects_stage_filtered')}
+                        >
+                          <span>{isFieldStaff ? 'Site Checklists & Workflows' : 'Stage Workflows'}</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -416,7 +466,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                   <div
                     onClick={() => {
                       if (!reportsOpen) setReportsOpen(true);
-                      openReport(activeReportCategory || 'sales');
+                      const reportOrder = [
+                        'sales',
+                        'purchase',
+                        'product_stock',
+                        'customer_ledger',
+                        'vendor_ledger',
+                        'income_summary',
+                        'expense_summary',
+                        'payroll',
+                        'monthly_attendance',
+                        'leads',
+                        'projects'
+                      ] as const;
+                      const preferred =
+                        activeReportCategory && canAccessModule(`reports_${activeReportCategory}`)
+                          ? activeReportCategory
+                          : reportOrder.find(cat => canAccessModule(`reports_${cat}`)) || 'sales';
+                      openReport(preferred);
                     }}
                     className={parentNavItemClass(
                       activeView === 'reports',
@@ -443,105 +510,127 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
                   {reportsOpen && (
                     <div className="space-y-0.5">
-                      <button
-                        onClick={() => {
-                          openReport('sales');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'sales')}
-                      >
-                        <span>Sales Report</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('purchase');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'purchase')}
-                      >
-                        <span>Purchase Report</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('product_stock');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'product_stock')}
-                      >
-                        <span>Product Stock Report</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('customer_ledger');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'customer_ledger')}
-                      >
-                        <span>Customer Ledger</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('vendor_ledger');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'vendor_ledger')}
-                      >
-                        <span>Vendor Ledger</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('income_summary');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'income_summary')}
-                      >
-                        <span>Income Summary</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('expense_summary');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'expense_summary')}
-                      >
-                        <span>Expense Summary</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('payroll');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'payroll')}
-                      >
-                        <span>Payroll Report</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('monthly_attendance');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'monthly_attendance')}
-                      >
-                        <span>Monthly Attendance</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('leads');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'leads')}
-                      >
-                        <span>Leads Report</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openReport('projects');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'projects')}
-                      >
-                        <span>Project Report</span>
-                      </button>
+                      {canAccessModule('reports_sales') && (
+                        <button
+                          onClick={() => {
+                            openReport('sales');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'sales')}
+                        >
+                          <span>Sales Report</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_purchase') && (
+                        <button
+                          onClick={() => {
+                            openReport('purchase');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'purchase')}
+                        >
+                          <span>Purchase Report</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_product_stock') && (
+                        <button
+                          onClick={() => {
+                            openReport('product_stock');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'product_stock')}
+                        >
+                          <span>Product Stock Report</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_customer_ledger') && (
+                        <button
+                          onClick={() => {
+                            openReport('customer_ledger');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'customer_ledger')}
+                        >
+                          <span>Customer Ledger</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_vendor_ledger') && (
+                        <button
+                          onClick={() => {
+                            openReport('vendor_ledger');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'vendor_ledger')}
+                        >
+                          <span>Vendor Ledger</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_income_summary') && (
+                        <button
+                          onClick={() => {
+                            openReport('income_summary');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'income_summary')}
+                        >
+                          <span>Income Summary</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_expense_summary') && (
+                        <button
+                          onClick={() => {
+                            openReport('expense_summary');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'expense_summary')}
+                        >
+                          <span>Expense Summary</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_payroll') && (
+                        <button
+                          onClick={() => {
+                            openReport('payroll');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'payroll')}
+                        >
+                          <span>Payroll Report</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_monthly_attendance') && (
+                        <button
+                          onClick={() => {
+                            openReport('monthly_attendance');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'monthly_attendance')}
+                        >
+                          <span>Monthly Attendance</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_leads') && (
+                        <button
+                          onClick={() => {
+                            openReport('leads');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'leads')}
+                        >
+                          <span>Leads Report</span>
+                        </button>
+                      )}
+                      {canAccessModule('reports_projects') && (
+                        <button
+                          onClick={() => {
+                            openReport('projects');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'reports' && activeReportCategory === 'projects')}
+                        >
+                          <span>Project Report</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -552,7 +641,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                 <div className="space-y-1">
                   <div
                     onClick={() => {
-                      openSettingsTab(activeSettingsTab || 'general');
+                      const firstAllowedSettingsTab =
+                        (hasPermission('settings.manage') && 'general') ||
+                        (hasPermission('settings.tally') && 'tally') ||
+                        (hasPermission('settings.whatsapp') && 'whatsapp') ||
+                        (hasPermission('settings.acl_manage') && 'acl') ||
+                        (hasPermission('settings.database') && 'database') ||
+                        'general';
+                      const isCurrentAllowed =
+                        (activeSettingsTab === 'general' && hasPermission('settings.manage')) ||
+                        (activeSettingsTab === 'tally' && hasPermission('settings.tally')) ||
+                        (activeSettingsTab === 'whatsapp' && hasPermission('settings.whatsapp')) ||
+                        (activeSettingsTab === 'acl' && hasPermission('settings.acl_manage')) ||
+                        (activeSettingsTab === 'database' && hasPermission('settings.database'));
+                      openSettingsTab(isCurrentAllowed ? activeSettingsTab : firstAllowedSettingsTab);
                       onCloseMobile();
                     }}
                     className={`cursor-pointer flex items-center justify-between ${navItemClass(activeView === 'settings')}`}
@@ -577,49 +679,57 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
                   {settingsOpen && (
                     <div className="space-y-0.5">
-                      <button
-                        onClick={() => {
-                          openSettingsTab('general');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'general')}
-                      >
-                        <span>General & EPC Profile</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openSettingsTab('tally');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'tally')}
-                      >
-                        <span>Tally Prime Integration</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openSettingsTab('whatsapp');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'whatsapp')}
-                      >
-                        <span>WhatsApp Cloud API</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openSettingsTab('acl');
-                          onCloseMobile();
-                        }}
-                        className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'acl')}
-                      >
-                        <span>Role-Based Access Control</span>
-                      </button>
+                      {hasPermission('settings.manage') && (
+                        <button
+                          onClick={() => {
+                            openSettingsTab('general');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'general')}
+                        >
+                          <span>General & EPC Profile</span>
+                        </button>
+                      )}
+                      {hasPermission('settings.tally') && (
+                        <button
+                          onClick={() => {
+                            openSettingsTab('tally');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'tally')}
+                        >
+                          <span>Tally Prime Integration</span>
+                        </button>
+                      )}
+                      {hasPermission('settings.whatsapp') && (
+                        <button
+                          onClick={() => {
+                            openSettingsTab('whatsapp');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'whatsapp')}
+                        >
+                          <span>WhatsApp Cloud API</span>
+                        </button>
+                      )}
+                      {hasPermission('settings.acl_manage') && (
+                        <button
+                          onClick={() => {
+                            openSettingsTab('acl');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'acl')}
+                        >
+                          <span>Role-Based Access Control</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* User Management (Admin Only) */}
-              {isAdmin && (
+              {/* User Management */}
+              {canAccessModule('users') && (
                 <div className="space-y-1">
                   <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
                     Administration

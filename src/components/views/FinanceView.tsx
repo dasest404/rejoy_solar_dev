@@ -24,9 +24,18 @@ import {
 
 export const FinanceView: React.FC = () => {
   const { settings, showToast, openImportExportModal, triggerRefresh, refreshTrigger } = useApp();
-  const { currentUser, canEditFinancials } = useAuth();
+  const { currentUser, canEditFinancials, hasPermission } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'RECEIPTS' | 'EXPENSES' | 'TALLY_QUEUE'>('RECEIPTS');
+  const canReceipts = hasPermission('finance.view') || hasPermission('finance.receipts');
+  const canExpenses = hasPermission('finance.expenses');
+  const canTallySync = hasPermission('finance.tally_sync');
+  const canTallyTab = canTallySync || hasPermission('finance.view');
+
+  const [activeTab, setActiveTab] = useState<'RECEIPTS' | 'EXPENSES' | 'TALLY_QUEUE'>(() => {
+    if (canReceipts) return 'RECEIPTS';
+    if (canExpenses) return 'EXPENSES';
+    return 'TALLY_QUEUE';
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [activeXmlPayload, setActiveXmlPayload] = useState<string | null>(null);
@@ -186,43 +195,51 @@ export const FinanceView: React.FC = () => {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => {
-            showToast('Tally sync engine queued 4 vouchers for transmission to Tally Prime Gateway.', 'info');
-          }}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs self-start sm:self-auto"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Sync All Pending</span>
-        </button>
+        {canTallySync && (
+          <button
+            onClick={() => {
+              showToast('Tally sync engine queued 4 vouchers for transmission to Tally Prime Gateway.', 'info');
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs self-start sm:self-auto"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Sync All Pending</span>
+          </button>
+        )}
       </div>
 
       {/* Tabs Bar */}
       <div className="flex border-b border-slate-200 bg-white rounded-t-2xl px-4 pt-2 shadow-2xs">
-        <button
-          onClick={() => setActiveTab('RECEIPTS')}
-          className={`pb-3 px-4 text-xs font-bold border-b-2 transition-all ${
-            activeTab === 'RECEIPTS' ? 'border-amber-500 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          Customer Receipts ({payments.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('EXPENSES')}
-          className={`pb-3 px-4 text-xs font-bold border-b-2 transition-all ${
-            activeTab === 'EXPENSES' ? 'border-amber-500 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          Vendor Expenses ({expenses.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('TALLY_QUEUE')}
-          className={`pb-3 px-4 text-xs font-bold border-b-2 transition-all ${
-            activeTab === 'TALLY_QUEUE' ? 'border-amber-500 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          Tally Sync Queue
-        </button>
+        {canReceipts && (
+          <button
+            onClick={() => setActiveTab('RECEIPTS')}
+            className={`pb-3 px-4 text-xs font-bold border-b-2 transition-all ${
+              activeTab === 'RECEIPTS' ? 'border-amber-500 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            Customer Receipts ({payments.length})
+          </button>
+        )}
+        {canExpenses && (
+          <button
+            onClick={() => setActiveTab('EXPENSES')}
+            className={`pb-3 px-4 text-xs font-bold border-b-2 transition-all ${
+              activeTab === 'EXPENSES' ? 'border-amber-500 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            Vendor Expenses ({expenses.length})
+          </button>
+        )}
+        {canTallyTab && (
+          <button
+            onClick={() => setActiveTab('TALLY_QUEUE')}
+            className={`pb-3 px-4 text-xs font-bold border-b-2 transition-all ${
+              activeTab === 'TALLY_QUEUE' ? 'border-amber-500 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            Tally Sync Queue
+          </button>
+        )}
       </div>
 
       {/* TAB 1: RECEIPTS */}
@@ -272,13 +289,15 @@ export const FinanceView: React.FC = () => {
                       >
                         XML
                       </button>
-                      <button
-                        onClick={() => handleSyncToTally(p.id, 'PAYMENT')}
-                        disabled={syncingId === p.id}
-                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md font-bold text-[11px]"
-                      >
-                        {syncingId === p.id ? 'Syncing...' : 'Sync to Tally'}
-                      </button>
+                      {canTallySync && (
+                        <button
+                          onClick={() => handleSyncToTally(p.id, 'PAYMENT')}
+                          disabled={syncingId === p.id}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md font-bold text-[11px]"
+                        >
+                          {syncingId === p.id ? 'Syncing...' : 'Sync to Tally'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -331,13 +350,15 @@ export const FinanceView: React.FC = () => {
                       >
                         XML
                       </button>
-                      <button
-                        onClick={() => handleSyncToTally(e.id, 'EXPENSE')}
-                        disabled={syncingId === e.id}
-                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md font-bold text-[11px]"
-                      >
-                        {syncingId === e.id ? 'Syncing...' : 'Sync to Tally'}
-                      </button>
+                      {canTallySync && (
+                        <button
+                          onClick={() => handleSyncToTally(e.id, 'EXPENSE')}
+                          disabled={syncingId === e.id}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md font-bold text-[11px]"
+                        >
+                          {syncingId === e.id ? 'Syncing...' : 'Sync to Tally'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

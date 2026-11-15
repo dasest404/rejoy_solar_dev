@@ -56,44 +56,61 @@ const MainLayout: React.FC = () => {
       return <CustomerPortalView />;
     }
 
+    const renderFallbackView = () => {
+      if (isCustomer) return <CustomerPortalView />;
+      if (canAccessModule('dashboard')) return <DashboardView />;
+      if (canAccessModule('projects')) return <ProjectsView />;
+      if (canAccessModule('service')) return <ServiceView />;
+      return <DashboardView />;
+    };
+
     switch (activeView) {
       case 'dashboard':
+        if (!canAccessModule('dashboard')) return renderFallbackView();
         return <DashboardView />;
       case 'live_tracking':
-        if (!isAdmin) return <DashboardView />;
+        if (!canAccessModule('live_tracking')) return renderFallbackView();
         return <LiveFieldTrackingView />;
       case 'customer_control_center':
+        if (!canAccessModule('customer_control_center') && !canAccessModule('projects')) {
+          return renderFallbackView();
+        }
         return <CustomerControlCenterView />;
       case 'crm_leads':
-        if (!canAccessModule('crm_leads')) return <DashboardView />;
+        if (!canAccessModule('crm_leads')) return renderFallbackView();
         return <CrmView key="crm_leads" defaultTab="LEADS" />;
       case 'crm_customers':
-        if (!canAccessModule('crm_customers')) return <DashboardView />;
+        if (!canAccessModule('crm_customers')) return renderFallbackView();
         return <CrmView key="crm_customers" defaultTab="CUSTOMERS" />;
       case 'crm_quotations':
-        if (!canAccessModule('crm_quotations')) return <DashboardView />;
+        if (!canAccessModule('crm_quotations')) return renderFallbackView();
         return <CrmView key="crm_quotations" defaultTab="QUOTATIONS" />;
       case 'projects_all':
+        if (!canAccessModule('projects_all')) return renderFallbackView();
+        return <ProjectsView />;
       case 'projects_stage_filtered':
+        if (!canAccessModule('projects_stage_filtered')) return renderFallbackView();
         return <ProjectsView />;
       case 'finance':
-        if (!canAccessModule('finance')) return <DashboardView />;
+        if (!canAccessModule('finance')) return renderFallbackView();
         return <FinanceView />;
       case 'hrms':
-        if (!canAccessModule('hrms')) return <DashboardView />;
+        if (!canAccessModule('hrms')) return renderFallbackView();
         return <HrmsView />;
       case 'service':
+        if (!canAccessModule('service')) return renderFallbackView();
         return <ServiceView />;
       case 'reports':
-        if (!canAccessModule('reports')) return <DashboardView />;
+        if (!canAccessModule('reports')) return renderFallbackView();
         return <ReportsView />;
       case 'settings':
-        if (!isAdmin) return <DashboardView />;
+        if (!canAccessModule('settings')) return renderFallbackView();
         return <SettingsView />;
       case 'customer_portal':
+        if (!canAccessModule('customer_portal') && !isCustomer) return renderFallbackView();
         return <CustomerPortalView />;
       case 'users':
-        if (!isAdmin) return <DashboardView />;
+        if (!canAccessModule('users')) return renderFallbackView();
         return <UserManagementView />;
       case 'sales_purchase':
       case 'sales_bom':
@@ -103,9 +120,10 @@ const MainLayout: React.FC = () => {
       case 'inventory_products':
       case 'inventory_stock':
       case 'warehouse_management':
+        if (!canAccessModule(activeView)) return renderFallbackView();
         return <SalesPurchaseView />;
       default:
-        return <DashboardView />;
+        return renderFallbackView();
     }
   };
 

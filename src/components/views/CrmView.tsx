@@ -49,29 +49,45 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
     refreshTrigger,
     setActiveView
   } = useApp();
-  const { currentUser } = useAuth();
+  const { currentUser, canAccessModule, hasPermission } = useAuth();
+
+  const canLeadsTab = canAccessModule('crm_leads');
+  const canCustomersTab = canAccessModule('crm_customers');
+  const canQuotationsTab = canAccessModule('crm_quotations');
+
+  const canManageLeads = hasPermission('crm.leads.manage');
+  const canDeleteLeads = hasPermission('crm.leads.delete');
+  const canManageCustomers = hasPermission('crm.customers.manage');
+  const canCreateQuotations = hasPermission('crm.quotations.create');
+  const canDeleteQuotations = hasPermission('crm.quotations.delete');
 
   const getInitialTab = (): 'LEADS' | 'CUSTOMERS' | 'QUOTATIONS' => {
-    if (activeView === 'crm_customers') return 'CUSTOMERS';
-    if (activeView === 'crm_quotations') return 'QUOTATIONS';
-    if (activeView === 'crm_leads') return 'LEADS';
-    return defaultTab || 'LEADS';
+    if (activeView === 'crm_customers' && canCustomersTab) return 'CUSTOMERS';
+    if (activeView === 'crm_quotations' && canQuotationsTab) return 'QUOTATIONS';
+    if (activeView === 'crm_leads' && canLeadsTab) return 'LEADS';
+    if (defaultTab === 'CUSTOMERS' && canCustomersTab) return 'CUSTOMERS';
+    if (defaultTab === 'QUOTATIONS' && canQuotationsTab) return 'QUOTATIONS';
+    if (canLeadsTab) return 'LEADS';
+    if (canCustomersTab) return 'CUSTOMERS';
+    return 'QUOTATIONS';
   };
 
   const [activeTab, setActiveTab] = useState<'LEADS' | 'CUSTOMERS' | 'QUOTATIONS'>(getInitialTab);
 
   // Synchronize internal activeTab when defaultTab prop or activeView changes
   useEffect(() => {
-    if (activeView === 'crm_customers') {
+    if (activeView === 'crm_customers' && canCustomersTab) {
       setActiveTab('CUSTOMERS');
-    } else if (activeView === 'crm_quotations') {
+    } else if (activeView === 'crm_quotations' && canQuotationsTab) {
       setActiveTab('QUOTATIONS');
-    } else if (activeView === 'crm_leads') {
+    } else if (activeView === 'crm_leads' && canLeadsTab) {
       setActiveTab('LEADS');
     } else if (defaultTab && activeTab !== defaultTab) {
-      setActiveTab(defaultTab);
+      if (defaultTab === 'LEADS' && canLeadsTab) setActiveTab('LEADS');
+      else if (defaultTab === 'CUSTOMERS' && canCustomersTab) setActiveTab('CUSTOMERS');
+      else if (defaultTab === 'QUOTATIONS' && canQuotationsTab) setActiveTab('QUOTATIONS');
     }
-  }, [activeView, defaultTab]);
+  }, [activeView, defaultTab, canLeadsTab, canCustomersTab, canQuotationsTab]);
   const [searchTerm, setSearchTerm] = useState('');
   const [leadViewMode, setLeadViewMode] = useState<'KANBAN' | 'LIST'>('KANBAN');
 
@@ -359,7 +375,7 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
 
         {/* Action buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          {activeTab === 'LEADS' && (
+          {activeTab === 'LEADS' && canManageLeads && (
             <button
               onClick={() => {
                 setLeadForm(emptyLeadForm);
@@ -372,7 +388,7 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
             </button>
           )}
 
-          {activeTab === 'CUSTOMERS' && (
+          {activeTab === 'CUSTOMERS' && canManageCustomers && (
             <button
               onClick={() => {
                 setCustomerForm({
@@ -398,7 +414,7 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
             </button>
           )}
 
-          {activeTab === 'QUOTATIONS' && (
+          {activeTab === 'QUOTATIONS' && canCreateQuotations && (
             <button
               onClick={() => {
                 setEditQuotation(null);
@@ -425,42 +441,48 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
         {/* Tab Buttons */}
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('LEADS');
-              setActiveView('crm_leads');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'LEADS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Leads Pipeline ({leads.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('CUSTOMERS');
-              setActiveView('crm_customers');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'CUSTOMERS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Customers Directory ({customers.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('QUOTATIONS');
-              setActiveView('crm_quotations');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'QUOTATIONS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Quotations & Proposals ({quotations.length})
-          </button>
+          {canLeadsTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('LEADS');
+                setActiveView('crm_leads');
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'LEADS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Leads Pipeline ({leads.length})
+            </button>
+          )}
+          {canCustomersTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('CUSTOMERS');
+                setActiveView('crm_customers');
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'CUSTOMERS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Customers Directory ({customers.length})
+            </button>
+          )}
+          {canQuotationsTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('QUOTATIONS');
+                setActiveView('crm_quotations');
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'QUOTATIONS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Quotations & Proposals ({quotations.length})
+            </button>
+          )}
         </div>
 
         {/* Search & Layout toggle */}
@@ -558,14 +580,16 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                               >
                                 <MessageSquare className="w-4 h-4" />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteLead(lead)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete Lead from MySQL"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {canDeleteLeads && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteLead(lead)}
+                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete Lead from MySQL"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
 
                             {lead.status !== 'WON' ? (
@@ -647,14 +671,16 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                           >
                             <MessageSquare className="w-4 h-4 inline" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteLead(lead)}
-                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md"
-                            title="Delete Lead from MySQL"
-                          >
-                            <Trash2 className="w-4 h-4 inline" />
-                          </button>
+                          {canDeleteLeads && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLead(lead)}
+                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md"
+                              title="Delete Lead from MySQL"
+                            >
+                              <Trash2 className="w-4 h-4 inline" />
+                            </button>
+                          )}
                           {lead.status !== 'WON' && (
                             <button
                               type="button"
@@ -700,23 +726,25 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                     {cust.customerType}
                   </span>
                   <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setPasswordModalCustomer(cust);
-                        setNewCustomerPassword('');
-                        setConfirmCustomerPassword('');
-                        setPasswordError('');
-                        setShowUpdatePassword(false);
-                        setIsUpdatePasswordOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-amber-100 hover:text-amber-900 rounded-lg transition-colors border border-slate-200/80 cursor-pointer"
-                      title="Update portal login password"
-                    >
-                      <KeyRound className="w-3 h-3 text-amber-600" />
-                      <span>Password</span>
-                    </button>
+                    {canManageCustomers && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPasswordModalCustomer(cust);
+                          setNewCustomerPassword('');
+                          setConfirmCustomerPassword('');
+                          setPasswordError('');
+                          setShowUpdatePassword(false);
+                          setIsUpdatePasswordOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-amber-100 hover:text-amber-900 rounded-lg transition-colors border border-slate-200/80 cursor-pointer"
+                        title="Update portal login password"
+                      >
+                        <KeyRound className="w-3 h-3 text-amber-600" />
+                        <span>Password</span>
+                      </button>
+                    )}
                     <span className="text-xs font-bold text-amber-700 group-hover:underline flex items-center gap-1">
                       <span>Control Center</span>
                       <ArrowRight className="w-3 h-3" />
@@ -751,22 +779,24 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                 <span className="text-slate-500">
                   Sanctioned: {cust.sanctionedLoadKw ? `${cust.sanctionedLoadKw} kW` : 'Not specified'}
                 </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setPasswordModalCustomer(cust);
-                    setNewCustomerPassword('');
-                    setConfirmCustomerPassword('');
-                    setPasswordError('');
-                    setShowUpdatePassword(false);
-                    setIsUpdatePasswordOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition-all cursor-pointer"
-                >
-                  <KeyRound className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Update Password</span>
-                </button>
+                {canManageCustomers && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPasswordModalCustomer(cust);
+                      setNewCustomerPassword('');
+                      setConfirmCustomerPassword('');
+                      setPasswordError('');
+                      setShowUpdatePassword(false);
+                      setIsUpdatePasswordOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition-all cursor-pointer"
+                  >
+                    <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Update Password</span>
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -784,16 +814,18 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
               <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
                 No solar proposals match your search. Generate a professional 6-page turnkey quotation proposal for your clients.
               </p>
-              <button
-                onClick={() => {
-                  setEditQuotation(null);
-                  setIsNewQuotationOpen(true);
-                }}
-                className="mt-4 px-4 py-2 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create First Quotation</span>
-              </button>
+              {canCreateQuotations && (
+                <button
+                  onClick={() => {
+                    setEditQuotation(null);
+                    setIsNewQuotationOpen(true);
+                  }}
+                  className="mt-4 px-4 py-2 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create First Quotation</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -909,25 +941,29 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                             </button>
 
                             {/* Edit */}
-                            <button
-                              onClick={() => {
-                                setEditQuotation(q);
-                                setIsNewQuotationOpen(true);
-                              }}
-                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                              title="Edit Quotation & BOM"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
+                            {canCreateQuotations && (
+                              <button
+                                onClick={() => {
+                                  setEditQuotation(q);
+                                  setIsNewQuotationOpen(true);
+                                }}
+                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit Quotation & BOM"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                            )}
 
                             {/* Clone / Duplicate */}
-                            <button
-                              onClick={() => handleDuplicateQuotation(q)}
-                              className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                              title="Clone as New Proposal"
-                            >
-                              <Copy className="w-4 h-4" />
-                            </button>
+                            {canCreateQuotations && (
+                              <button
+                                onClick={() => handleDuplicateQuotation(q)}
+                                className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                                title="Clone as New Proposal"
+                              >
+                                <Copy className="w-4 h-4" />
+                              </button>
+                            )}
 
                             {/* WhatsApp */}
                             <button
@@ -948,13 +984,15 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                             </button>
 
                             {/* Delete */}
-                            <button
-                              onClick={() => handleDeleteQuotation(q.id, q.quotationNumber)}
-                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                              title="Delete Quotation"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {canDeleteQuotations && (
+                              <button
+                                onClick={() => handleDeleteQuotation(q.id, q.quotationNumber)}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete Quotation"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
