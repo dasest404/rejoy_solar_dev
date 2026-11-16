@@ -394,10 +394,36 @@ CREATE TABLE IF NOT EXISTS `solar_service_tickets` (
   `scheduled_date` DATE DEFAULT NULL,
   `resolved_date` DATE DEFAULT NULL,
   `notes` TEXT,
+  `technician_remarks` TEXT,
+  `resolution_details` TEXT,
+  `assigned_at` DATETIME DEFAULT NULL,
+  `assigned_by_user_id` VARCHAR(64) DEFAULT NULL,
+  `assigned_by_name` VARCHAR(255) DEFAULT NULL,
   `photos_json` LONGTEXT,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_tickets_customer` (`customer_id`),
-  INDEX `idx_tickets_status` (`status`)
+  INDEX `idx_tickets_status` (`status`),
+  INDEX `idx_tickets_technician` (`assigned_technician_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `solar_service_ticket_history`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_service_ticket_history` (
+  `id` VARCHAR(64) PRIMARY KEY,
+  `ticket_record_id` VARCHAR(64) NOT NULL,
+  `ticket_code` VARCHAR(64) DEFAULT '',
+  `action_type` VARCHAR(64) NOT NULL,
+  `previous_value` TEXT DEFAULT NULL,
+  `new_value` TEXT DEFAULT NULL,
+  `remarks` TEXT DEFAULT NULL,
+  `actor_user_id` VARCHAR(64) DEFAULT '',
+  `actor_name` VARCHAR(255) DEFAULT '',
+  `actor_role` VARCHAR(64) DEFAULT '',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_srv_hist_ticket` (`ticket_record_id`),
+  INDEX `idx_srv_hist_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------

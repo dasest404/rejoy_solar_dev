@@ -636,6 +636,33 @@ export interface HolidayRecord {
   createdBy?: string;
 }
 
+export interface ServiceTicketHistoryEntry {
+  id: string;
+  ticketRecordId: string;
+  ticketCode?: string;
+  actionType: string;
+  previousValue?: string | null;
+  newValue?: string | null;
+  remarks?: string | null;
+  actorUserId?: string;
+  actorName?: string;
+  actorRole?: string;
+  createdAt: string;
+}
+
+export interface EligibleServiceTechnician {
+  id: string;
+  employeeCode: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  role: string;
+  department?: string;
+  designation?: string;
+  isFieldWorker: boolean;
+  status: string;
+}
+
 export interface ServiceTicket {
   id: string;
   ticketId: string;
@@ -644,21 +671,80 @@ export interface ServiceTicket {
   customerName: string;
   projectId: string;
   projectTitle?: string;
+  projectCode?: string;
   issue: string;
   title?: string;
+  description?: string;
   category: string;
   priority: Priority;
   assignedTechnicianId?: string;
   assignedTechnicianName?: string;
   assignedToName?: string;
+  assignmentStatus?: 'ASSIGNED' | 'UNASSIGNED';
   status: 'OPEN' | 'ASSIGNED' | 'VISIT SCHEDULED' | 'IN PROGRESS' | 'RESOLVED' | 'CLOSED';
   createdDate?: string;
   createdAt?: string;
-  scheduledDate?: string;
-  visitScheduledDate?: string;
-  resolvedDate?: string;
+  updatedAt?: string;
+  scheduledDate?: string | null;
+  visitScheduledDate?: string | null;
+  resolvedDate?: string | null;
   notes?: string;
+  technicianRemarks?: string;
+  resolutionDetails?: string;
+  assignedAt?: string | null;
+  assignedByUserId?: string | null;
+  assignedByName?: string | null;
   photos?: PhotoAttachment[];
+  activityHistory?: ServiceTicketHistoryEntry[];
+  customerDetails?: {
+    id: string;
+    customerCode?: string;
+    name: string;
+    companyName?: string;
+    phone?: string;
+    email?: string;
+    siteAddress?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    electricityConsumerNo?: string;
+    sanctionedLoadKw?: number;
+  } | null;
+  projectDetails?: {
+    id: string;
+    projectCode?: string;
+    title: string;
+    capacityKw?: number;
+    status?: string;
+    currentStageKey?: string;
+    completionPercentage?: number;
+    startDate?: string | null;
+    targetCompletionDate?: string | null;
+    siteAddress?: string;
+  } | null;
+  amcDetails?: {
+    id: string;
+    amcCode: string;
+    planName: string;
+    startDate: string;
+    endDate: string;
+    renewalDate?: string | null;
+    annualAmount: number;
+    visitsCompleted: number;
+    totalVisits: number;
+    status: string;
+  } | null;
+  assignedTechnicianDetails?: {
+    id: string;
+    employeeCode?: string;
+    name: string;
+    email?: string;
+    phone?: string;
+    department?: string;
+    designation?: string;
+    role?: string;
+    status?: string;
+  } | null;
 }
 
 export interface AMCContract {

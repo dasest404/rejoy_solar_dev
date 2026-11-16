@@ -1647,6 +1647,70 @@ class StorageService {
     return this.get<ServiceTicket[]>(STORAGE_KEYS.SERVICE_TICKETS, initialServiceTickets);
   }
 
+  setServiceTicketsFromBackend(tickets: ServiceTicket[]): void {
+    const cleaned = Array.isArray(tickets) ? tickets.filter(Boolean) : [];
+    this.memStore.set(STORAGE_KEYS.SERVICE_TICKETS, cleaned);
+    this.lastSyncError = null;
+    this.notifyStorageUpdated();
+  }
+
+  upsertServiceTicketInMemory(ticket: ServiceTicket): void {
+    if (!ticket || !ticket.id) return;
+    const existing = this.getServiceTickets();
+    const idx = existing.findIndex(t => t.id === ticket.id);
+    const updatedList = [...existing];
+    if (idx >= 0) {
+      updatedList[idx] = { ...updatedList[idx], ...ticket };
+    } else {
+      updatedList.unshift(ticket);
+    }
+    this.memStore.set(STORAGE_KEYS.SERVICE_TICKETS, updatedList);
+    this.lastSyncError = null;
+    this.notifyStorageUpdated();
+  }
+
+  async createServiceTicketAsync(ticket: Partial<ServiceTicket>): Promise<ServiceTicket> {
+    const saved = await apiClient.saveServiceTicket(ticket);
+    if (saved && saved.id) {
+      this.upsertServiceTicketInMemory(saved);
+      return saved;
+    }
+    const tickets = await apiClient.getServiceTickets();
+    this.setServiceTicketsFromBackend(tickets);
+    return saved;
+  }
+
+  async assignServiceTicketAsync(
+    ticketId: string,
+    payload: { technicianId: string | null; scheduledDate?: string | null; remarks?: string | null }
+  ): Promise<ServiceTicket> {
+    const updated = await apiClient.assignServiceTicketTechnician(ticketId, payload);
+    if (updated && updated.id) {
+      this.upsertServiceTicketInMemory(updated);
+    }
+    return updated;
+  }
+
+  async adminUpdateServiceTicketAsync(
+    ticketId: string,
+    payload: {
+      status?: string;
+      priority?: string;
+      assignedTechnicianId?: string | null;
+      scheduledDate?: string | null;
+      technicianRemarks?: string;
+      resolutionDetails?: string;
+      notes?: string;
+      resolvedDate?: string | null;
+    }
+  ): Promise<ServiceTicket> {
+    const updated = await apiClient.adminUpdateServiceTicket(ticketId, payload);
+    if (updated && updated.id) {
+      this.upsertServiceTicketInMemory(updated);
+    }
+    return updated;
+  }
+
   saveServiceTicket(ticket: ServiceTicket): void {
     const tickets = this.getServiceTickets();
     const index = tickets.findIndex(t => t.id === ticket.id);

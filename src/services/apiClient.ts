@@ -941,6 +941,49 @@ class ApiClient {
     return (await this.handleResponse(res)) || [];
   }
 
+  async getEligibleServiceTechnicians(): Promise<any[]> {
+    const res = await this.request(`${this.baseUrl}/service-tickets/technicians`);
+    return (await this.handleResponse(res)) || [];
+  }
+
+  async getServiceTicketDetails(id: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/service-tickets/${encodeURIComponent(id)}/details`);
+    return await this.handleResponse(res);
+  }
+
+  async assignServiceTicketTechnician(
+    id: string,
+    payload: { technicianId: string | null; scheduledDate?: string | null; remarks?: string | null }
+  ): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/service-tickets/${encodeURIComponent(id)}/assign`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async adminUpdateServiceTicket(
+    id: string,
+    payload: {
+      status?: string;
+      priority?: string;
+      assignedTechnicianId?: string | null;
+      scheduledDate?: string | null;
+      technicianRemarks?: string;
+      resolutionDetails?: string;
+      notes?: string;
+      resolvedDate?: string | null;
+    }
+  ): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/service-tickets/${encodeURIComponent(id)}/admin-update`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await this.handleResponse(res);
+  }
+
   async saveServiceTicket(item: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/service-tickets`, {
       method: 'POST',

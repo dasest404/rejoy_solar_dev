@@ -350,6 +350,32 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
       effectiveItem = items || req.body.settings || req.body.config || req.body;
     }
 
+    // Enforce Admin-only updates on existing service tickets or technician assignments via /sync/push
+    if ((normalizedCollection === 'service_tickets' || normalizedCollection === 'solar_service_tickets') && effectiveItem) {
+      const actorRoleUpper = String(user.role || '').trim().toUpperCase();
+      const isActorAdmin = actorRoleUpper === 'ADMIN' || actorRoleUpper === 'SUPER ADMIN';
+      if (!isActorAdmin) {
+        if (action === 'delete' || req.body.isDelete) {
+          return res.status(403).json({ success: false, error: 'Forbidden: Only Administrators can delete service tickets.' });
+        }
+        const existingRow = effectiveItem.id ? await dbManager.getServiceTicketRowByIdOrCode(effectiveItem.id) : null;
+        if (existingRow) {
+          return res.status(403).json({
+            success: false,
+            error: 'Forbidden: Only Administrators can modify service ticket status, priority, or technician assignment.'
+          });
+        }
+        // New ticket by non-admin/customer must start OPEN and unassigned
+        effectiveItem = {
+          ...effectiveItem,
+          status: 'OPEN',
+          assignedTechnicianId: '',
+          assignedTechnicianName: '',
+          assignedToName: 'Unassigned'
+        };
+      }
+    }
+
     // Handle delete action
     const deleteId = effectiveItem?.id || req.body?.id || (typeof effectiveItem === 'string' ? effectiveItem : null);
     if (deleteId && (action === 'delete' || req.body.isDelete)) {
@@ -361,7 +387,9 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
 
     // Handle single item save
     if (effectiveItem) {
-      const saved = await dbManager.saveItem(collection, effectiveItem);
+      const saved = (normalizedCollection === 'service_tickets' || normalizedCollection === 'solar_service_tickets')
+        ? await dbManager.saveServiceTicket(effectiveItem, user)
+        : await dbManager.saveItem(collection, effectiveItem);
       console.log(`[MySQL Write Success] Committed record "${effectiveItem.id || 'singleton'}" to collection "${collection}"`);
       res.json({ success: true, data: saved, message: `Saved to ${collection}` });
       return;
@@ -2044,19 +2072,107 @@ apiRouter.delete('/expenses/:id', async (req: Request, res: Response) => {
 // 11. SERVICE TICKETS & AMC CONTRACTS
 // ==========================================================
 
-apiRouter.get('/service-tickets', async (_req: Request, res: Response) => {
+// Eligible Active Field Workers / Technicians for Service Assignment (Admin Only)
+apiRouter.get('/service-tickets/technicians', requireAdminOnly, async (_req: Request, res: Response) => {
   try {
-    const items = await dbManager.getServiceTickets();
+    const technicians = await dbManager.getEligibleServiceTechnicians();
+    res.json({ success: true, count: technicians.length, data: technicians });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch eligible service technicians');
+  }
+});
+
+apiRouter.get('/service-tickets', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    let items = await dbManager.getServiceTickets();
+    if (isCustomerUser(user)) {
+      const custId = String(user.customerId || user.linkedEntityId || '').trim();
+      const userName = String(user.name || '').trim().toLowerCase();
+      items = items.filter((t: any) =>
+        (custId && t.customerId === custId) ||
+        (userName && String(t.customerName || '').trim().toLowerCase() === userName)
+      );
+    }
     res.json({ success: true, count: items.length, data: items });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to fetch service tickets');
   }
 });
 
+apiRouter.get(['/service-tickets/:id/details', '/service-tickets/:id'], async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    const details = await dbManager.getServiceTicketDetails(req.params.id);
+    if (!details) {
+      return res.status(404).json({ success: false, message: 'Service ticket not found.' });
+    }
+    if (isCustomerUser(user)) {
+      const custId = String(user.customerId || user.linkedEntityId || '').trim();
+      const userName = String(user.name || '').trim().toLowerCase();
+      const ownsTicket =
+        (custId && details.customerId === custId) ||
+        (userName && String(details.customerName || '').trim().toLowerCase() === userName);
+      if (!ownsTicket) {
+        return res.status(403).json({ success: false, message: 'Access denied: You can only view your own service tickets.' });
+      }
+    }
+    res.json({ success: true, data: details });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch service ticket details');
+  }
+});
+
 apiRouter.post('/service-tickets', async (req: Request, res: Response) => {
   try {
-    const tk = { ...req.body, id: req.body.id || `tk-${Date.now()}` };
-    const saved = await dbManager.saveServiceTicket(tk);
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    const roleUpper = String(user.role || '').trim().toUpperCase();
+    const isActorAdmin = roleUpper === 'ADMIN' || roleUpper === 'SUPER ADMIN';
+    const body = req.body || {};
+
+    let tk: any = {
+      ...body,
+      id: body.id || `srv-${Date.now()}`
+    };
+
+    if (!isActorAdmin) {
+      tk = {
+        ...tk,
+        status: 'OPEN',
+        assignedTechnicianId: '',
+        assignedTechnicianName: '',
+        assignedToName: 'Unassigned'
+      };
+      if (isCustomerUser(user) && (user.customerId || user.linkedEntityId)) {
+        tk.customerId = user.customerId || user.linkedEntityId;
+        tk.customerName = tk.customerName || user.name || 'Customer';
+      }
+    } else if (tk.assignedTechnicianId) {
+      const eligible = await dbManager.getEligibleServiceTechnicians();
+      const matched = eligible.find(t => t.id === tk.assignedTechnicianId);
+      if (!matched) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected technician is not an active eligible Field Worker / Technician.'
+        });
+      }
+      tk.assignedTechnicianId = matched.id;
+      tk.assignedTechnicianName = matched.name;
+      if (!tk.status || tk.status === 'OPEN') {
+        tk.status = 'ASSIGNED';
+      }
+    }
+
+    const saved = await dbManager.saveServiceTicket(tk, user);
     res.status(201).json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to save service ticket');
@@ -2064,7 +2180,7 @@ apiRouter.post('/service-tickets', async (req: Request, res: Response) => {
 });
 
 // Batch Service Tickets Import (Excel / CSV Hub)
-apiRouter.post(['/service-tickets/import', '/service/import', '/service-tickets/import/', '/service/import/'], async (req: Request, res: Response) => {
+apiRouter.post(['/service-tickets/import', '/service/import', '/service-tickets/import/', '/service/import/'], requireAdminOnly, async (req: Request, res: Response) => {
   try {
     const { tickets, service, rows } = req.body || {};
     const list = Array.isArray(tickets) ? tickets : (Array.isArray(service) ? service : (Array.isArray(rows) ? rows : (Array.isArray(req.body) ? req.body : [])));
@@ -2085,17 +2201,59 @@ apiRouter.post(['/service-tickets/import', '/service/import', '/service-tickets/
   }
 });
 
-apiRouter.put('/service-tickets/:id', async (req: Request, res: Response) => {
+// Admin-only: Assign, Reassign, or Unassign Technician
+apiRouter.put('/service-tickets/:id/assign', requireAdminOnly, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const saved = await dbManager.saveServiceTicket({ ...req.body, id });
-    res.json({ success: true, data: saved });
+    const actor = (req as any).user;
+    const updated = await dbManager.assignServiceTicketTechnician(req.params.id, req.body || {}, actor);
+    res.json({ success: true, data: updated, message: 'Technician assignment updated in MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to update technician assignment');
+  }
+});
+
+apiRouter.post('/service-tickets/:id/assign', requireAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const updated = await dbManager.assignServiceTicketTechnician(req.params.id, req.body || {}, actor);
+    res.json({ success: true, data: updated, message: 'Technician assignment updated in MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to update technician assignment');
+  }
+});
+
+// Admin-only: Update Status, Priority, Technician, Scheduled Date, Remarks & Resolution Details
+apiRouter.put('/service-tickets/:id/admin-update', requireAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const updated = await dbManager.adminUpdateServiceTicket(req.params.id, req.body || {}, actor);
+    res.json({ success: true, data: updated, message: 'Service ticket updated in MySQL.' });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update service ticket');
   }
 });
 
-apiRouter.delete('/service-tickets/:id', async (req: Request, res: Response) => {
+apiRouter.patch('/service-tickets/:id/admin-update', requireAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const updated = await dbManager.adminUpdateServiceTicket(req.params.id, req.body || {}, actor);
+    res.json({ success: true, data: updated, message: 'Service ticket updated in MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to update service ticket');
+  }
+});
+
+apiRouter.put('/service-tickets/:id', requireAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const updated = await dbManager.adminUpdateServiceTicket(req.params.id, req.body || {}, actor);
+    res.json({ success: true, data: updated, message: 'Service ticket updated in MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to update service ticket');
+  }
+});
+
+apiRouter.delete('/service-tickets/:id', requireAdminOnly, async (req: Request, res: Response) => {
   try {
     await dbManager.deleteServiceTicket(req.params.id);
     res.json({ success: true, message: 'Service ticket deleted from MySQL.' });

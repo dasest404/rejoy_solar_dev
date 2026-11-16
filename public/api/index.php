@@ -479,6 +479,48 @@ function ensureRequiredTables($pdo) {
         error_log('Notice ensuring solar_email_settings table: ' . $e->getMessage());
     }
 
+    // Auto-migrate solar_service_tickets extended columns and create solar_service_ticket_history table
+    try {
+        $tkColsRes = $pdo->query("SHOW COLUMNS FROM `solar_service_tickets`")->fetchAll(PDO::FETCH_ASSOC);
+        $tkExisting = [];
+        foreach ($tkColsRes as $cr) {
+            $tkExisting[strtolower($cr['Field'])] = true;
+        }
+        $tkMigrations = [
+            'technician_remarks' => 'TEXT DEFAULT NULL',
+            'resolution_details' => 'TEXT DEFAULT NULL',
+            'assigned_at' => 'DATETIME DEFAULT NULL',
+            'assigned_by_user_id' => 'VARCHAR(64) DEFAULT NULL',
+            'assigned_by_name' => 'VARCHAR(255) DEFAULT NULL',
+            'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
+        ];
+        foreach ($tkMigrations as $colName => $colDef) {
+            if (!isset($tkExisting[strtolower($colName)])) {
+                try { $pdo->exec("ALTER TABLE `solar_service_tickets` ADD COLUMN `$colName` $colDef"); } catch (Exception $e) {}
+            }
+        }
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_service_ticket_history` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `ticket_record_id` VARCHAR(64) NOT NULL,
+              `ticket_code` VARCHAR(64) DEFAULT '',
+              `action_type` VARCHAR(64) NOT NULL,
+              `previous_value` TEXT DEFAULT NULL,
+              `new_value` TEXT DEFAULT NULL,
+              `remarks` TEXT DEFAULT NULL,
+              `actor_user_id` VARCHAR(64) DEFAULT '',
+              `actor_name` VARCHAR(255) DEFAULT '',
+              `actor_role` VARCHAR(64) DEFAULT '',
+              `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              INDEX `idx_srv_hist_ticket` (`ticket_record_id`),
+              INDEX `idx_srv_hist_created` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    } catch (Exception $e) {
+        error_log('Notice ensuring solar_service_tickets / history schema: ' . $e->getMessage());
+    }
+
     $tablesVerified = true;
 }
 
@@ -2371,24 +2413,344 @@ function saveStockAuditToDb($pdo, $item) {
     ]);
 }
 
-// Helper: Service Tickets
-function saveServiceTicketToDb($pdo, $item) {
-    if (empty($item['id'])) $item['id'] = 'tkt-' . round(microtime(true) * 1000);
-    $tktId = $item['ticketId'] ?? $item['ticketNumber'] ?? $item['ticket_id'] ?? $item['id'];
-    $custId = $item['customerId'] ?? $item['customer_id'] ?? '';
-    $custName = $item['customerName'] ?? $item['customer_name'] ?? 'Customer';
-    $projId = $item['projectId'] ?? $item['project_id'] ?? '';
-    $projTitle = $item['projectTitle'] ?? $item['projectCode'] ?? $item['project_title'] ?? 'Solar Project Installation';
-    $issue = $item['issue'] ?? $item['title'] ?? $item['description'] ?? 'Service Ticket Alert';
-    $category = $item['category'] ?? 'Inverter Warning';
-    $priority = $item['priority'] ?? 'MEDIUM';
-    $techId = $item['assignedTechnicianId'] ?? $item['assignedEngineerId'] ?? $item['assigned_technician_id'] ?? '';
-    $techName = $item['assignedTechnicianName'] ?? $item['assignedEngineerName'] ?? $item['assigned_technician_name'] ?? '';
-    $status = $item['status'] ?? 'OPEN';
-    $schedDate = !empty($item['scheduledDate'] ?? $item['scheduled_date']) ? substr($item['scheduledDate'] ?? $item['scheduled_date'], 0, 10) : null;
-    $resolvedDate = !empty($item['resolvedDate'] ?? $item['resolved_date']) ? substr($item['resolvedDate'] ?? $item['resolved_date'], 0, 10) : null;
-    $notes = $item['notes'] ?? '';
-    $photos = $item['photos'] ?? [];
+// Helper: Service Tickets (with Admin Assignment & Audit History)
+function normalizeTicketTechnicianPhp($techIdRaw, $techNameRaw) {
+    $cleanId = trim((string)($techIdRaw ?? ''));
+    $cleanName = trim((string)($techNameRaw ?? ''));
+    $lowerName = strtolower($cleanName);
+    $isPlaceholder = ($cleanName === '' || $lowerName === 'unassigned' || $lowerName === 'to be assigned');
+    if ($cleanId === '' && $isPlaceholder) {
+        return [
+            'assignedTechnicianId' => '',
+            'assignedTechnicianName' => '',
+            'assignmentStatus' => 'UNASSIGNED'
+        ];
+    }
+    return [
+        'assignedTechnicianId' => $cleanId,
+        'assignedTechnicianName' => $isPlaceholder ? '' : $cleanName,
+        'assignmentStatus' => ($cleanId !== '' || !$isPlaceholder) ? 'ASSIGNED' : 'UNASSIGNED'
+    ];
+}
+
+function mapTicketHistoryRowPhp($h) {
+    return [
+        'id' => $h['id'],
+        'ticketRecordId' => $h['ticket_record_id'],
+        'ticketCode' => $h['ticket_code'] ?? '',
+        'actionType' => $h['action_type'],
+        'previousValue' => $h['previous_value'] ?? null,
+        'newValue' => $h['new_value'] ?? null,
+        'remarks' => $h['remarks'] ?? null,
+        'actorUserId' => $h['actor_user_id'] ?? '',
+        'actorName' => $h['actor_name'] ?: 'System',
+        'actorRole' => $h['actor_role'] ?? '',
+        'createdAt' => !empty($h['created_at']) ? date('c', strtotime($h['created_at'])) : date('c')
+    ];
+}
+
+function mapServiceTicketRowPhp($r, $historyRows = []) {
+    $tech = normalizeTicketTechnicianPhp($r['assigned_technician_id'] ?? '', $r['assigned_technician_name'] ?? '');
+    $photos = json_decode($r['photos_json'] ?? '[]', true);
+    if (!is_array($photos)) $photos = [];
+    return [
+        'id' => $r['id'],
+        'ticketId' => $r['ticket_id'],
+        'ticketNumber' => $r['ticket_id'],
+        'customerId' => $r['customer_id'] ?? '',
+        'customerName' => $r['customer_name'] ?? '',
+        'projectId' => $r['project_id'] ?? '',
+        'projectTitle' => $r['project_title'] ?? '',
+        'projectCode' => $r['project_title'] ?? '',
+        'title' => $r['issue'],
+        'issue' => $r['issue'],
+        'description' => $r['issue'],
+        'category' => $r['category'] ?? 'Inverter Warning',
+        'priority' => $r['priority'] ?? 'MEDIUM',
+        'status' => $r['status'] ?? 'OPEN',
+        'assignedTechnicianId' => $tech['assignedTechnicianId'],
+        'assignedTechnicianName' => $tech['assignedTechnicianName'],
+        'assignedToName' => $tech['assignedTechnicianName'] !== '' ? $tech['assignedTechnicianName'] : 'Unassigned',
+        'assignedEngineerId' => $tech['assignedTechnicianId'],
+        'assignedEngineerName' => $tech['assignedTechnicianName'],
+        'assignmentStatus' => $tech['assignmentStatus'],
+        'scheduledDate' => $r['scheduled_date'] ?? null,
+        'visitScheduledDate' => $r['scheduled_date'] ?? null,
+        'createdDate' => $r['scheduled_date'] ?? $r['created_at'],
+        'resolvedDate' => $r['resolved_date'] ?? null,
+        'notes' => $r['notes'] ?? '',
+        'technicianRemarks' => $r['technician_remarks'] ?? '',
+        'resolutionDetails' => $r['resolution_details'] ?? '',
+        'assignedAt' => !empty($r['assigned_at']) ? date('c', strtotime($r['assigned_at'])) : null,
+        'assignedByUserId' => $r['assigned_by_user_id'] ?? null,
+        'assignedByName' => $r['assigned_by_name'] ?? null,
+        'photos' => $photos,
+        'createdAt' => $r['created_at'],
+        'updatedAt' => $r['updated_at'] ?? $r['created_at'],
+        'activityHistory' => $historyRows
+    ];
+}
+
+function recordServiceTicketHistoryPhp($pdo, $ticketRecordId, $ticketCode, $actionType, $prevVal, $newVal, $remarks, $actor = null) {
+    $id = 'srvhist-' . round(microtime(true) * 1000) . '-' . substr(bin2hex(random_bytes(3)), 0, 5);
+    $actorId = is_array($actor) ? trim((string)($actor['id'] ?? $actor['userId'] ?? '')) : '';
+    $actorName = is_array($actor) ? trim((string)($actor['name'] ?? $actor['email'] ?? 'System')) : 'System';
+    $actorRole = is_array($actor) ? trim((string)($actor['role'] ?? '')) : '';
+    $pdo->prepare("
+        INSERT INTO `solar_service_ticket_history`
+        (`id`, `ticket_record_id`, `ticket_code`, `action_type`, `previous_value`, `new_value`, `remarks`, `actor_user_id`, `actor_name`, `actor_role`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ")->execute([$id, $ticketRecordId, $ticketCode ?: '', $actionType, $prevVal, $newVal, $remarks, $actorId, $actorName, $actorRole]);
+    return [
+        'id' => $id,
+        'ticketRecordId' => $ticketRecordId,
+        'ticketCode' => $ticketCode ?: '',
+        'actionType' => $actionType,
+        'previousValue' => $prevVal,
+        'newValue' => $newVal,
+        'remarks' => $remarks,
+        'actorUserId' => $actorId,
+        'actorName' => $actorName,
+        'actorRole' => $actorRole,
+        'createdAt' => date('c')
+    ];
+}
+
+function getServiceTicketHistoryPhp($pdo, $ticketRecordId) {
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM `solar_service_ticket_history` WHERE `ticket_record_id` = ? ORDER BY `created_at` DESC, `id` DESC');
+        $stmt->execute([$ticketRecordId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        return array_map('mapTicketHistoryRowPhp', $rows);
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+function getServiceTicketRowPhp($pdo, $idOrCode) {
+    $clean = trim((string)$idOrCode);
+    if ($clean === '') return null;
+    $stmt = $pdo->prepare('SELECT * FROM `solar_service_tickets` WHERE `id` = ? OR `ticket_id` = ? LIMIT 1');
+    $stmt->execute([$clean, $clean]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function getEligibleServiceTechniciansPhp($pdo) {
+    $seenIds = [];
+    $seenEmails = [];
+    $results = [];
+
+    $addIfEligible = function ($rec) use (&$seenIds, &$seenEmails, &$results) {
+        if (empty($rec['active'])) return;
+        if (!isEligibleFieldWorkerPhp($rec['role'], $rec['isFieldWorker'], $rec['department'])) return;
+        $idKey = strtolower(trim((string)$rec['id']));
+        $emailKey = strtolower(trim((string)$rec['email']));
+        if ($idKey === '') return;
+        if (isset($seenIds[$idKey]) || ($emailKey !== '' && isset($seenEmails[$emailKey]))) return;
+        $seenIds[$idKey] = true;
+        if ($emailKey !== '') $seenEmails[$emailKey] = true;
+        $results[] = [
+            'id' => $rec['id'],
+            'employeeCode' => $rec['employeeCode'] ?: $rec['id'],
+            'name' => $rec['name'],
+            'email' => $rec['email'],
+            'phone' => $rec['phone'],
+            'role' => $rec['role'],
+            'department' => $rec['department'],
+            'designation' => $rec['designation'] ?: $rec['role'],
+            'isFieldWorker' => true,
+            'status' => 'ACTIVE'
+        ];
+    };
+
+    foreach (['solar_employees', 'solar_employee'] as $tbl) {
+        try {
+            $stmt = $pdo->query("SELECT * FROM `$tbl` ORDER BY `name` ASC");
+            $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            foreach ($rows as $e) {
+                $status = strtoupper((string)($e['status'] ?? 'ACTIVE'));
+                $acctStatus = strtoupper((string)($e['account_status'] ?? 'ACTIVE'));
+                $role = (string)($e['system_role'] ?? $e['assigned_role'] ?? $e['designation'] ?? 'Technician');
+                $active = ($status !== 'DISABLED' && $status !== 'INACTIVE' && $status !== 'TERMINATED' && $acctStatus !== 'DISABLED' && strtolower($role) !== 'customer');
+                $addIfEligible([
+                    'id' => (string)($e['id'] ?? ''),
+                    'employeeCode' => (string)($e['employee_code'] ?? $e['id'] ?? ''),
+                    'name' => (string)($e['name'] ?? 'Technician'),
+                    'email' => strtolower(trim((string)($e['email'] ?? ''))),
+                    'role' => $role,
+                    'department' => (string)($e['department'] ?? 'Service'),
+                    'designation' => (string)($e['designation'] ?? $role),
+                    'phone' => (string)($e['phone'] ?? ''),
+                    'isFieldWorker' => !empty($e['is_field_worker']),
+                    'active' => $active
+                ]);
+            }
+            if (!empty($rows)) break;
+        } catch (Exception $e) {}
+    }
+
+    try {
+        $stmtU = $pdo->query('SELECT * FROM `solar_users` ORDER BY `name` ASC');
+        $uRows = $stmtU ? $stmtU->fetchAll(PDO::FETCH_ASSOC) : [];
+        foreach ($uRows as $u) {
+            $status = strtoupper((string)($u['status'] ?? 'ACTIVE'));
+            $role = (string)($u['role'] ?? 'Staff');
+            $active = ($status !== 'DISABLED' && $status !== 'INACTIVE' && strtolower($role) !== 'customer');
+            $addIfEligible([
+                'id' => (string)($u['id'] ?? ''),
+                'employeeCode' => (string)($u['employee_id'] ?? $u['id'] ?? ''),
+                'name' => (string)($u['name'] ?? 'Technician'),
+                'email' => strtolower(trim((string)($u['email'] ?? ''))),
+                'role' => $role,
+                'department' => (string)($u['department'] ?? 'Service'),
+                'designation' => (string)($u['designation'] ?? $role),
+                'phone' => (string)($u['phone'] ?? ''),
+                'isFieldWorker' => !empty($u['is_field_worker']),
+                'active' => $active
+            ]);
+        }
+    } catch (Exception $e) {}
+
+    usort($results, function ($a, $b) {
+        return strcasecmp($a['name'], $b['name']);
+    });
+    return $results;
+}
+
+function getServiceTicketDetailsPhp($pdo, $idOrCode) {
+    $row = getServiceTicketRowPhp($pdo, $idOrCode);
+    if (!$row) return null;
+    $history = getServiceTicketHistoryPhp($pdo, $row['id']);
+    $ticket = mapServiceTicketRowPhp($row, $history);
+
+    $customer = null;
+    try {
+        if (!empty($row['customer_id'])) {
+            $sc = $pdo->prepare('SELECT * FROM `solar_customers` WHERE `id` = ? LIMIT 1');
+            $sc->execute([$row['customer_id']]);
+            $customer = $sc->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+        if (!$customer && !empty($row['customer_name'])) {
+            $sc2 = $pdo->prepare('SELECT * FROM `solar_customers` WHERE LOWER(`name`) = LOWER(?) LIMIT 1');
+            $sc2->execute([$row['customer_name']]);
+            $customer = $sc2->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+    } catch (Exception $e) {}
+
+    $project = null;
+    try {
+        if (!empty($row['project_id'])) {
+            $sp = $pdo->prepare('SELECT * FROM `solar_projects` WHERE `id` = ? OR `project_code` = ? LIMIT 1');
+            $sp->execute([$row['project_id'], $row['project_id']]);
+            $project = $sp->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+        if (!$project && ($customer['active_project_id'] ?? $customer['id'] ?? '')) {
+            $sp2 = $pdo->prepare('SELECT * FROM `solar_projects` WHERE `id` = ? OR `customer_id` = ? ORDER BY `created_at` DESC LIMIT 1');
+            $sp2->execute([$customer['active_project_id'] ?? '', $customer['id'] ?? '']);
+            $project = $sp2->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+    } catch (Exception $e) {}
+
+    $amc = null;
+    try {
+        $tpId = $project['id'] ?? ($row['project_id'] ?? '');
+        $tcId = $customer['id'] ?? ($row['customer_id'] ?? '');
+        if ($tpId !== '' || $tcId !== '') {
+            $sa = $pdo->prepare('SELECT * FROM `solar_amc_contracts` WHERE (`project_id` = ? AND ? != "") OR (`customer_id` = ? AND ? != "") ORDER BY `end_date` DESC LIMIT 1');
+            $sa->execute([$tpId, $tpId, $tcId, $tcId]);
+            $amc = $sa->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+    } catch (Exception $e) {}
+
+    $assignedTech = null;
+    if (!empty($ticket['assignedTechnicianId'])) {
+        try {
+            $se = $pdo->prepare('SELECT `id`, `employee_code`, `name`, `email`, `phone`, `department`, `designation`, `system_role`, `status` FROM `solar_employees` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 1');
+            $se->execute([$ticket['assignedTechnicianId'], $ticket['assignedTechnicianId'], $ticket['assignedTechnicianId']]);
+            $te = $se->fetch(PDO::FETCH_ASSOC);
+            if ($te) {
+                $assignedTech = [
+                    'id' => $te['id'],
+                    'employeeCode' => $te['employee_code'] ?? $te['id'],
+                    'name' => $te['name'],
+                    'email' => $te['email'] ?? '',
+                    'phone' => $te['phone'] ?? '',
+                    'department' => $te['department'] ?? 'Service',
+                    'designation' => $te['designation'] ?? ($te['system_role'] ?? 'Technician'),
+                    'role' => $te['system_role'] ?? 'Technician',
+                    'status' => $te['status'] ?? 'ACTIVE'
+                ];
+            }
+        } catch (Exception $e) {}
+    }
+
+    $ticket['customerDetails'] = $customer ? [
+        'id' => $customer['id'],
+        'customerCode' => $customer['customer_code'],
+        'name' => $customer['name'],
+        'companyName' => $customer['company_name'] ?? '',
+        'phone' => $customer['phone'] ?? '',
+        'email' => $customer['email'] ?? '',
+        'siteAddress' => $customer['site_address'] ?? '',
+        'city' => $customer['city'] ?? '',
+        'state' => $customer['state'] ?? '',
+        'pincode' => $customer['pincode'] ?? '',
+        'electricityConsumerNo' => $customer['electricity_consumer_no'] ?? '',
+        'sanctionedLoadKw' => floatval($customer['sanctioned_load_kw'] ?? 0)
+    ] : null;
+    $ticket['projectDetails'] = $project ? [
+        'id' => $project['id'],
+        'projectCode' => $project['project_code'],
+        'title' => $project['title'],
+        'capacityKw' => floatval($project['capacity_kw'] ?? 0),
+        'status' => $project['status'],
+        'currentStageKey' => $project['current_stage_key'] ?? '',
+        'completionPercentage' => floatval($project['completion_percentage'] ?? 0),
+        'startDate' => $project['start_date'] ?? null,
+        'targetCompletionDate' => $project['target_completion_date'] ?? null,
+        'siteAddress' => $customer['site_address'] ?? ''
+    ] : null;
+    $ticket['amcDetails'] = $amc ? [
+        'id' => $amc['id'],
+        'amcCode' => $amc['amc_code'],
+        'planName' => $amc['plan_name'],
+        'startDate' => $amc['start_date'],
+        'endDate' => $amc['end_date'],
+        'renewalDate' => $amc['renewal_date'],
+        'annualAmount' => floatval($amc['annual_amount'] ?? 0),
+        'visitsCompleted' => intval($amc['visits_completed'] ?? 0),
+        'totalVisits' => intval($amc['total_visits'] ?? 4),
+        'status' => $amc['status']
+    ] : null;
+    $ticket['assignedTechnicianDetails'] = $assignedTech;
+    return $ticket;
+}
+
+function saveServiceTicketToDb($pdo, $item, $actor = null) {
+    if (empty($item['id'])) $item['id'] = 'srv-' . round(microtime(true) * 1000);
+    $existing = getServiceTicketRowPhp($pdo, $item['id']);
+
+    $tktId = $item['ticketId'] ?? $item['ticketNumber'] ?? $item['ticket_id'] ?? ($existing['ticket_id'] ?? $item['id']);
+    $custId = $item['customerId'] ?? $item['customer_id'] ?? ($existing['customer_id'] ?? '');
+    $custName = $item['customerName'] ?? $item['customer_name'] ?? ($existing['customer_name'] ?? 'Customer');
+    $projId = $item['projectId'] ?? $item['project_id'] ?? ($existing['project_id'] ?? '');
+    $projTitle = $item['projectTitle'] ?? $item['projectCode'] ?? $item['project_title'] ?? ($existing['project_title'] ?? 'Solar Project Installation');
+    $issue = $item['issue'] ?? $item['title'] ?? $item['description'] ?? ($existing['issue'] ?? 'Service Ticket Alert');
+    $category = $item['category'] ?? ($existing['category'] ?? 'Inverter Warning');
+    $priority = $item['priority'] ?? ($existing['priority'] ?? 'MEDIUM');
+    $rawTechId = $item['assignedTechnicianId'] ?? $item['assignedEngineerId'] ?? $item['assigned_technician_id'] ?? ($existing['assigned_technician_id'] ?? '');
+    $rawTechName = $item['assignedTechnicianName'] ?? $item['assignedEngineerName'] ?? $item['assigned_technician_name'] ?? ($existing['assigned_technician_name'] ?? '');
+    $normTech = normalizeTicketTechnicianPhp($rawTechId, $rawTechName);
+    $status = $item['status'] ?? ($existing['status'] ?? 'OPEN');
+    $rawSched = $item['scheduledDate'] ?? $item['visitScheduledDate'] ?? $item['scheduled_date'] ?? ($existing['scheduled_date'] ?? null);
+    $schedDate = !empty($rawSched) ? substr((string)$rawSched, 0, 10) : null;
+    $rawRes = $item['resolvedDate'] ?? $item['resolved_date'] ?? ($existing['resolved_date'] ?? null);
+    $resolvedDate = !empty($rawRes) ? substr((string)$rawRes, 0, 10) : null;
+    $notes = $item['notes'] ?? ($existing['notes'] ?? '');
+    $techRemarks = $item['technicianRemarks'] ?? $item['technician_remarks'] ?? ($existing['technician_remarks'] ?? '');
+    $resDetails = $item['resolutionDetails'] ?? $item['resolution_details'] ?? ($existing['resolution_details'] ?? '');
+    $photos = $item['photos'] ?? ($existing ? (json_decode($existing['photos_json'] ?? '[]', true) ?: []) : []);
     $photosJson = is_string($photos) ? $photos : json_encode($photos);
 
     $stmt = $pdo->prepare("
@@ -2396,10 +2758,12 @@ function saveServiceTicketToDb($pdo, $item) {
             `id`, `ticket_id`, `customer_id`, `customer_name`, `project_id`,
             `project_title`, `issue`, `category`, `priority`,
             `assigned_technician_id`, `assigned_technician_name`, `status`,
-            `scheduled_date`, `resolved_date`, `notes`, `photos_json`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `scheduled_date`, `resolved_date`, `notes`, `technician_remarks`, `resolution_details`, `photos_json`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
+            `customer_id` = VALUES(`customer_id`),
             `customer_name` = VALUES(`customer_name`),
+            `project_id` = VALUES(`project_id`),
             `project_title` = VALUES(`project_title`),
             `issue` = VALUES(`issue`),
             `category` = VALUES(`category`),
@@ -2410,15 +2774,271 @@ function saveServiceTicketToDb($pdo, $item) {
             `scheduled_date` = VALUES(`scheduled_date`),
             `resolved_date` = VALUES(`resolved_date`),
             `notes` = VALUES(`notes`),
+            `technician_remarks` = VALUES(`technician_remarks`),
+            `resolution_details` = VALUES(`resolution_details`),
             `photos_json` = VALUES(`photos_json`)
     ");
     $stmt->execute([
         $item['id'], $tktId, $custId, $custName, $projId,
         $projTitle, $issue, $category, $priority,
-        $techId, $techName, $status,
-        $schedDate, $resolvedDate, $notes, $photosJson
+        $normTech['assignedTechnicianId'], $normTech['assignedTechnicianName'], $status,
+        $schedDate, $resolvedDate, $notes, $techRemarks, $resDetails, $photosJson
     ]);
-    return $item;
+
+    if (!$existing) {
+        try {
+            recordServiceTicketHistoryPhp($pdo, $item['id'], $tktId, 'CREATED', null, "Status: $status | Priority: $priority", $issue, $actor);
+        } catch (Exception $e) {}
+    }
+
+    $row = getServiceTicketRowPhp($pdo, $item['id']);
+    return $row ? mapServiceTicketRowPhp($row, getServiceTicketHistoryPhp($pdo, $row['id'])) : $item;
+}
+
+function assignServiceTicketTechnicianPhp($pdo, $idOrCode, $payload, $actor) {
+    $existing = getServiceTicketRowPhp($pdo, $idOrCode);
+    if (!$existing) {
+        throw new Exception('Service ticket not found in MySQL.', 404);
+    }
+    $requestedTechId = trim((string)($payload['technicianId'] ?? ($payload['assignedTechnicianId'] ?? '')));
+    $prevTech = normalizeTicketTechnicianPhp($existing['assigned_technician_id'] ?? '', $existing['assigned_technician_name'] ?? '');
+    $nextTechId = '';
+    $nextTechName = '';
+
+    if ($requestedTechId !== '') {
+        $eligible = getEligibleServiceTechniciansPhp($pdo);
+        $matched = null;
+        foreach ($eligible as $t) {
+            if (strcasecmp($t['id'], $requestedTechId) === 0 || strcasecmp($t['employeeCode'], $requestedTechId) === 0) {
+                $matched = $t;
+                break;
+            }
+        }
+        if (!$matched) {
+            throw new Exception('Selected technician is not an active eligible Field Worker / Technician in MySQL.', 400);
+        }
+        $nextTechId = $matched['id'];
+        $nextTechName = $matched['name'];
+    }
+
+    $prevStatus = (string)($existing['status'] ?? 'OPEN');
+    $nextStatus = $prevStatus;
+    if ($nextTechId !== '' && $prevStatus === 'OPEN') {
+        $nextStatus = 'ASSIGNED';
+    } elseif ($nextTechId === '' && $prevStatus === 'ASSIGNED') {
+        $nextStatus = 'OPEN';
+    }
+
+    $nextSched = array_key_exists('scheduledDate', $payload)
+        ? (!empty($payload['scheduledDate']) ? substr((string)$payload['scheduledDate'], 0, 10) : null)
+        : ($existing['scheduled_date'] ?? null);
+    $hasRemarks = array_key_exists('remarks', $payload) && trim((string)$payload['remarks']) !== '';
+    $nextRemarks = $hasRemarks ? trim((string)$payload['remarks']) : (string)($existing['technician_remarks'] ?? '');
+
+    $actorId = trim((string)($actor['id'] ?? $actor['userId'] ?? ''));
+    $actorName = trim((string)($actor['name'] ?? $actor['email'] ?? 'Admin'));
+    $nowSql = date('Y-m-d H:i:s');
+
+    $pdo->prepare("
+        UPDATE `solar_service_tickets`
+        SET `assigned_technician_id` = ?,
+            `assigned_technician_name` = ?,
+            `status` = ?,
+            `scheduled_date` = ?,
+            `technician_remarks` = ?,
+            `assigned_at` = ?,
+            `assigned_by_user_id` = ?,
+            `assigned_by_name` = ?
+        WHERE `id` = ?
+    ")->execute([
+        $nextTechId,
+        $nextTechName,
+        $nextStatus,
+        $nextSched,
+        $nextRemarks,
+        $nextTechId !== '' ? $nowSql : null,
+        $nextTechId !== '' ? $actorId : null,
+        $nextTechId !== '' ? $actorName : null,
+        $existing['id']
+    ]);
+
+    if ($nextTechId === '' && ($prevTech['assignedTechnicianId'] !== '' || $prevTech['assignedTechnicianName'] !== '')) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'], 'TECHNICIAN_UNASSIGNED',
+            $prevTech['assignedTechnicianName'] ?: $prevTech['assignedTechnicianId'], 'Unassigned',
+            $hasRemarks ? $nextRemarks : null, $actor
+        );
+    } elseif ($nextTechId !== '' && $nextTechId !== $prevTech['assignedTechnicianId']) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'],
+            $prevTech['assignedTechnicianId'] !== '' ? 'TECHNICIAN_REASSIGNED' : 'TECHNICIAN_ASSIGNED',
+            $prevTech['assignedTechnicianName'] ?: 'Unassigned', $nextTechName,
+            $hasRemarks ? $nextRemarks : null, $actor
+        );
+    } elseif ($hasRemarks && $nextRemarks !== (string)($existing['technician_remarks'] ?? '')) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'], 'REMARKS_UPDATED',
+            $existing['technician_remarks'] ?? '', $nextRemarks, null, $actor
+        );
+    }
+
+    if ($nextStatus !== $prevStatus) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'], 'STATUS_UPDATED',
+            $prevStatus, $nextStatus, $nextTechId !== '' ? "Technician: $nextTechName" : 'Technician unassigned', $actor
+        );
+    }
+
+    return getServiceTicketDetailsPhp($pdo, $existing['id']);
+}
+
+function adminUpdateServiceTicketPhp($pdo, $idOrCode, $payload, $actor) {
+    $existing = getServiceTicketRowPhp($pdo, $idOrCode);
+    if (!$existing) {
+        throw new Exception('Service ticket not found in MySQL.', 404);
+    }
+    $allowedStatuses = ['OPEN', 'ASSIGNED', 'VISIT SCHEDULED', 'IN PROGRESS', 'RESOLVED', 'CLOSED'];
+    $allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+
+    $prevStatus = (string)($existing['status'] ?? 'OPEN');
+    $prevPriority = (string)($existing['priority'] ?? 'MEDIUM');
+    $prevTech = normalizeTicketTechnicianPhp($existing['assigned_technician_id'] ?? '', $existing['assigned_technician_name'] ?? '');
+    $prevRemarks = (string)($existing['technician_remarks'] ?? '');
+    $prevRes = (string)($existing['resolution_details'] ?? '');
+    $prevNotes = (string)($existing['notes'] ?? '');
+
+    $nextTechId = $prevTech['assignedTechnicianId'];
+    $nextTechName = $prevTech['assignedTechnicianName'];
+    $techChanged = false;
+
+    if (array_key_exists('assignedTechnicianId', $payload) || array_key_exists('technicianId', $payload)) {
+        $reqTechId = trim((string)($payload['assignedTechnicianId'] ?? $payload['technicianId'] ?? ''));
+        if ($reqTechId === '') {
+            if ($prevTech['assignedTechnicianId'] !== '' || $prevTech['assignedTechnicianName'] !== '') $techChanged = true;
+            $nextTechId = '';
+            $nextTechName = '';
+        } else {
+            $eligible = getEligibleServiceTechniciansPhp($pdo);
+            $matched = null;
+            foreach ($eligible as $t) {
+                if (strcasecmp($t['id'], $reqTechId) === 0 || strcasecmp($t['employeeCode'], $reqTechId) === 0) {
+                    $matched = $t;
+                    break;
+                }
+            }
+            if (!$matched) {
+                throw new Exception('Selected technician is not an active eligible Field Worker / Technician in MySQL.', 400);
+            }
+            if ($matched['id'] !== $prevTech['assignedTechnicianId']) $techChanged = true;
+            $nextTechId = $matched['id'];
+            $nextTechName = $matched['name'];
+        }
+    }
+
+    $nextStatus = $prevStatus;
+    if (!empty($payload['status'])) {
+        $cand = strtoupper(trim((string)$payload['status']));
+        if (!in_array($cand, $allowedStatuses, true)) {
+            throw new Exception("Invalid status \"$cand\".", 400);
+        }
+        $nextStatus = $cand;
+    } elseif ($techChanged) {
+        if ($nextTechId !== '' && $prevStatus === 'OPEN') $nextStatus = 'ASSIGNED';
+        elseif ($nextTechId === '' && $prevStatus === 'ASSIGNED') $nextStatus = 'OPEN';
+    }
+
+    $nextPriority = $prevPriority;
+    if (!empty($payload['priority'])) {
+        $candP = strtoupper(trim((string)$payload['priority']));
+        if (!in_array($candP, $allowedPriorities, true)) {
+            throw new Exception("Invalid priority \"$candP\".", 400);
+        }
+        $nextPriority = $candP;
+    }
+
+    $nextSched = (array_key_exists('scheduledDate', $payload) || array_key_exists('visitScheduledDate', $payload))
+        ? (!empty($payload['scheduledDate'] ?? $payload['visitScheduledDate']) ? substr((string)($payload['scheduledDate'] ?? $payload['visitScheduledDate']), 0, 10) : null)
+        : ($existing['scheduled_date'] ?? null);
+
+    $nextResDate = array_key_exists('resolvedDate', $payload)
+        ? (!empty($payload['resolvedDate']) ? substr((string)$payload['resolvedDate'], 0, 10) : null)
+        : ($existing['resolved_date'] ?? null);
+    if (in_array($nextStatus, ['RESOLVED', 'CLOSED'], true) && empty($nextResDate)) {
+        $nextResDate = date('Y-m-d');
+    } elseif (!in_array($nextStatus, ['RESOLVED', 'CLOSED'], true) && !empty($payload['status'])) {
+        $nextResDate = null;
+    }
+
+    $nextRemarks = array_key_exists('technicianRemarks', $payload) ? (string)($payload['technicianRemarks'] ?? '') : $prevRemarks;
+    $nextRes = array_key_exists('resolutionDetails', $payload) ? (string)($payload['resolutionDetails'] ?? '') : $prevRes;
+    $nextNotes = array_key_exists('notes', $payload) ? (string)($payload['notes'] ?? '') : $prevNotes;
+
+    $actorId = trim((string)($actor['id'] ?? $actor['userId'] ?? ''));
+    $actorName = trim((string)($actor['name'] ?? $actor['email'] ?? 'Admin'));
+    $nowSql = date('Y-m-d H:i:s');
+
+    $pdo->prepare("
+        UPDATE `solar_service_tickets`
+        SET `assigned_technician_id` = ?,
+            `assigned_technician_name` = ?,
+            `status` = ?,
+            `priority` = ?,
+            `scheduled_date` = ?,
+            `resolved_date` = ?,
+            `notes` = ?,
+            `technician_remarks` = ?,
+            `resolution_details` = ?,
+            `assigned_at` = ?,
+            `assigned_by_user_id` = ?,
+            `assigned_by_name` = ?
+        WHERE `id` = ?
+    ")->execute([
+        $nextTechId,
+        $nextTechName,
+        $nextStatus,
+        $nextPriority,
+        $nextSched,
+        $nextResDate,
+        $nextNotes,
+        $nextRemarks,
+        $nextRes,
+        $techChanged ? ($nextTechId !== '' ? $nowSql : null) : ($existing['assigned_at'] ?? null),
+        $techChanged ? ($nextTechId !== '' ? $actorId : null) : ($existing['assigned_by_user_id'] ?? null),
+        $techChanged ? ($nextTechId !== '' ? $actorName : null) : ($existing['assigned_by_name'] ?? null),
+        $existing['id']
+    ]);
+
+    if ($techChanged) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'],
+            $nextTechId === '' ? 'TECHNICIAN_UNASSIGNED' : ($prevTech['assignedTechnicianId'] !== '' ? 'TECHNICIAN_REASSIGNED' : 'TECHNICIAN_ASSIGNED'),
+            $prevTech['assignedTechnicianName'] ?: 'Unassigned', $nextTechName ?: 'Unassigned',
+            null, $actor
+        );
+    }
+    if ($nextStatus !== $prevStatus) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'],
+            $nextStatus === 'RESOLVED' ? 'RESOLVED' : 'STATUS_UPDATED',
+            $prevStatus, $nextStatus, $nextRes ?: ($nextRemarks ?: null), $actor
+        );
+    }
+    if ($nextPriority !== $prevPriority) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'], 'PRIORITY_UPDATED',
+            $prevPriority, $nextPriority, null, $actor
+        );
+    }
+    if ($nextRemarks !== $prevRemarks || $nextRes !== $prevRes || $nextNotes !== $prevNotes) {
+        recordServiceTicketHistoryPhp(
+            $pdo, $existing['id'], $existing['ticket_id'], 'REMARKS_UPDATED',
+            $prevRemarks ?: ($prevRes ?: null),
+            trim(implode(' | ', array_filter([$nextRemarks, $nextRes]))) ?: $nextNotes,
+            null, $actor
+        );
+    }
+
+    return getServiceTicketDetailsPhp($pdo, $existing['id']);
 }
 
 // Helper: AMC Contracts
@@ -2735,7 +3355,7 @@ function saveItemToDb($pdo, $collection, $item, $actor = null) {
         case 'warehouses': return saveWarehouseToDb($pdo, $item);
         case 'stock_movements': return saveStockMovementToDb($pdo, $item);
         case 'stock_audits': return saveStockAuditToDb($pdo, $item);
-        case 'service_tickets': return saveServiceTicketToDb($pdo, $item);
+        case 'service_tickets': return saveServiceTicketToDb($pdo, $item, $actor);
         case 'amc_contracts': return saveAMCContractToDb($pdo, $item);
         case 'notifications': return saveNotificationToDb($pdo, $item);
         case 'users': return saveUserToDb($pdo, $item, false, $actor);
@@ -2782,6 +3402,11 @@ function deleteItemFromDb($pdo, $collection, $id, $actor = null) {
     if ($collection === 'projects') {
         $stmtS = $pdo->prepare('DELETE FROM `solar_project_stages` WHERE `project_id` = ?');
         $stmtS->execute([$id]);
+    }
+    if ($collection === 'service_tickets') {
+        try {
+            $pdo->prepare('DELETE FROM `solar_service_ticket_history` WHERE `ticket_record_id` = ?')->execute([$id]);
+        } catch (Exception $e) {}
     }
     if ($collection === 'employees' || $collection === 'users') {
         $targetEmail = '';
@@ -5736,6 +6361,28 @@ if ($method === 'POST' && in_array($cleanPath, ['/sync/push', '/sync/push/'])) {
         }
     }
 
+    // Enforce Admin-only updates on existing service tickets or technician assignments via /sync/push
+    if (in_array($normCol, ['service_tickets', 'solar_service_tickets'], true) && is_array($item)) {
+        $isActorAdmin = in_array(strtoupper(trim((string)$actorRole)), ['ADMIN', 'SUPER ADMIN'], true);
+        if (!$isActorAdmin) {
+            if ($action === 'delete') {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden: Only Administrators can delete service tickets.']);
+                exit;
+            }
+            $existingTk = !empty($item['id']) ? getServiceTicketRowPhp($pdo, $item['id']) : null;
+            if ($existingTk) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden: Only Administrators can modify service ticket status, priority, or technician assignment.']);
+                exit;
+            }
+            $item['status'] = 'OPEN';
+            $item['assignedTechnicianId'] = '';
+            $item['assignedTechnicianName'] = '';
+            $item['assignedToName'] = 'Unassigned';
+        }
+    }
+
     // For singleton stores like settings and acl_config
     if (!$item && ($collection === 'settings' || $collection === 'acl_config')) {
         $item = $items ?? ($body['settings'] ?? ($body['config'] ?? $body));
@@ -6531,33 +7178,17 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
     try {
         $stmt = $pdo->query('SELECT * FROM `solar_service_tickets` ORDER BY `created_at` DESC');
         $rows = $stmt->fetchAll();
-        $data['service_tickets'] = array_map(function ($r) {
-            return [
-                'id' => $r['id'],
-                'ticketId' => $r['ticket_id'],
-                'ticketNumber' => $r['ticket_id'],
-                'customerId' => $r['customer_id'],
-                'customerName' => $r['customer_name'],
-                'projectId' => $r['project_id'],
-                'projectTitle' => $r['project_title'],
-                'projectCode' => $r['project_title'],
-                'title' => $r['issue'],
-                'issue' => $r['issue'],
-                'description' => $r['issue'],
-                'category' => $r['category'] ?? 'Inverter Warning',
-                'priority' => $r['priority'] ?? 'MEDIUM',
-                'status' => $r['status'] ?? 'OPEN',
-                'assignedTechnicianId' => $r['assigned_technician_id'] ?? '',
-                'assignedTechnicianName' => $r['assigned_technician_name'] ?? '',
-                'assignedEngineerId' => $r['assigned_technician_id'] ?? '',
-                'assignedEngineerName' => $r['assigned_technician_name'] ?? '',
-                'scheduledDate' => $r['scheduled_date'],
-                'createdDate' => $r['scheduled_date'] ?? $r['created_at'],
-                'resolvedDate' => $r['resolved_date'],
-                'notes' => $r['notes'] ?? '',
-                'photos' => json_decode($r['photos_json'] ?? '[]', true) ?: [],
-                'createdAt' => $r['created_at']
-            ];
+        $historyByTicket = [];
+        try {
+            $hStmt = $pdo->query('SELECT * FROM `solar_service_ticket_history` ORDER BY `created_at` DESC, `id` DESC');
+            foreach (($hStmt ? $hStmt->fetchAll(PDO::FETCH_ASSOC) : []) as $h) {
+                $k = (string)($h['ticket_record_id'] ?? '');
+                if (!isset($historyByTicket[$k])) $historyByTicket[$k] = [];
+                $historyByTicket[$k][] = mapTicketHistoryRowPhp($h);
+            }
+        } catch (Exception $e) {}
+        $data['service_tickets'] = array_map(function ($r) use ($historyByTicket) {
+            return mapServiceTicketRowPhp($r, $historyByTicket[$r['id']] ?? []);
         }, $rows ?: []);
     } catch (Exception $e) { $bootstrapErrors[] = 'service_tickets: ' . $e->getMessage(); }
 
@@ -7409,6 +8040,192 @@ if (preg_match('#^/quotations/([^/]+)/?$#', $cleanPath, $matches)) {
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Quotation deleted from MySQL.']);
         exit;
+    }
+}
+
+// ==========================================================
+// SERVICE & AMC TICKETING REST ENDPOINTS (ADMIN AUTHORIZED)
+// ==========================================================
+
+// GET /api/service-tickets/technicians (Admin Only - Active Eligible Field Workers/Technicians)
+if ($method === 'GET' && in_array($cleanPath, ['/service-tickets/technicians', '/service-tickets/technicians/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    requireAdminUserPhp($pdo);
+    $techs = getEligibleServiceTechniciansPhp($pdo);
+    http_response_code(200);
+    echo json_encode(['success' => true, 'count' => count($techs), 'data' => $techs]);
+    exit;
+}
+
+// GET|POST /api/service-tickets
+if (in_array($cleanPath, ['/service-tickets', '/service-tickets/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    $isCust = (strtoupper((string)($actor['accountType'] ?? '')) === 'CUSTOMER') || in_array(strtolower((string)($actor['role'] ?? '')), ['customer', 'client'], true);
+    $isActorAdmin = in_array(strtoupper(trim((string)($actor['role'] ?? ''))), ['ADMIN', 'SUPER ADMIN'], true);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_service_tickets` ORDER BY `created_at` DESC');
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $historyByTicket = [];
+        try {
+            $hStmt = $pdo->query('SELECT * FROM `solar_service_ticket_history` ORDER BY `created_at` DESC, `id` DESC');
+            foreach (($hStmt ? $hStmt->fetchAll(PDO::FETCH_ASSOC) : []) as $h) {
+                $k = (string)($h['ticket_record_id'] ?? '');
+                if (!isset($historyByTicket[$k])) $historyByTicket[$k] = [];
+                $historyByTicket[$k][] = mapTicketHistoryRowPhp($h);
+            }
+        } catch (Exception $e) {}
+
+        $items = array_map(function ($r) use ($historyByTicket) {
+            return mapServiceTicketRowPhp($r, $historyByTicket[$r['id']] ?? []);
+        }, $rows);
+
+        if ($isCust) {
+            $custId = trim((string)($actor['customerId'] ?? $actor['linkedEntityId'] ?? ''));
+            $custName = strtolower(trim((string)($actor['name'] ?? '')));
+            $items = array_values(array_filter($items, function ($t) use ($custId, $custName) {
+                return ($custId !== '' && $t['customerId'] === $custId) || ($custName !== '' && strtolower(trim((string)$t['customerName'])) === $custName);
+            }));
+        }
+
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $tk = $body;
+        if (empty($tk['id'])) $tk['id'] = 'srv-' . round(microtime(true) * 1000);
+        if (!$isActorAdmin) {
+            $tk['status'] = 'OPEN';
+            $tk['assignedTechnicianId'] = '';
+            $tk['assignedTechnicianName'] = '';
+            $tk['assignedToName'] = 'Unassigned';
+            if ($isCust && !empty($actor['customerId'] ?? $actor['linkedEntityId'] ?? '')) {
+                $tk['customerId'] = $actor['customerId'] ?? $actor['linkedEntityId'];
+                $tk['customerName'] = $tk['customerName'] ?? ($actor['name'] ?? 'Customer');
+            }
+        } elseif (!empty($tk['assignedTechnicianId'])) {
+            $eligible = getEligibleServiceTechniciansPhp($pdo);
+            $matched = null;
+            foreach ($eligible as $t) {
+                if (strcasecmp($t['id'], (string)$tk['assignedTechnicianId']) === 0) {
+                    $matched = $t;
+                    break;
+                }
+            }
+            if (!$matched) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Selected technician is not an active eligible Field Worker / Technician.']);
+                exit;
+            }
+            $tk['assignedTechnicianId'] = $matched['id'];
+            $tk['assignedTechnicianName'] = $matched['name'];
+            if (empty($tk['status']) || $tk['status'] === 'OPEN') {
+                $tk['status'] = 'ASSIGNED';
+            }
+        }
+        $saved = saveServiceTicketToDb($pdo, $tk, $actor);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST /api/service-tickets/{id}/assign (Admin Only)
+if (in_array($method, ['PUT', 'POST'], true) && preg_match('#^/service-tickets/([^/]+)/assign/?$#', $cleanPath, $matches)) {
+    $tktId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminUserPhp($pdo);
+    try {
+        $updated = assignServiceTicketTechnicianPhp($pdo, $tktId, $body, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $updated, 'message' => 'Technician assignment updated in MySQL.']);
+        exit;
+    } catch (Exception $e) {
+        $code = $e->getCode();
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// PUT|PATCH /api/service-tickets/{id}/admin-update (Admin Only)
+if (in_array($method, ['PUT', 'PATCH'], true) && preg_match('#^/service-tickets/([^/]+)/admin-update/?$#', $cleanPath, $matches)) {
+    $tktId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminUserPhp($pdo);
+    try {
+        $updated = adminUpdateServiceTicketPhp($pdo, $tktId, $body, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $updated, 'message' => 'Service ticket updated in MySQL.']);
+        exit;
+    } catch (Exception $e) {
+        $code = $e->getCode();
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// GET /api/service-tickets/{id}/details or GET|PUT|DELETE /api/service-tickets/{id}
+if (preg_match('#^/service-tickets/([^/]+)(?:/details)?/?$#', $cleanPath, $matches)) {
+    $tktId = urldecode($matches[1]);
+    if (!in_array($tktId, ['import', 'technicians'], true)) {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+
+        if ($method === 'GET') {
+            $actor = requireAuthUserPhp($pdo);
+            $details = getServiceTicketDetailsPhp($pdo, $tktId);
+            if (!$details) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Service ticket not found.']);
+                exit;
+            }
+            $isCust = (strtoupper((string)($actor['accountType'] ?? '')) === 'CUSTOMER') || in_array(strtolower((string)($actor['role'] ?? '')), ['customer', 'client'], true);
+            if ($isCust) {
+                $custId = trim((string)($actor['customerId'] ?? $actor['linkedEntityId'] ?? ''));
+                $custName = strtolower(trim((string)($actor['name'] ?? '')));
+                $owns = ($custId !== '' && $details['customerId'] === $custId) || ($custName !== '' && strtolower(trim((string)$details['customerName'])) === $custName);
+                if (!$owns) {
+                    http_response_code(403);
+                    echo json_encode(['success' => false, 'message' => 'Access denied: You can only view your own service tickets.']);
+                    exit;
+                }
+            }
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $details]);
+            exit;
+        }
+
+        if ($method === 'PUT') {
+            $actor = requireAdminUserPhp($pdo);
+            try {
+                $updated = adminUpdateServiceTicketPhp($pdo, $tktId, $body, $actor);
+                http_response_code(200);
+                echo json_encode(['success' => true, 'data' => $updated, 'message' => 'Service ticket updated in MySQL.']);
+                exit;
+            } catch (Exception $e) {
+                $code = $e->getCode();
+                http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+                echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+                exit;
+            }
+        }
+
+        if ($method === 'DELETE') {
+            $actor = requireAdminUserPhp($pdo);
+            deleteItemFromDb($pdo, 'service_tickets', $tktId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Service ticket deleted from MySQL.']);
+            exit;
+        }
     }
 }
 

@@ -484,6 +484,50 @@ class MySqlDatabaseManager {
         console.warn('[MySQL Migration] Notice creating solar_email_settings table:', err.message);
       }
 
+      // Ensure persistent solar_service_tickets extended columns & solar_service_ticket_history table exist
+      try {
+        const [tkCols]: any = await this.pool.query("SHOW COLUMNS FROM `solar_service_tickets`");
+        const existingTkCols = new Set<string>((tkCols as any[]).map(c => String(c.Field).toLowerCase()));
+        if (!existingTkCols.has('technician_remarks')) {
+          await this.pool.query("ALTER TABLE `solar_service_tickets` ADD COLUMN `technician_remarks` TEXT DEFAULT NULL AFTER `notes`").catch(() => {});
+        }
+        if (!existingTkCols.has('resolution_details')) {
+          await this.pool.query("ALTER TABLE `solar_service_tickets` ADD COLUMN `resolution_details` TEXT DEFAULT NULL AFTER `technician_remarks`").catch(() => {});
+        }
+        if (!existingTkCols.has('assigned_at')) {
+          await this.pool.query("ALTER TABLE `solar_service_tickets` ADD COLUMN `assigned_at` DATETIME DEFAULT NULL AFTER `resolution_details`").catch(() => {});
+        }
+        if (!existingTkCols.has('assigned_by_user_id')) {
+          await this.pool.query("ALTER TABLE `solar_service_tickets` ADD COLUMN `assigned_by_user_id` VARCHAR(64) DEFAULT NULL AFTER `assigned_at`").catch(() => {});
+        }
+        if (!existingTkCols.has('assigned_by_name')) {
+          await this.pool.query("ALTER TABLE `solar_service_tickets` ADD COLUMN `assigned_by_name` VARCHAR(255) DEFAULT NULL AFTER `assigned_by_user_id`").catch(() => {});
+        }
+        if (!existingTkCols.has('updated_at')) {
+          await this.pool.query("ALTER TABLE `solar_service_tickets` ADD COLUMN `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`").catch(() => {});
+        }
+
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_service_ticket_history\` (
+            \`id\` VARCHAR(64) PRIMARY KEY,
+            \`ticket_record_id\` VARCHAR(64) NOT NULL,
+            \`ticket_code\` VARCHAR(64) DEFAULT '',
+            \`action_type\` VARCHAR(64) NOT NULL,
+            \`previous_value\` TEXT DEFAULT NULL,
+            \`new_value\` TEXT DEFAULT NULL,
+            \`remarks\` TEXT DEFAULT NULL,
+            \`actor_user_id\` VARCHAR(64) DEFAULT '',
+            \`actor_name\` VARCHAR(255) DEFAULT '',
+            \`actor_role\` VARCHAR(64) DEFAULT '',
+            \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX \`idx_srv_hist_ticket\` (\`ticket_record_id\`),
+            INDEX \`idx_srv_hist_created\` (\`created_at\`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+      } catch (err: any) {
+        console.warn('[MySQL Migration] Notice ensuring solar_service_tickets / history schema:', err.message);
+      }
+
       await this.ensureHashedPasswords();
       await authService.initAuthSchema(this.pool);
     } catch (err: any) {
@@ -5810,64 +5854,439 @@ class MySqlDatabaseManager {
   // CRUD: SERVICE TICKETS
   // ==========================================================
   // ==========================================================
-  // CRUD: SERVICE TICKETS
+  // CRUD: SERVICE TICKETS (WITH ADMIN ASSIGNMENT & AUDIT HISTORY)
   // ==========================================================
+  private normalizeTicketTechnician(techIdRaw?: any, techNameRaw?: any): {
+    assignedTechnicianId: string;
+    assignedTechnicianName: string;
+    assignmentStatus: 'ASSIGNED' | 'UNASSIGNED';
+  } {
+    const cleanId = String(techIdRaw || '').trim();
+    const cleanName = String(techNameRaw || '').trim();
+    const isPlaceholderName =
+      !cleanName ||
+      cleanName.toLowerCase() === 'unassigned' ||
+      cleanName.toLowerCase() === 'to be assigned';
+    if (!cleanId && isPlaceholderName) {
+      return {
+        assignedTechnicianId: '',
+        assignedTechnicianName: '',
+        assignmentStatus: 'UNASSIGNED'
+      };
+    }
+    return {
+      assignedTechnicianId: cleanId,
+      assignedTechnicianName: isPlaceholderName ? '' : cleanName,
+      assignmentStatus: cleanId || !isPlaceholderName ? 'ASSIGNED' : 'UNASSIGNED'
+    };
+  }
+
+  private mapServiceTicketRow(r: any, historyRows: any[] = []): any {
+    const tech = this.normalizeTicketTechnician(r.assigned_technician_id, r.assigned_technician_name);
+    let photos: any[] = [];
+    if (r.photos_json) {
+      try {
+        const parsed = JSON.parse(r.photos_json);
+        photos = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        photos = [];
+      }
+    }
+    return {
+      id: r.id,
+      ticketId: r.ticket_id,
+      ticketNumber: r.ticket_id,
+      customerId: r.customer_id || '',
+      customerName: r.customer_name || '',
+      projectId: r.project_id || '',
+      projectTitle: r.project_title || '',
+      projectCode: r.project_title || '',
+      title: r.issue,
+      issue: r.issue,
+      description: r.issue,
+      category: r.category || 'Inverter Warning',
+      priority: r.priority || 'MEDIUM',
+      status: r.status || 'OPEN',
+      assignedTechnicianId: tech.assignedTechnicianId,
+      assignedTechnicianName: tech.assignedTechnicianName,
+      assignedToName: tech.assignedTechnicianName || 'Unassigned',
+      assignedEngineerId: tech.assignedTechnicianId,
+      assignedEngineerName: tech.assignedTechnicianName,
+      assignmentStatus: tech.assignmentStatus,
+      scheduledDate: r.scheduled_date || null,
+      visitScheduledDate: r.scheduled_date || null,
+      createdDate: r.scheduled_date || r.created_at,
+      resolvedDate: r.resolved_date || null,
+      notes: r.notes || '',
+      technicianRemarks: r.technician_remarks || '',
+      resolutionDetails: r.resolution_details || '',
+      assignedAt: r.assigned_at || null,
+      assignedByUserId: r.assigned_by_user_id || null,
+      assignedByName: r.assigned_by_name || null,
+      photos,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at || r.created_at,
+      activityHistory: historyRows
+    };
+  }
+
+  private mapTicketHistoryRow(h: any): any {
+    return {
+      id: h.id,
+      ticketRecordId: h.ticket_record_id,
+      ticketCode: h.ticket_code || '',
+      actionType: h.action_type,
+      previousValue: h.previous_value ?? null,
+      newValue: h.new_value ?? null,
+      remarks: h.remarks ?? null,
+      actorUserId: h.actor_user_id || '',
+      actorName: h.actor_name || 'System',
+      actorRole: h.actor_role || '',
+      createdAt: h.created_at
+    };
+  }
+
+  public async recordServiceTicketHistory(entry: {
+    ticketRecordId: string;
+    ticketCode?: string;
+    actionType: string;
+    previousValue?: string | null;
+    newValue?: string | null;
+    remarks?: string | null;
+    actor?: any;
+  }): Promise<any> {
+    this.assertDbConnected();
+    const id = `srvhist-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const actorId = String(entry.actor?.id || entry.actor?.userId || '').trim();
+    const actorName = String(entry.actor?.name || entry.actor?.email || 'System').trim();
+    const actorRole = String(entry.actor?.role || '').trim();
+    await this.pool!.query(
+      `INSERT INTO \`solar_service_ticket_history\`
+       (\`id\`, \`ticket_record_id\`, \`ticket_code\`, \`action_type\`, \`previous_value\`, \`new_value\`, \`remarks\`, \`actor_user_id\`, \`actor_name\`, \`actor_role\`)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        entry.ticketRecordId,
+        entry.ticketCode || '',
+        entry.actionType,
+        entry.previousValue ?? null,
+        entry.newValue ?? null,
+        entry.remarks ?? null,
+        actorId,
+        actorName,
+        actorRole
+      ]
+    );
+    return {
+      id,
+      ticketRecordId: entry.ticketRecordId,
+      ticketCode: entry.ticketCode || '',
+      actionType: entry.actionType,
+      previousValue: entry.previousValue ?? null,
+      newValue: entry.newValue ?? null,
+      remarks: entry.remarks ?? null,
+      actorUserId: actorId,
+      actorName,
+      actorRole,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  public async getServiceTicketHistory(ticketRecordId: string): Promise<any[]> {
+    this.assertDbConnected();
+    const [rows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_service_ticket_history` WHERE `ticket_record_id` = ? ORDER BY `created_at` DESC, `id` DESC',
+      [ticketRecordId]
+    );
+    return (rows || []).map((h: any) => this.mapTicketHistoryRow(h));
+  }
+
+  public async getEligibleServiceTechnicians(): Promise<any[]> {
+    this.assertDbConnected();
+    const seenIds = new Set<string>();
+    const seenEmails = new Set<string>();
+    const results: any[] = [];
+
+    const addIfEligible = (rec: {
+      id: string;
+      employeeCode: string;
+      name: string;
+      email: string;
+      role: string;
+      department: string;
+      designation: string;
+      phone: string;
+      isFieldWorker: boolean;
+      active: boolean;
+    }) => {
+      if (!rec.active) return;
+      if (!this.isEligibleFieldWorkerRole(rec.role, rec.isFieldWorker, rec.department)) return;
+      const idKey = rec.id.trim().toLowerCase();
+      const emailKey = rec.email.trim().toLowerCase();
+      if (!idKey) return;
+      if (seenIds.has(idKey) || (emailKey && seenEmails.has(emailKey))) return;
+      seenIds.add(idKey);
+      if (emailKey) seenEmails.add(emailKey);
+      results.push({
+        id: rec.id,
+        employeeCode: rec.employeeCode || rec.id,
+        name: rec.name,
+        email: rec.email,
+        phone: rec.phone,
+        role: rec.role,
+        department: rec.department,
+        designation: rec.designation || rec.role,
+        isFieldWorker: true,
+        status: 'ACTIVE'
+      });
+    };
+
+    for (const table of ['solar_employees', 'solar_employee']) {
+      try {
+        const [empRows]: any = await this.pool!.query(`SELECT * FROM \`${table}\` ORDER BY \`name\` ASC`);
+        if (Array.isArray(empRows)) {
+          for (const e of empRows) {
+            const status = String(e.status || 'ACTIVE').toUpperCase();
+            const acctStatus = String(e.account_status || 'ACTIVE').toUpperCase();
+            const role = String(e.system_role || e.assigned_role || e.designation || 'Technician');
+            const active =
+              status !== 'DISABLED' &&
+              status !== 'INACTIVE' &&
+              status !== 'TERMINATED' &&
+              acctStatus !== 'DISABLED' &&
+              role.toLowerCase() !== 'customer';
+            addIfEligible({
+              id: String(e.id || ''),
+              employeeCode: String(e.employee_code || e.id || ''),
+              name: String(e.name || 'Technician'),
+              email: String(e.email || '').trim().toLowerCase(),
+              role,
+              department: String(e.department || 'Service'),
+              designation: String(e.designation || role),
+              phone: String(e.phone || ''),
+              isFieldWorker: Boolean(e.is_field_worker),
+              active
+            });
+          }
+        }
+        if (empRows && empRows.length > 0) break;
+      } catch {
+        // Fallback to solar_employee if needed
+      }
+    }
+
+    try {
+      const [userRows]: any = await this.pool!.query('SELECT * FROM `solar_users` ORDER BY `name` ASC');
+      if (Array.isArray(userRows)) {
+        for (const u of userRows) {
+          const status = String(u.status || 'ACTIVE').toUpperCase();
+          const role = String(u.role || 'Staff');
+          const active =
+            status !== 'DISABLED' &&
+            status !== 'INACTIVE' &&
+            role.toLowerCase() !== 'customer';
+          addIfEligible({
+            id: String(u.id || ''),
+            employeeCode: String(u.employee_id || u.id || ''),
+            name: String(u.name || 'Technician'),
+            email: String(u.email || '').trim().toLowerCase(),
+            role,
+            department: String(u.department || 'Service'),
+            designation: String(u.designation || role),
+            phone: String(u.phone || ''),
+            isFieldWorker: Boolean(u.is_field_worker),
+            active
+          });
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    results.sort((a, b) => a.name.localeCompare(b.name));
+    return results;
+  }
+
   public async getServiceTickets(): Promise<any[]> {
     if (!this.isConnected) return this.getFallbackItems('service_tickets');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_service_tickets` ORDER BY `created_at` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      ticketId: r.ticket_id,
-      ticketNumber: r.ticket_id,
-      customerId: r.customer_id,
-      customerName: r.customer_name,
-      projectId: r.project_id,
-      projectTitle: r.project_title,
-      projectCode: r.project_title,
-      title: r.issue,
-      issue: r.issue,
-      description: r.issue,
-      category: r.category,
-      priority: r.priority,
-      status: r.status,
-      assignedTechnicianId: r.assigned_technician_id,
-      assignedTechnicianName: r.assigned_technician_name,
-      assignedEngineerId: r.assigned_technician_id,
-      assignedEngineerName: r.assigned_technician_name,
-      scheduledDate: r.scheduled_date,
-      createdDate: r.scheduled_date || r.created_at,
-      resolvedDate: r.resolved_date,
-      notes: r.notes,
-      photos: r.photos_json ? JSON.parse(r.photos_json) : [],
-      createdAt: r.created_at
-    }));
+    const historyByTicket = new Map<string, any[]>();
+    try {
+      const [hRows]: any = await this.pool!.query(
+        'SELECT * FROM `solar_service_ticket_history` ORDER BY `created_at` DESC, `id` DESC'
+      );
+      for (const h of hRows || []) {
+        const key = String(h.ticket_record_id || '');
+        if (!historyByTicket.has(key)) historyByTicket.set(key, []);
+        historyByTicket.get(key)!.push(this.mapTicketHistoryRow(h));
+      }
+    } catch {
+      // History table optional if unmigrated
+    }
+    const mapped = (rows as any[]).map(r => this.mapServiceTicketRow(r, historyByTicket.get(r.id) || []));
     this.setFallbackItems('service_tickets', mapped);
     return mapped;
   }
 
-  public async saveServiceTicket(item: any): Promise<any> {
+  public async getServiceTicketRowByIdOrCode(idOrCode: string): Promise<any | null> {
+    this.assertDbConnected();
+    const clean = String(idOrCode || '').trim();
+    if (!clean) return null;
+    const [rows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_service_tickets` WHERE `id` = ? OR `ticket_id` = ? LIMIT 1',
+      [clean, clean]
+    );
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  }
+
+  public async getServiceTicketDetails(idOrCode: string): Promise<any | null> {
+    this.assertDbConnected();
+    const row = await this.getServiceTicketRowByIdOrCode(idOrCode);
+    if (!row) return null;
+    const history = await this.getServiceTicketHistory(row.id);
+    const ticket = this.mapServiceTicketRow(row, history);
+
+    // Resolve Customer contact details from MySQL
+    let customer: any = null;
+    try {
+      if (row.customer_id) {
+        const [cRows]: any = await this.pool!.query('SELECT * FROM `solar_customers` WHERE `id` = ? LIMIT 1', [row.customer_id]);
+        if (cRows?.length) customer = cRows[0];
+      }
+      if (!customer && row.customer_name) {
+        const [cRows]: any = await this.pool!.query('SELECT * FROM `solar_customers` WHERE LOWER(`name`) = LOWER(?) LIMIT 1', [row.customer_name]);
+        if (cRows?.length) customer = cRows[0];
+      }
+    } catch {}
+
+    // Resolve Project / Site details from MySQL
+    let project: any = null;
+    try {
+      if (row.project_id) {
+        const [pRows]: any = await this.pool!.query('SELECT * FROM `solar_projects` WHERE `id` = ? OR `project_code` = ? LIMIT 1', [row.project_id, row.project_id]);
+        if (pRows?.length) project = pRows[0];
+      }
+      if (!project && (customer?.active_project_id || customer?.id)) {
+        const [pRows]: any = await this.pool!.query(
+          'SELECT * FROM `solar_projects` WHERE `id` = ? OR `customer_id` = ? ORDER BY `created_at` DESC LIMIT 1',
+          [customer?.active_project_id || '', customer?.id || '']
+        );
+        if (pRows?.length) project = pRows[0];
+      }
+    } catch {}
+
+    // Resolve AMC / Warranty contracts from MySQL
+    let amcContract: any = null;
+    try {
+      const targetProjId = project?.id || row.project_id || '';
+      const targetCustId = customer?.id || row.customer_id || '';
+      if (targetProjId || targetCustId) {
+        const [aRows]: any = await this.pool!.query(
+          'SELECT * FROM `solar_amc_contracts` WHERE (`project_id` = ? AND ? != "") OR (`customer_id` = ? AND ? != "") ORDER BY `end_date` DESC LIMIT 1',
+          [targetProjId, targetProjId, targetCustId, targetCustId]
+        );
+        if (aRows?.length) amcContract = aRows[0];
+      }
+    } catch {}
+
+    // Resolve Assigned Technician profile from MySQL
+    let assignedTechnician: any = null;
+    if (ticket.assignedTechnicianId) {
+      try {
+        const [eRows]: any = await this.pool!.query(
+          'SELECT `id`, `employee_code`, `name`, `email`, `phone`, `department`, `designation`, `system_role`, `status` FROM `solar_employees` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 1',
+          [ticket.assignedTechnicianId, ticket.assignedTechnicianId, ticket.assignedTechnicianId]
+        );
+        if (eRows?.length) {
+          const e = eRows[0];
+          assignedTechnician = {
+            id: e.id,
+            employeeCode: e.employee_code || e.id,
+            name: e.name,
+            email: e.email || '',
+            phone: e.phone || '',
+            department: e.department || 'Service',
+            designation: e.designation || e.system_role || 'Technician',
+            role: e.system_role || 'Technician',
+            status: e.status || 'ACTIVE'
+          };
+        }
+      } catch {}
+    }
+
+    return {
+      ...ticket,
+      customerDetails: customer
+        ? {
+            id: customer.id,
+            customerCode: customer.customer_code,
+            name: customer.name,
+            companyName: customer.company_name || '',
+            phone: customer.phone || '',
+            email: customer.email || '',
+            siteAddress: customer.site_address || '',
+            city: customer.city || '',
+            state: customer.state || '',
+            pincode: customer.pincode || '',
+            electricityConsumerNo: customer.electricity_consumer_no || '',
+            sanctionedLoadKw: Number(customer.sanctioned_load_kw || 0)
+          }
+        : null,
+      projectDetails: project
+        ? {
+            id: project.id,
+            projectCode: project.project_code,
+            title: project.title,
+            capacityKw: Number(project.capacity_kw || 0),
+            status: project.status,
+            currentStageKey: project.current_stage_key || '',
+            completionPercentage: Number(project.completion_percentage || 0),
+            startDate: project.start_date || null,
+            targetCompletionDate: project.target_completion_date || null,
+            siteAddress: customer?.site_address || ''
+          }
+        : null,
+      amcDetails: amcContract
+        ? {
+            id: amcContract.id,
+            amcCode: amcContract.amc_code,
+            planName: amcContract.plan_name,
+            startDate: amcContract.start_date,
+            endDate: amcContract.end_date,
+            renewalDate: amcContract.renewal_date,
+            annualAmount: Number(amcContract.annual_amount || 0),
+            visitsCompleted: Number(amcContract.visits_completed || 0),
+            totalVisits: Number(amcContract.total_visits || 4),
+            status: amcContract.status
+          }
+        : null,
+      assignedTechnicianDetails: assignedTechnician
+    };
+  }
+
+  public async saveServiceTicket(item: any, actor?: any): Promise<any> {
     this.assertDbConnected();
     const existing = await this.getExistingRow('solar_service_tickets', item.id);
     const ticketId = item.ticketId ?? item.ticket_id ?? item.ticketNumber ?? item.ticket_number ?? existing?.ticket_id ?? item.id;
-    const ticketNumber = item.ticketNumber ?? item.ticket_number ?? ticketId;
     const customerId = item.customerId ?? item.customer_id ?? existing?.customer_id ?? '';
     const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? 'Solar Customer';
     const projectId = item.projectId ?? item.project_id ?? existing?.project_id ?? '';
     const projectTitle = item.projectTitle ?? item.project_title ?? item.projectCode ?? existing?.project_title ?? 'Solar Project Installation';
     const issue = item.issue ?? item.title ?? item.description ?? existing?.issue ?? 'Service Ticket Alert';
-    const title = item.title ?? item.issue ?? existing?.title ?? 'Service Ticket Alert';
-    const description = item.description ?? item.notes ?? item.issue ?? existing?.description ?? '';
     const category = item.category ?? existing?.category ?? 'Inverter Warning';
     const priority = item.priority ?? existing?.priority ?? 'MEDIUM';
-    const assignedTechnicianId = item.assignedTechnicianId ?? item.assignedEngineerId ?? existing?.assigned_technician_id ?? '';
-    const assignedTechnicianName = item.assignedTechnicianName ?? item.assignedEngineerName ?? existing?.assigned_technician_name ?? '';
+    const rawTechId = item.assignedTechnicianId ?? item.assignedEngineerId ?? existing?.assigned_technician_id ?? '';
+    const rawTechName = item.assignedTechnicianName ?? item.assignedEngineerName ?? existing?.assigned_technician_name ?? '';
+    const normTech = this.normalizeTicketTechnician(rawTechId, rawTechName);
     const status = item.status ?? existing?.status ?? 'OPEN';
-    const rawSched = item.scheduledDate ?? item.createdDate ?? existing?.scheduled_date;
+    const rawSched = item.scheduledDate ?? item.visitScheduledDate ?? item.createdDate ?? existing?.scheduled_date;
     const scheduledDate = this.toSqlDate(rawSched);
     const rawResolved = item.resolvedDate ?? existing?.resolved_date;
     const resolvedDate = this.toSqlDate(rawResolved);
     const notes = item.notes ?? existing?.notes ?? '';
+    const technicianRemarks = item.technicianRemarks ?? item.technician_remarks ?? existing?.technician_remarks ?? '';
+    const resolutionDetails = item.resolutionDetails ?? item.resolution_details ?? existing?.resolution_details ?? '';
     const rawPhotos = item.photos ?? (existing?.photos_json ? JSON.parse(existing.photos_json) : []);
     const photosJson = typeof rawPhotos === 'string' ? rawPhotos : JSON.stringify(rawPhotos);
 
@@ -5876,16 +6295,25 @@ class MySqlDatabaseManager {
         \`id\`, \`ticket_id\`, \`customer_id\`, \`customer_name\`, \`project_id\`,
         \`project_title\`, \`issue\`, \`category\`, \`priority\`,
         \`assigned_technician_id\`, \`assigned_technician_name\`, \`status\`,
-        \`scheduled_date\`, \`resolved_date\`, \`notes\`, \`photos_json\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`scheduled_date\`, \`resolved_date\`, \`notes\`, \`technician_remarks\`, \`resolution_details\`, \`photos_json\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        \`customer_name\` = VALUES(\`customer_name\`), \`project_title\` = VALUES(\`project_title\`),
-        \`issue\` = VALUES(\`issue\`), \`category\` = VALUES(\`category\`),
-        \`priority\` = VALUES(\`priority\`), \`status\` = VALUES(\`status\`),
+        \`customer_id\` = VALUES(\`customer_id\`),
+        \`customer_name\` = VALUES(\`customer_name\`),
+        \`project_id\` = VALUES(\`project_id\`),
+        \`project_title\` = VALUES(\`project_title\`),
+        \`issue\` = VALUES(\`issue\`),
+        \`category\` = VALUES(\`category\`),
+        \`priority\` = VALUES(\`priority\`),
+        \`status\` = VALUES(\`status\`),
         \`assigned_technician_id\` = VALUES(\`assigned_technician_id\`),
         \`assigned_technician_name\` = VALUES(\`assigned_technician_name\`),
-        \`scheduled_date\` = VALUES(\`scheduled_date\`), \`resolved_date\` = VALUES(\`resolved_date\`),
-        \`notes\` = VALUES(\`notes\`), \`photos_json\` = VALUES(\`photos_json\`)
+        \`scheduled_date\` = VALUES(\`scheduled_date\`),
+        \`resolved_date\` = VALUES(\`resolved_date\`),
+        \`notes\` = VALUES(\`notes\`),
+        \`technician_remarks\` = VALUES(\`technician_remarks\`),
+        \`resolution_details\` = VALUES(\`resolution_details\`),
+        \`photos_json\` = VALUES(\`photos_json\`)
     `;
     await this.pool!.query(sql, [
       item.id,
@@ -5897,25 +6325,365 @@ class MySqlDatabaseManager {
       issue,
       category,
       priority,
-      assignedTechnicianId,
-      assignedTechnicianName,
+      normTech.assignedTechnicianId,
+      normTech.assignedTechnicianName,
       status,
       scheduledDate,
       resolvedDate,
       notes,
+      technicianRemarks,
+      resolutionDetails,
       photosJson
     ]);
 
+    if (!existing) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: item.id,
+        ticketCode: ticketId,
+        actionType: 'CREATED',
+        previousValue: null,
+        newValue: `Status: ${status} | Priority: ${priority}`,
+        remarks: issue,
+        actor
+      }).catch(() => {});
+    }
+
+    const updated = await this.getServiceTicketRowByIdOrCode(item.id);
+    const history = updated ? await this.getServiceTicketHistory(updated.id) : [];
+    const mapped = updated ? this.mapServiceTicketRow(updated, history) : item;
+
     const items = this.getFallbackItems('service_tickets');
-    const idx = items.findIndex(t => t.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(t => t.id === mapped.id);
+    if (idx >= 0) items[idx] = mapped;
+    else items.unshift(mapped);
     this.setFallbackItems('service_tickets', items);
-    return item;
+    return mapped;
+  }
+
+  public async assignServiceTicketTechnician(
+    ticketIdOrRecordId: string,
+    payload: { technicianId?: string | null; scheduledDate?: string | null; remarks?: string | null },
+    actor: any
+  ): Promise<any> {
+    this.assertDbConnected();
+    const existing = await this.getServiceTicketRowByIdOrCode(ticketIdOrRecordId);
+    if (!existing) {
+      const err: any = new Error('Service ticket not found in MySQL.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const requestedTechId = String(payload.technicianId ?? '').trim();
+    const prevTech = this.normalizeTicketTechnician(existing.assigned_technician_id, existing.assigned_technician_name);
+    let nextTechId = '';
+    let nextTechName = '';
+
+    if (requestedTechId) {
+      const eligible = await this.getEligibleServiceTechnicians();
+      const matched = eligible.find(
+        t =>
+          t.id.toLowerCase() === requestedTechId.toLowerCase() ||
+          t.employeeCode.toLowerCase() === requestedTechId.toLowerCase()
+      );
+      if (!matched) {
+        const err: any = new Error('Selected technician is not an active eligible Field Worker / Technician in MySQL.');
+        err.statusCode = 400;
+        throw err;
+      }
+      nextTechId = matched.id;
+      nextTechName = matched.name;
+    }
+
+    const prevStatus = String(existing.status || 'OPEN');
+    let nextStatus = prevStatus;
+    if (nextTechId && prevStatus === 'OPEN') {
+      nextStatus = 'ASSIGNED';
+    } else if (!nextTechId && prevStatus === 'ASSIGNED') {
+      nextStatus = 'OPEN';
+    }
+
+    const nextScheduledDate =
+      payload.scheduledDate !== undefined
+        ? this.toSqlDate(payload.scheduledDate)
+        : this.toSqlDate(existing.scheduled_date);
+
+    const hasRemarks = payload.remarks !== undefined && payload.remarks !== null && String(payload.remarks).trim() !== '';
+    const nextRemarks = hasRemarks ? String(payload.remarks).trim() : (existing.technician_remarks || '');
+    const actorId = String(actor?.id || actor?.userId || '');
+    const actorName = String(actor?.name || actor?.email || 'Admin');
+
+    await this.pool!.query(
+      `UPDATE \`solar_service_tickets\`
+       SET \`assigned_technician_id\` = ?,
+           \`assigned_technician_name\` = ?,
+           \`status\` = ?,
+           \`scheduled_date\` = ?,
+           \`technician_remarks\` = ?,
+           \`assigned_at\` = ?,
+           \`assigned_by_user_id\` = ?,
+           \`assigned_by_name\` = ?
+       WHERE \`id\` = ?`,
+      [
+        nextTechId,
+        nextTechName,
+        nextStatus,
+        nextScheduledDate,
+        nextRemarks,
+        nextTechId ? new Date() : null,
+        nextTechId ? actorId : null,
+        nextTechId ? actorName : null,
+        existing.id
+      ]
+    );
+
+    if (!nextTechId && (prevTech.assignedTechnicianId || prevTech.assignedTechnicianName)) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: 'TECHNICIAN_UNASSIGNED',
+        previousValue: prevTech.assignedTechnicianName || prevTech.assignedTechnicianId,
+        newValue: 'Unassigned',
+        remarks: hasRemarks ? nextRemarks : null,
+        actor
+      });
+    } else if (nextTechId && nextTechId !== prevTech.assignedTechnicianId) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: prevTech.assignedTechnicianId ? 'TECHNICIAN_REASSIGNED' : 'TECHNICIAN_ASSIGNED',
+        previousValue: prevTech.assignedTechnicianName || 'Unassigned',
+        newValue: nextTechName,
+        remarks: hasRemarks ? nextRemarks : null,
+        actor
+      });
+    } else if (hasRemarks && nextRemarks !== String(existing.technician_remarks || '')) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: 'REMARKS_UPDATED',
+        previousValue: existing.technician_remarks || '',
+        newValue: nextRemarks,
+        remarks: null,
+        actor
+      });
+    }
+
+    if (nextStatus !== prevStatus) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: 'STATUS_UPDATED',
+        previousValue: prevStatus,
+        newValue: nextStatus,
+        remarks: nextTechId ? `Technician: ${nextTechName}` : 'Technician unassigned',
+        actor
+      });
+    }
+
+    return await this.getServiceTicketDetails(existing.id);
+  }
+
+  public async adminUpdateServiceTicket(
+    ticketIdOrRecordId: string,
+    payload: any,
+    actor: any
+  ): Promise<any> {
+    this.assertDbConnected();
+    const existing = await this.getServiceTicketRowByIdOrCode(ticketIdOrRecordId);
+    if (!existing) {
+      const err: any = new Error('Service ticket not found in MySQL.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const allowedStatuses = ['OPEN', 'ASSIGNED', 'VISIT SCHEDULED', 'IN PROGRESS', 'RESOLVED', 'CLOSED'];
+    const allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+
+    const prevStatus = String(existing.status || 'OPEN');
+    const prevPriority = String(existing.priority || 'MEDIUM');
+    const prevTech = this.normalizeTicketTechnician(existing.assigned_technician_id, existing.assigned_technician_name);
+    const prevRemarks = String(existing.technician_remarks || '');
+    const prevResolution = String(existing.resolution_details || '');
+    const prevNotes = String(existing.notes || '');
+
+    let nextTechId = prevTech.assignedTechnicianId;
+    let nextTechName = prevTech.assignedTechnicianName;
+    let techChanged = false;
+
+    const hasTechField =
+      payload.assignedTechnicianId !== undefined ||
+      payload.technicianId !== undefined;
+    if (hasTechField) {
+      const reqTechId = String(payload.assignedTechnicianId ?? payload.technicianId ?? '').trim();
+      if (reqTechId === '') {
+        if (prevTech.assignedTechnicianId !== '' || prevTech.assignedTechnicianName !== '') {
+          techChanged = true;
+        }
+        nextTechId = '';
+        nextTechName = '';
+      } else {
+        const eligible = await this.getEligibleServiceTechnicians();
+        const matched = eligible.find(
+          t =>
+            t.id.toLowerCase() === reqTechId.toLowerCase() ||
+            t.employeeCode.toLowerCase() === reqTechId.toLowerCase()
+        );
+        if (!matched) {
+          const err: any = new Error('Selected technician is not an active eligible Field Worker / Technician in MySQL.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (matched.id !== prevTech.assignedTechnicianId) {
+          techChanged = true;
+        }
+        nextTechId = matched.id;
+        nextTechName = matched.name;
+      }
+    }
+
+    let nextStatus = prevStatus;
+    if (payload.status !== undefined && payload.status !== null && String(payload.status).trim() !== '') {
+      const candidateStatus = String(payload.status).trim().toUpperCase();
+      if (!allowedStatuses.includes(candidateStatus)) {
+        const err: any = new Error(`Invalid status "${payload.status}".`);
+        err.statusCode = 400;
+        throw err;
+      }
+      nextStatus = candidateStatus;
+    } else if (techChanged) {
+      if (nextTechId && prevStatus === 'OPEN') nextStatus = 'ASSIGNED';
+      else if (!nextTechId && prevStatus === 'ASSIGNED') nextStatus = 'OPEN';
+    }
+
+    let nextPriority = prevPriority;
+    if (payload.priority !== undefined && payload.priority !== null && String(payload.priority).trim() !== '') {
+      const candidatePrio = String(payload.priority).trim().toUpperCase();
+      if (!allowedPriorities.includes(candidatePrio)) {
+        const err: any = new Error(`Invalid priority "${payload.priority}".`);
+        err.statusCode = 400;
+        throw err;
+      }
+      nextPriority = candidatePrio;
+    }
+
+    const nextScheduledDate =
+      payload.scheduledDate !== undefined || payload.visitScheduledDate !== undefined
+        ? this.toSqlDate(payload.scheduledDate ?? payload.visitScheduledDate)
+        : this.toSqlDate(existing.scheduled_date);
+
+    let nextResolvedDate =
+      payload.resolvedDate !== undefined
+        ? this.toSqlDate(payload.resolvedDate)
+        : this.toSqlDate(existing.resolved_date);
+    if ((nextStatus === 'RESOLVED' || nextStatus === 'CLOSED') && !nextResolvedDate) {
+      nextResolvedDate = new Date().toISOString().slice(0, 10);
+    } else if (nextStatus !== 'RESOLVED' && nextStatus !== 'CLOSED' && payload.status !== undefined) {
+      nextResolvedDate = null;
+    }
+
+    const nextRemarks =
+      payload.technicianRemarks !== undefined
+        ? String(payload.technicianRemarks ?? '')
+        : prevRemarks;
+    const nextResolution =
+      payload.resolutionDetails !== undefined
+        ? String(payload.resolutionDetails ?? '')
+        : prevResolution;
+    const nextNotes =
+      payload.notes !== undefined
+        ? String(payload.notes ?? '')
+        : prevNotes;
+
+    const actorId = String(actor?.id || actor?.userId || '');
+    const actorName = String(actor?.name || actor?.email || 'Admin');
+
+    await this.pool!.query(
+      `UPDATE \`solar_service_tickets\`
+       SET \`assigned_technician_id\` = ?,
+           \`assigned_technician_name\` = ?,
+           \`status\` = ?,
+           \`priority\` = ?,
+           \`scheduled_date\` = ?,
+           \`resolved_date\` = ?,
+           \`notes\` = ?,
+           \`technician_remarks\` = ?,
+           \`resolution_details\` = ?,
+           \`assigned_at\` = ?,
+           \`assigned_by_user_id\` = ?,
+           \`assigned_by_name\` = ?
+       WHERE \`id\` = ?`,
+      [
+        nextTechId,
+        nextTechName,
+        nextStatus,
+        nextPriority,
+        nextScheduledDate,
+        nextResolvedDate,
+        nextNotes,
+        nextRemarks,
+        nextResolution,
+        techChanged ? (nextTechId ? new Date() : null) : existing.assigned_at,
+        techChanged ? (nextTechId ? actorId : null) : existing.assigned_by_user_id,
+        techChanged ? (nextTechId ? actorName : null) : existing.assigned_by_name,
+        existing.id
+      ]
+    );
+
+    if (techChanged) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: !nextTechId
+          ? 'TECHNICIAN_UNASSIGNED'
+          : prevTech.assignedTechnicianId
+          ? 'TECHNICIAN_REASSIGNED'
+          : 'TECHNICIAN_ASSIGNED',
+        previousValue: prevTech.assignedTechnicianName || 'Unassigned',
+        newValue: nextTechName || 'Unassigned',
+        remarks: null,
+        actor
+      });
+    }
+    if (nextStatus !== prevStatus) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: nextStatus === 'RESOLVED' ? 'RESOLVED' : 'STATUS_UPDATED',
+        previousValue: prevStatus,
+        newValue: nextStatus,
+        remarks: nextResolution || nextRemarks || null,
+        actor
+      });
+    }
+    if (nextPriority !== prevPriority) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: 'PRIORITY_UPDATED',
+        previousValue: prevPriority,
+        newValue: nextPriority,
+        remarks: null,
+        actor
+      });
+    }
+    if (nextRemarks !== prevRemarks || nextResolution !== prevResolution || nextNotes !== prevNotes) {
+      await this.recordServiceTicketHistory({
+        ticketRecordId: existing.id,
+        ticketCode: existing.ticket_id,
+        actionType: 'REMARKS_UPDATED',
+        previousValue: prevRemarks || prevResolution || null,
+        newValue: [nextRemarks, nextResolution].filter(Boolean).join(' | ') || nextNotes,
+        remarks: null,
+        actor
+      });
+    }
+
+    return await this.getServiceTicketDetails(existing.id);
   }
 
   public async deleteServiceTicket(id: string): Promise<boolean> {
     this.assertDbConnected();
+    await this.pool!.query('DELETE FROM `solar_service_ticket_history` WHERE `ticket_record_id` = ?', [id]).catch(() => {});
     await this.pool!.query('DELETE FROM `solar_service_tickets` WHERE `id` = ?', [id]);
     const items = this.getFallbackItems('service_tickets').filter(t => t.id !== id);
     this.setFallbackItems('service_tickets', items);
