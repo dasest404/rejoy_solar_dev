@@ -1120,15 +1120,34 @@ class ApiClient {
     return true;
   }
 
+  private async parseJsonResponse(res: Response, fallbackMessage: string): Promise<any> {
+    const rawText = await res.text().catch(() => '');
+    let data: any = null;
+    if (rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
+      }
+    }
+    if (!res.ok || !data || data.success === false) {
+      const msg =
+        data?.message ||
+        data?.error ||
+        (res.status === 404
+          ? 'API endpoint not found'
+          : `${fallbackMessage} (HTTP ${res.status})`);
+      throw new Error(msg);
+    }
+    return data;
+  }
+
   // --- Gmail Email SMTP Configuration (Admin Only) & App Email ---
   async getEmailSettings(): Promise<EmailSettingsInfo> {
     const res = await this.request(`${this.baseUrl}/settings/email`, {
       headers: this.getAuthHeaders()
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.message || data.error || `Failed to load Gmail settings (${res.status})`);
-    }
+    const data = await this.parseJsonResponse(res, 'Failed to load Gmail settings');
     return data.data;
   }
 
@@ -1138,10 +1157,7 @@ class ApiClient {
       headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.message || data.error || `Failed to save Gmail settings (${res.status})`);
-    }
+    const data = await this.parseJsonResponse(res, 'Failed to save Gmail settings');
     return {
       data: data.data,
       message: data.message || 'Gmail SMTP configuration saved securely.'
@@ -1153,10 +1169,7 @@ class ApiClient {
       method: 'DELETE',
       headers: this.getAuthHeaders()
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.message || data.error || `Failed to remove Gmail settings (${res.status})`);
-    }
+    const data = await this.parseJsonResponse(res, 'Failed to remove Gmail settings');
     return {
       data: data.data,
       message: data.message || 'Gmail SMTP credentials removed.'
@@ -1177,10 +1190,7 @@ class ApiClient {
       headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.message || data.error || `SMTP verification failed (${res.status})`);
-    }
+    const data = await this.parseJsonResponse(res, 'SMTP verification failed');
     return {
       message: data.message || 'Test email sent successfully.',
       data: data.data
@@ -1196,10 +1206,7 @@ class ApiClient {
     const res = await this.request(`${this.baseUrl}/email/status`, {
       headers: this.getAuthHeaders()
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.message || data.error || 'Failed to check email gateway status');
-    }
+    const data = await this.parseJsonResponse(res, 'Failed to check email gateway status');
     return data.data;
   }
 
@@ -1216,10 +1223,7 @@ class ApiClient {
       headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.message || data.error || `Failed to send email (${res.status})`);
-    }
+    const data = await this.parseJsonResponse(res, 'Failed to send email');
     return {
       message: data.message || 'Email sent successfully.',
       data: data.data

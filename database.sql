@@ -752,6 +752,28 @@ CREATE TABLE IF NOT EXISTS `solar_auth_sessions` (
   INDEX `idx_auth_sess_expires_at` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------
+-- Table structure for table `solar_email_settings`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_email_settings` (
+  `id` VARCHAR(64) PRIMARY KEY,
+  `gmail_address` VARCHAR(191) NOT NULL DEFAULT '',
+  `smtp_host` VARCHAR(191) NOT NULL DEFAULT 'smtp.gmail.com',
+  `smtp_port` INT NOT NULL DEFAULT 587,
+  `smtp_security` VARCHAR(16) NOT NULL DEFAULT 'TLS',
+  `sender_name` VARCHAR(255) NOT NULL DEFAULT 'Rejoy Solar ERP',
+  `encrypted_app_password` TEXT NOT NULL,
+  `iv` VARCHAR(64) NOT NULL,
+  `auth_tag` VARCHAR(64) NOT NULL,
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `last_tested_at` VARCHAR(64) DEFAULT NULL,
+  `last_test_status` VARCHAR(32) DEFAULT NULL,
+  `last_test_message` TEXT DEFAULT NULL,
+  `updated_by` VARCHAR(255) DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ==========================================================
 -- SYSTEM CONFIGURATION BASELINE (NON-DESTRUCTIVE ON EXISTING ROWS)
 -- Initial admin accounts must be provisioned explicitly via /api/auth/register

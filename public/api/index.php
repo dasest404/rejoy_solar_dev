@@ -99,7 +99,9 @@ function loadEnvConfig() {
         'port' => (int)(getenv('DB_PORT') ?: ($env['DB_PORT'] ?? 3306)),
         'user' => getenv('DB_USER') ?: ($env['DB_USER'] ?? 'u238683373_rejoy_solar'),
         'pass' => getenv('DB_PASS') ?: ($env['DB_PASS'] ?? ';Fl:$tn/9C&d'),
-        'name' => getenv('DB_NAME') ?: ($env['DB_NAME'] ?? 'u238683373_rejoy_solar')
+        'name' => getenv('DB_NAME') ?: ($env['DB_NAME'] ?? 'u238683373_rejoy_solar'),
+        'emailEncryptionKey' => getenv('EMAIL_ENCRYPTION_KEY') ?: ($env['EMAIL_ENCRYPTION_KEY'] ?? ''),
+        'sessionSecret' => getenv('SESSION_SECRET') ?: ($env['SESSION_SECRET'] ?? '')
     ];
 }
 
@@ -347,6 +349,32 @@ function ensureRequiredTables($pdo) {
         }
     } catch (Exception $e) {
         error_log('Notice ensuring auth tables: ' . $e->getMessage());
+    }
+
+    // Ensure encrypted Gmail SMTP configuration table exists on existing live databases
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_email_settings` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `gmail_address` VARCHAR(191) NOT NULL DEFAULT '',
+              `smtp_host` VARCHAR(191) NOT NULL DEFAULT 'smtp.gmail.com',
+              `smtp_port` INT NOT NULL DEFAULT 587,
+              `smtp_security` VARCHAR(16) NOT NULL DEFAULT 'TLS',
+              `sender_name` VARCHAR(255) NOT NULL DEFAULT 'Rejoy Solar ERP',
+              `encrypted_app_password` TEXT NOT NULL,
+              `iv` VARCHAR(64) NOT NULL,
+              `auth_tag` VARCHAR(64) NOT NULL,
+              `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+              `last_tested_at` VARCHAR(64) DEFAULT NULL,
+              `last_test_status` VARCHAR(32) DEFAULT NULL,
+              `last_test_message` TEXT DEFAULT NULL,
+              `updated_by` VARCHAR(255) DEFAULT NULL,
+              `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    } catch (Exception $e) {
+        error_log('Notice ensuring solar_email_settings table: ' . $e->getMessage());
     }
 
     $tablesVerified = true;
@@ -680,7 +708,8 @@ function requireAuthUserPhp($pdo) {
 
 function requireAdminUserPhp($pdo) {
     $user = requireAuthUserPhp($pdo);
-    if (!in_array($user['role'] ?? '', ['Admin', 'Super Admin'], true)) {
+    $roleUpper = strtoupper(trim((string)($user['role'] ?? '')));
+    if (!in_array($roleUpper, ['ADMIN', 'SUPER ADMIN'], true)) {
         http_response_code(403);
         echo json_encode(['success' => false, 'message' => 'Access denied: Administrator privileges required.']);
         exit;
@@ -709,9 +738,13 @@ if (!empty($_SERVER['PATH_INFO'])) {
 $cleanPath = rtrim($parsedPath, '/');
 if (empty($cleanPath)) $cleanPath = '/';
 
-// Strip /api prefix if present
+// Strip /api and optional /index.php prefix if present
 if (substr($cleanPath, 0, 4) === '/api') {
     $cleanPath = substr($cleanPath, 4);
+    if (empty($cleanPath)) $cleanPath = '/';
+}
+if (substr($cleanPath, 0, 10) === '/index.php') {
+    $cleanPath = substr($cleanPath, 10);
     if (empty($cleanPath)) $cleanPath = '/';
 }
 $cleanPath = rtrim($cleanPath, '/');
@@ -6762,6 +6795,821 @@ if (preg_match('#^/quotations/([^/]+)/?$#', $cleanPath, $matches)) {
         deleteItemFromDb($pdo, 'quotations', $quoteId);
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Quotation deleted from MySQL.']);
+        exit;
+    }
+}
+
+// ==========================================================
+// GMAIL SMTP CONFIGURATION (STRICT ADMIN ONLY) & APP EMAIL
+// ==========================================================
+
+function deriveEmailEncryptionKeyPhp($config) {
+    $secretMaterial = !empty($config['emailEncryptionKey'])
+        ? $config['emailEncryptionKey']
+        : (!empty($config['sessionSecret']) ? $config['sessionSecret'] : 'rejoy-solar-epc-erp-email-kms-2026');
+    return hash('sha256', (string)$secretMaterial, true);
+}
+
+function encryptEmailSecretPhp($plaintext, $config) {
+    if (!function_exists('openssl_encrypt')) {
+        throw new Exception('PHP OpenSSL extension is required for encrypted credential storage.');
+    }
+    $key = deriveEmailEncryptionKeyPhp($config);
+    $ivBytes = random_bytes(12);
+    $tag = '';
+    $encrypted = openssl_encrypt((string)$plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $ivBytes, $tag, '', 16);
+    if ($encrypted === false || strlen($tag) !== 16) {
+        throw new Exception('Failed to encrypt Gmail App Password.');
+    }
+    return [
+        'ciphertext' => base64_encode($encrypted),
+        'iv' => bin2hex($ivBytes),
+        'authTag' => bin2hex($tag)
+    ];
+}
+
+function decryptEmailSecretPhp($ciphertext, $ivHex, $authTagHex, $config) {
+    if (!function_exists('openssl_decrypt')) {
+        throw new Exception('PHP OpenSSL extension is required for SMTP credential decryption.');
+    }
+    $key = deriveEmailEncryptionKeyPhp($config);
+    $rawCipher = base64_decode((string)$ciphertext, true);
+    $iv = @hex2bin((string)$ivHex);
+    $tag = @hex2bin((string)$authTagHex);
+    if ($rawCipher === false || $iv === false || $tag === false) {
+        throw new Exception('Stored Gmail credentials are malformed and must be re-saved by an Administrator.');
+    }
+    $decrypted = openssl_decrypt($rawCipher, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+    if ($decrypted === false) {
+        throw new Exception('Unable to decrypt stored Gmail App Password. Please re-enter and save your App Password.');
+    }
+    return $decrypted;
+}
+
+function normalizeAppPasswordPhp($raw) {
+    return trim(preg_replace('/\s+/', '', (string)($raw ?? '')));
+}
+
+function isValidEmailAddressPhp($email) {
+    $trimmed = trim((string)$email);
+    if (empty($trimmed) || preg_match('/[\r\n<>]/', $trimmed)) return false;
+    return (bool)preg_match('/^[^\s@]+@[^\s@]+\.[^\s@]+$/', $trimmed);
+}
+
+function sanitizeEmailSettingsPhp($row) {
+    if (!$row) {
+        return [
+            'configured' => false,
+            'hasAppPassword' => false,
+            'gmailAddress' => '',
+            'smtpHost' => 'smtp.gmail.com',
+            'smtpPort' => 587,
+            'smtpSecurity' => 'TLS',
+            'senderName' => 'Rejoy Solar ERP',
+            'enabled' => true,
+            'lastTestedAt' => null,
+            'lastTestStatus' => null,
+            'lastTestMessage' => null,
+            'updatedBy' => null,
+            'updatedAt' => null
+        ];
+    }
+
+    $security = strtoupper((string)($row['smtp_security'] ?? 'TLS')) === 'SSL' ? 'SSL' : 'TLS';
+    $hasPassword = !empty($row['encrypted_app_password']) && !empty($row['iv']) && !empty($row['auth_tag']);
+    $updatedAtIso = null;
+    if (!empty($row['updated_at'])) {
+        $ts = strtotime((string)$row['updated_at']);
+        $updatedAtIso = $ts !== false ? gmdate('Y-m-d\TH:i:s.000\Z', $ts) : (string)$row['updated_at'];
+    }
+
+    return [
+        'configured' => !empty($row['gmail_address']) && $hasPassword,
+        'hasAppPassword' => $hasPassword,
+        'gmailAddress' => (string)($row['gmail_address'] ?? ''),
+        'smtpHost' => !empty($row['smtp_host']) ? (string)$row['smtp_host'] : 'smtp.gmail.com',
+        'smtpPort' => !empty($row['smtp_port']) ? (int)$row['smtp_port'] : ($security === 'SSL' ? 465 : 587),
+        'smtpSecurity' => $security,
+        'senderName' => !empty($row['sender_name']) ? (string)$row['sender_name'] : 'Rejoy Solar ERP',
+        'enabled' => ((int)($row['enabled'] ?? 1)) === 1,
+        'lastTestedAt' => $row['last_tested_at'] ?? null,
+        'lastTestStatus' => $row['last_test_status'] ?? null,
+        'lastTestMessage' => $row['last_test_message'] ?? null,
+        'updatedBy' => $row['updated_by'] ?? null,
+        'updatedAt' => $updatedAtIso
+    ];
+}
+
+function validateEmailConfigPhp($body, $hasExistingPassword) {
+    $gmailAddress = strtolower(trim((string)($body['gmailAddress'] ?? '')));
+    if (empty($gmailAddress) || !isValidEmailAddressPhp($gmailAddress)) {
+        return ['valid' => false, 'error' => 'Please enter a valid Gmail email address.'];
+    }
+
+    $smtpSecurity = strtoupper(trim((string)($body['smtpSecurity'] ?? 'TLS'))) === 'SSL' ? 'SSL' : 'TLS';
+    $smtpHost = trim((string)($body['smtpHost'] ?? 'smtp.gmail.com')) ?: 'smtp.gmail.com';
+    if (!preg_match('/^[a-zA-Z0-9.-]+$/', $smtpHost)) {
+        return ['valid' => false, 'error' => 'Invalid SMTP host format (use e.g. smtp.gmail.com).'];
+    }
+
+    $defaultPort = ($smtpSecurity === 'SSL') ? 465 : 587;
+    $rawPort = $body['smtpPort'] ?? null;
+    $smtpPort = ($rawPort !== null && trim((string)$rawPort) !== '') ? (int)$rawPort : $defaultPort;
+    if ($smtpPort < 1 || $smtpPort > 65535 || (is_string($rawPort) && trim($rawPort) !== '' && !is_numeric($rawPort))) {
+        return ['valid' => false, 'error' => 'SMTP port must be a valid integer between 1 and 65535.'];
+    }
+
+    $senderName = trim((string)($body['senderName'] ?? '')) ?: 'Rejoy Solar ERP';
+    if (strlen($senderName) > 150) {
+        return ['valid' => false, 'error' => 'Sender name must be 150 characters or fewer.'];
+    }
+
+    $normalizedPassword = array_key_exists('appPassword', $body) ? normalizeAppPasswordPhp($body['appPassword']) : '';
+    if (empty($normalizedPassword) && !$hasExistingPassword) {
+        return [
+            'valid' => false,
+            'error' => 'Gmail App Password is required. Generate a 16-character App Password in your Google Account Security settings.'
+        ];
+    }
+    if (!empty($normalizedPassword) && strlen($normalizedPassword) < 8) {
+        return [
+            'valid' => false,
+            'error' => 'Gmail App Password appears too short. Please enter a valid Google App Password.'
+        ];
+    }
+
+    $enabled = array_key_exists('enabled', $body) ? (bool)$body['enabled'] : true;
+
+    $data = [
+        'gmailAddress' => $gmailAddress,
+        'smtpHost' => $smtpHost,
+        'smtpPort' => $smtpPort,
+        'smtpSecurity' => $smtpSecurity,
+        'senderName' => $senderName,
+        'enabled' => $enabled
+    ];
+    if (!empty($normalizedPassword)) {
+        $data['appPassword'] = $normalizedPassword;
+    }
+
+    return ['valid' => true, 'data' => $data];
+}
+
+function getEmailSettingsInternalPhp($pdo) {
+    $stmt = $pdo->prepare("SELECT * FROM `solar_email_settings` WHERE `id` = 'default_gmail_smtp' LIMIT 1");
+    $stmt->execute();
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function saveEmailSettingsPhp($pdo, $params) {
+    $stmt = $pdo->prepare("
+        INSERT INTO `solar_email_settings` (
+            `id`, `gmail_address`, `smtp_host`, `smtp_port`, `smtp_security`,
+            `sender_name`, `encrypted_app_password`, `iv`, `auth_tag`, `enabled`, `updated_by`
+        ) VALUES ('default_gmail_smtp', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            `gmail_address` = VALUES(`gmail_address`),
+            `smtp_host` = VALUES(`smtp_host`),
+            `smtp_port` = VALUES(`smtp_port`),
+            `smtp_security` = VALUES(`smtp_security`),
+            `sender_name` = VALUES(`sender_name`),
+            `encrypted_app_password` = VALUES(`encrypted_app_password`),
+            `iv` = VALUES(`iv`),
+            `auth_tag` = VALUES(`auth_tag`),
+            `enabled` = VALUES(`enabled`),
+            `updated_by` = VALUES(`updated_by`)
+    ");
+    $stmt->execute([
+        $params['gmailAddress'],
+        $params['smtpHost'],
+        (int)$params['smtpPort'],
+        $params['smtpSecurity'],
+        $params['senderName'],
+        $params['encryptedAppPassword'],
+        $params['iv'],
+        $params['authTag'],
+        !empty($params['enabled']) ? 1 : 0,
+        $params['updatedBy']
+    ]);
+    return sanitizeEmailSettingsPhp(getEmailSettingsInternalPhp($pdo));
+}
+
+function updateEmailTestStatusPhp($pdo, $status, $message, $testedAt = null) {
+    $ts = $testedAt ?: gmdate('Y-m-d\TH:i:s.000\Z');
+    $stmt = $pdo->prepare("
+        UPDATE `solar_email_settings`
+        SET `last_tested_at` = ?, `last_test_status` = ?, `last_test_message` = ?
+        WHERE `id` = 'default_gmail_smtp'
+    ");
+    $stmt->execute([$ts, $status, substr((string)$message, 0, 1000)]);
+    return sanitizeEmailSettingsPhp(getEmailSettingsInternalPhp($pdo));
+}
+
+function deleteEmailSettingsPhp($pdo) {
+    $pdo->exec("DELETE FROM `solar_email_settings` WHERE `id` = 'default_gmail_smtp'");
+    return true;
+}
+
+function formatSmtpErrorPhp($rawMessage) {
+    $raw = (string)($rawMessage ?: 'Unknown SMTP error');
+    if (
+        stripos($raw, '535') !== false ||
+        stripos($raw, '534') !== false ||
+        stripos($raw, 'username and password not accepted') !== false ||
+        stripos($raw, 'invalid login') !== false ||
+        stripos($raw, 'application-specific password required') !== false ||
+        stripos($raw, 'authentication failed') !== false
+    ) {
+        return 'Gmail SMTP authentication failed (535). Please verify your Gmail address and use a 16-character Google App Password (regular Gmail passwords are rejected by Google SMTP).';
+    }
+    if (stripos($raw, 'timed out') !== false || stripos($raw, 'timeout') !== false) {
+        return 'SMTP server connection timed out. Check your SMTP host, port, and TLS/SSL security setting.';
+    }
+    if (stripos($raw, 'could not resolve') !== false || stripos($raw, 'name or service not known') !== false || stripos($raw, 'getaddrinfo') !== false) {
+        return 'SMTP hostname could not be resolved. Please verify the SMTP host (default: smtp.gmail.com).';
+    }
+    if (stripos($raw, 'connection refused') !== false || stripos($raw, 'unable to connect') !== false || stripos($raw, 'failed to open') !== false) {
+        return 'Unable to connect to the SMTP server. Verify SMTP host, port (587 for TLS / 465 for SSL), and outbound firewall rules.';
+    }
+    if (stripos($raw, 'recipient') !== false || stripos($raw, 'rcpt') !== false) {
+        return 'Invalid recipient or sender address rejected by SMTP server: ' . substr($raw, 0, 220);
+    }
+    $clean = preg_replace('/pass(word)?[:=]\s*\S+/i', 'password=[REDACTED]', $raw);
+    return substr((string)$clean, 0, 300);
+}
+
+function smtpReadResponsePhp($fp) {
+    $fullResponse = '';
+    $code = 0;
+    while (!feof($fp)) {
+        $line = fgets($fp, 4096);
+        if ($line === false) {
+            $meta = stream_get_meta_data($fp);
+            if (!empty($meta['timed_out'])) {
+                throw new Exception('SMTP read timed out waiting for server response.');
+            }
+            break;
+        }
+        $fullResponse .= $line;
+        if (preg_match('/^(\d{3})([ -])/', $line, $m)) {
+            $code = (int)$m[1];
+            if ($m[2] === ' ') {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    return ['code' => $code, 'message' => trim($fullResponse)];
+}
+
+function smtpExpectPhp($fp, $expectedCodes, $command = null) {
+    if ($command !== null) {
+        $written = fwrite($fp, $command . "\r\n");
+        if ($written === false) {
+            throw new Exception('Failed to write command to SMTP socket.');
+        }
+    }
+    $res = smtpReadResponsePhp($fp);
+    if (!in_array($res['code'], (array)$expectedCodes, true)) {
+        throw new Exception($res['message'] ?: ('Unexpected SMTP response code ' . $res['code']));
+    }
+    return $res;
+}
+
+function encodeMimeHeaderPhp($value) {
+    $clean = trim(preg_replace('/[\r\n]+/', ' ', (string)$value));
+    if (preg_match('/[^\x20-\x7E]/', $clean)) {
+        return '=?UTF-8?B?' . base64_encode($clean) . '?=';
+    }
+    return $clean;
+}
+
+function formatFromHeaderPhp($senderName, $gmailAddress) {
+    $cleanName = trim(preg_replace('/["\r\n<>]/', '', (string)($senderName ?: 'Rejoy Solar ERP')));
+    return $cleanName ? '"' . encodeMimeHeaderPhp($cleanName) . '" <' . $gmailAddress . '>' : $gmailAddress;
+}
+
+function sendSmtpEmailPhp($smtpConfig, $decryptedPassword, $mail) {
+    $host = trim((string)($smtpConfig['smtpHost'] ?? 'smtp.gmail.com'));
+    $port = (int)($smtpConfig['smtpPort'] ?? 587);
+    $security = strtoupper((string)($smtpConfig['smtpSecurity'] ?? 'TLS')) === 'SSL' ? 'SSL' : 'TLS';
+    $username = trim((string)$smtpConfig['gmailAddress']);
+    $senderName = (string)($smtpConfig['senderName'] ?? 'Rejoy Solar ERP');
+    $isSsl = ($security === 'SSL' || $port === 465);
+
+    $toList = array_values(array_filter(array_map('trim', (array)($mail['to'] ?? []))));
+    $ccList = array_values(array_filter(array_map('trim', (array)($mail['cc'] ?? []))));
+    $bccList = array_values(array_filter(array_map('trim', (array)($mail['bcc'] ?? []))));
+    $allRecipients = array_values(array_unique(array_merge($toList, $ccList, $bccList)));
+    if (empty($toList) || empty($allRecipients)) {
+        throw new Exception('At least one valid recipient email address is required.');
+    }
+
+    $remote = ($isSsl ? 'ssl://' : 'tcp://') . $host . ':' . $port;
+    $ctx = stream_context_create([
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'allow_self_signed' => false,
+            'SNI_enabled' => true,
+            'peer_name' => $host
+        ]
+    ]);
+
+    $errno = 0;
+    $errstr = '';
+    $fp = @stream_socket_client($remote, $errno, $errstr, 15, STREAM_CLIENT_CONNECT, $ctx);
+    if (!$fp) {
+        throw new Exception("Unable to connect to SMTP server ({$host}:{$port}): {$errstr} ({$errno})");
+    }
+    stream_set_timeout($fp, 20);
+
+    try {
+        $ehloHost = preg_replace('/[^a-zA-Z0-9.-]/', '', (string)($_SERVER['HTTP_HOST'] ?? gethostname() ?: 'localhost')) ?: 'localhost';
+
+        smtpExpectPhp($fp, [220]);
+        $ehloRes = smtpExpectPhp($fp, [250], "EHLO {$ehloHost}");
+
+        if (!$isSsl) {
+            smtpExpectPhp($fp, [220], 'STARTTLS');
+            $cryptoMethod = STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+            if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
+                $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+            }
+            $cryptoOk = @stream_socket_enable_crypto($fp, true, $cryptoMethod);
+            if ($cryptoOk !== true) {
+                throw new Exception('Failed to negotiate TLS encryption with SMTP server.');
+            }
+            $ehloRes = smtpExpectPhp($fp, [250], "EHLO {$ehloHost}");
+        }
+
+        // Authenticate using AUTH LOGIN (or AUTH PLAIN fallback)
+        if (stripos($ehloRes['message'], 'PLAIN') !== false && stripos($ehloRes['message'], 'LOGIN') === false) {
+            $authToken = base64_encode("\0" . $username . "\0" . $decryptedPassword);
+            smtpExpectPhp($fp, [235], 'AUTH PLAIN ' . $authToken);
+        } else {
+            smtpExpectPhp($fp, [334], 'AUTH LOGIN');
+            smtpExpectPhp($fp, [334], base64_encode($username));
+            smtpExpectPhp($fp, [235], base64_encode($decryptedPassword));
+        }
+
+        smtpExpectPhp($fp, [250], 'MAIL FROM:<' . $username . '>');
+        foreach ($allRecipients as $rcpt) {
+            smtpExpectPhp($fp, [250, 251], 'RCPT TO:<' . $rcpt . '>');
+        }
+
+        smtpExpectPhp($fp, [354], 'DATA');
+
+        $domainPart = strpos($username, '@') !== false ? substr($username, strpos($username, '@') + 1) : 'rejoysolar.local';
+        $messageId = '<' . bin2hex(random_bytes(12)) . '.' . time() . '@' . $domainPart . '>';
+
+        $headers = [
+            'Date: ' . gmdate('D, d M Y H:i:s +0000'),
+            'From: ' . formatFromHeaderPhp($senderName, $username),
+            'To: ' . implode(', ', $toList),
+            'Subject: ' . encodeMimeHeaderPhp((string)$mail['subject']),
+            'Message-ID: ' . $messageId,
+            'MIME-Version: 1.0'
+        ];
+        if (!empty($ccList)) {
+            $headers[] = 'Cc: ' . implode(', ', $ccList);
+        }
+        if (!empty($mail['replyTo']) && isValidEmailAddressPhp($mail['replyTo'])) {
+            $headers[] = 'Reply-To: ' . trim((string)$mail['replyTo']);
+        }
+
+        $textBody = (string)($mail['text'] ?? '');
+        $htmlBody = (string)($mail['html'] ?? '');
+        $attachments = is_array($mail['attachments'] ?? null) ? $mail['attachments'] : [];
+
+        $bodyChunks = [];
+        if (!empty($attachments)) {
+            $mixedBoundary = '=_Mixed_' . bin2hex(random_bytes(10));
+            $altBoundary = '=_Alt_' . bin2hex(random_bytes(10));
+            $headers[] = 'Content-Type: multipart/mixed; boundary="' . $mixedBoundary . '"';
+
+            $bodyChunks[] = '--' . $mixedBoundary;
+            if (!empty($textBody) && !empty($htmlBody)) {
+                $bodyChunks[] = 'Content-Type: multipart/alternative; boundary="' . $altBoundary . '"';
+                $bodyChunks[] = '';
+                $bodyChunks[] = '--' . $altBoundary;
+                $bodyChunks[] = 'Content-Type: text/plain; charset=UTF-8';
+                $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+                $bodyChunks[] = '';
+                $bodyChunks[] = chunk_split(base64_encode($textBody));
+                $bodyChunks[] = '--' . $altBoundary;
+                $bodyChunks[] = 'Content-Type: text/html; charset=UTF-8';
+                $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+                $bodyChunks[] = '';
+                $bodyChunks[] = chunk_split(base64_encode($htmlBody));
+                $bodyChunks[] = '--' . $altBoundary . '--';
+            } elseif (!empty($htmlBody)) {
+                $bodyChunks[] = 'Content-Type: text/html; charset=UTF-8';
+                $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+                $bodyChunks[] = '';
+                $bodyChunks[] = chunk_split(base64_encode($htmlBody));
+            } else {
+                $bodyChunks[] = 'Content-Type: text/plain; charset=UTF-8';
+                $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+                $bodyChunks[] = '';
+                $bodyChunks[] = chunk_split(base64_encode($textBody));
+            }
+
+            foreach ($attachments as $att) {
+                $attName = preg_replace('/["\r\n\\\\\/]/', '_', (string)($att['filename'] ?? 'attachment.bin'));
+                $attType = preg_replace('/[\r\n]/', '', (string)($att['contentType'] ?? 'application/octet-stream'));
+                $attEnc = strtolower((string)($att['encoding'] ?? 'base64'));
+                $attContent = (string)($att['content'] ?? '');
+                $attBase64 = ($attEnc === 'base64') ? $attContent : base64_encode($attContent);
+                $bodyChunks[] = '--' . $mixedBoundary;
+                $bodyChunks[] = 'Content-Type: ' . $attType . '; name="' . $attName . '"';
+                $bodyChunks[] = 'Content-Disposition: attachment; filename="' . $attName . '"';
+                $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+                $bodyChunks[] = '';
+                $bodyChunks[] = chunk_split(preg_replace('/\s+/', '', $attBase64));
+            }
+            $bodyChunks[] = '--' . $mixedBoundary . '--';
+        } elseif (!empty($textBody) && !empty($htmlBody)) {
+            $altBoundary = '=_Alt_' . bin2hex(random_bytes(10));
+            $headers[] = 'Content-Type: multipart/alternative; boundary="' . $altBoundary . '"';
+            $bodyChunks[] = '--' . $altBoundary;
+            $bodyChunks[] = 'Content-Type: text/plain; charset=UTF-8';
+            $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+            $bodyChunks[] = '';
+            $bodyChunks[] = chunk_split(base64_encode($textBody));
+            $bodyChunks[] = '--' . $altBoundary;
+            $bodyChunks[] = 'Content-Type: text/html; charset=UTF-8';
+            $bodyChunks[] = 'Content-Transfer-Encoding: base64';
+            $bodyChunks[] = '';
+            $bodyChunks[] = chunk_split(base64_encode($htmlBody));
+            $bodyChunks[] = '--' . $altBoundary . '--';
+        } elseif (!empty($htmlBody)) {
+            $headers[] = 'Content-Type: text/html; charset=UTF-8';
+            $headers[] = 'Content-Transfer-Encoding: base64';
+            $bodyChunks[] = chunk_split(base64_encode($htmlBody));
+        } else {
+            $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+            $headers[] = 'Content-Transfer-Encoding: base64';
+            $bodyChunks[] = chunk_split(base64_encode($textBody));
+        }
+
+        $rawMessage = implode("\r\n", $headers) . "\r\n\r\n" . implode("\r\n", $bodyChunks);
+        $rawMessage = preg_replace('/\r\n?|\n/', "\r\n", $rawMessage);
+        // RFC 5321 dot-stuffing
+        $rawMessage = preg_replace('/^\./m', '..', $rawMessage);
+
+        fwrite($fp, $rawMessage . "\r\n.\r\n");
+        smtpExpectPhp($fp, [250]);
+        @fwrite($fp, "QUIT\r\n");
+        @fclose($fp);
+
+        return [
+            'messageId' => $messageId,
+            'accepted' => $toList,
+            'sentAt' => gmdate('Y-m-d\TH:i:s.000\Z')
+        ];
+    } catch (Exception $e) {
+        @fwrite($fp, "QUIT\r\n");
+        @fclose($fp);
+        throw $e;
+    }
+}
+
+// GET|POST|PUT|DELETE /api/settings/email
+if (in_array($cleanPath, ['/settings/email', '/settings/email/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $admin = requireAdminUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $row = getEmailSettingsInternalPhp($pdo);
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'data' => sanitizeEmailSettingsPhp($row)
+        ]);
+        exit;
+    }
+
+    if ($method === 'POST' || $method === 'PUT') {
+        $existing = getEmailSettingsInternalPhp($pdo);
+        $hasExistingPassword = !empty($existing['encrypted_app_password']) && !empty($existing['iv']) && !empty($existing['auth_tag']);
+        $validation = validateEmailConfigPhp($body, $hasExistingPassword);
+        if (empty($validation['valid'])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => $validation['error']]);
+            exit;
+        }
+
+        $valData = $validation['data'];
+        $encryptedAppPassword = $existing['encrypted_app_password'] ?? '';
+        $iv = $existing['iv'] ?? '';
+        $authTag = $existing['auth_tag'] ?? '';
+
+        if (!empty($valData['appPassword'])) {
+            $enc = encryptEmailSecretPhp($valData['appPassword'], $dbConfig);
+            $encryptedAppPassword = $enc['ciphertext'];
+            $iv = $enc['iv'];
+            $authTag = $enc['authTag'];
+        }
+
+        $updatedBy = (string)($admin['email'] ?? $admin['name'] ?? $admin['id'] ?? 'Admin');
+        $saved = saveEmailSettingsPhp($pdo, [
+            'gmailAddress' => $valData['gmailAddress'],
+            'smtpHost' => $valData['smtpHost'],
+            'smtpPort' => $valData['smtpPort'],
+            'smtpSecurity' => $valData['smtpSecurity'],
+            'senderName' => $valData['senderName'],
+            'encryptedAppPassword' => $encryptedAppPassword,
+            'iv' => $iv,
+            'authTag' => $authTag,
+            'enabled' => $valData['enabled'],
+            'updatedBy' => $updatedBy
+        ]);
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Gmail SMTP configuration saved securely to MySQL.',
+            'data' => $saved
+        ]);
+        exit;
+    }
+
+    if ($method === 'DELETE') {
+        deleteEmailSettingsPhp($pdo);
+        $data = sanitizeEmailSettingsPhp(getEmailSettingsInternalPhp($pdo));
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Gmail SMTP credentials removed from MySQL.',
+            'data' => $data
+        ]);
+        exit;
+    }
+}
+
+// POST /api/settings/email/test
+if ($method === 'POST' && in_array($cleanPath, ['/settings/email/test', '/settings/email/test/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $admin = requireAdminUserPhp($pdo);
+
+    $stored = getEmailSettingsInternalPhp($pdo);
+    $gmailAddress = strtolower(trim((string)($body['gmailAddress'] ?? ($stored['gmail_address'] ?? ''))));
+    $smtpSecurity = strtoupper(trim((string)($body['smtpSecurity'] ?? ($stored['smtp_security'] ?? 'TLS')))) === 'SSL' ? 'SSL' : 'TLS';
+    $smtpHost = trim((string)($body['smtpHost'] ?? ($stored['smtp_host'] ?? 'smtp.gmail.com'))) ?: 'smtp.gmail.com';
+    $smtpPort = (int)($body['smtpPort'] ?? ($stored['smtp_port'] ?? ($smtpSecurity === 'SSL' ? 465 : 587)));
+    $senderName = trim((string)($body['senderName'] ?? ($stored['sender_name'] ?? 'Rejoy Solar ERP'))) ?: 'Rejoy Solar ERP';
+    $recipientEmail = trim((string)($body['testRecipient'] ?? ($gmailAddress ?: ($admin['email'] ?? ''))));
+
+    if (!isValidEmailAddressPhp($gmailAddress)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Please enter a valid Gmail email address before testing.']);
+        exit;
+    }
+    if (!isValidEmailAddressPhp($recipientEmail)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Please enter a valid test recipient email address.']);
+        exit;
+    }
+
+    $decryptedPassword = !empty($body['appPassword']) ? normalizeAppPasswordPhp($body['appPassword']) : '';
+    if (empty($decryptedPassword) && !empty($stored['encrypted_app_password']) && !empty($stored['iv']) && !empty($stored['auth_tag'])) {
+        try {
+            $decryptedPassword = decryptEmailSecretPhp($stored['encrypted_app_password'], $stored['iv'], $stored['auth_tag'], $dbConfig);
+        } catch (Exception $e) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+            exit;
+        }
+    }
+
+    if (empty($decryptedPassword)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Gmail App Password is required to send a test email.']);
+        exit;
+    }
+
+    $requestedBy = (string)($admin['name'] ?? $admin['email'] ?? 'Admin');
+    $sentAtPreview = gmdate('Y-m-d\TH:i:s.000\Z');
+    $safeSender = htmlspecialchars($senderName, ENT_QUOTES, 'UTF-8');
+    $safeGmail = htmlspecialchars($gmailAddress, ENT_QUOTES, 'UTF-8');
+    $safeHost = htmlspecialchars($smtpHost, ENT_QUOTES, 'UTF-8');
+    $safeReqBy = htmlspecialchars($requestedBy, ENT_QUOTES, 'UTF-8');
+
+    try {
+        $result = sendSmtpEmailPhp(
+            [
+                'gmailAddress' => $gmailAddress,
+                'smtpHost' => $smtpHost,
+                'smtpPort' => $smtpPort,
+                'smtpSecurity' => $smtpSecurity,
+                'senderName' => $senderName
+            ],
+            $decryptedPassword,
+            [
+                'to' => [$recipientEmail],
+                'subject' => 'Rejoy Solar ERP — Gmail SMTP Configuration Test',
+                'text' => implode("\n", [
+                    'Rejoy Solar EPC ERP — Gmail SMTP Verification',
+                    '',
+                    'Your Gmail SMTP configuration has been verified and is active.',
+                    "Sender Name: {$senderName}",
+                    "From Address: {$gmailAddress}",
+                    "SMTP Host: {$smtpHost}:{$smtpPort} ({$smtpSecurity})",
+                    "Triggered By: {$requestedBy}",
+                    "Timestamp (UTC): {$sentAtPreview}"
+                ]),
+                'html' => "
+                    <div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;\">
+                      <div style=\"background: #0f172a; color: #ffffff; padding: 20px 24px;\">
+                        <h2 style=\"margin: 0; font-size: 18px; color: #f59e0b;\">Rejoy Solar ERP — Email Verified</h2>
+                        <p style=\"margin: 4px 0 0; font-size: 12px; color: #cbd5e1;\">Gmail SMTP Configuration Test Successful</p>
+                      </div>
+                      <div style=\"padding: 20px 24px; color: #1e293b; font-size: 14px; line-height: 1.6;\">
+                        <p style=\"margin-top: 0;\">Your ERP application email gateway is connected and working correctly.</p>
+                        <table style=\"width: 100%; border-collapse: collapse; font-size: 13px; background: #f8fafc; border-radius: 8px;\">
+                          <tr><td style=\"padding: 8px 12px; color: #64748b;\">Sender Name</td><td style=\"padding: 8px 12px; font-weight: 600;\">{$safeSender}</td></tr>
+                          <tr><td style=\"padding: 8px 12px; color: #64748b;\">Gmail Address</td><td style=\"padding: 8px 12px; font-weight: 600;\">{$safeGmail}</td></tr>
+                          <tr><td style=\"padding: 8px 12px; color: #64748b;\">SMTP Server</td><td style=\"padding: 8px 12px; font-family: monospace;\">{$safeHost}:{$smtpPort} ({$smtpSecurity})</td></tr>
+                          <tr><td style=\"padding: 8px 12px; color: #64748b;\">Tested By</td><td style=\"padding: 8px 12px;\">{$safeReqBy}</td></tr>
+                        </table>
+                        <p style=\"margin-bottom: 0; margin-top: 16px; font-size: 12px; color: #64748b;\">Sent at {$sentAtPreview}</p>
+                      </div>
+                    </div>
+                "
+            ]
+        );
+
+        $latestSanitized = null;
+        if ($stored) {
+            $latestSanitized = updateEmailTestStatusPhp(
+                $pdo,
+                'SUCCESS',
+                "Test email delivered to {$recipientEmail} (Message ID: {$result['messageId']})",
+                $result['sentAt']
+            );
+        }
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => "Test email sent successfully to {$recipientEmail}.",
+            'data' => [
+                'messageId' => $result['messageId'],
+                'sentAt' => $result['sentAt'],
+                'recipientEmail' => $recipientEmail,
+                'settings' => $latestSanitized
+            ]
+        ]);
+        exit;
+    } catch (Exception $smtpErr) {
+        $cleanMessage = formatSmtpErrorPhp($smtpErr->getMessage());
+        $latestSanitized = null;
+        if ($stored) {
+            try {
+                $latestSanitized = updateEmailTestStatusPhp($pdo, 'FAILED', $cleanMessage);
+            } catch (Exception $e) {}
+        }
+        http_response_code(400);
+        $resp = ['success' => false, 'message' => $cleanMessage];
+        if ($latestSanitized) {
+            $resp['data'] = ['settings' => $latestSanitized];
+        }
+        echo json_encode($resp);
+        exit;
+    }
+}
+
+// GET /api/email/status (Authenticated non-Customer ERP staff)
+if ($method === 'GET' && in_array($cleanPath, ['/email/status', '/email/status/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $user = requireAuthUserPhp($pdo);
+    $isCust = (strtoupper((string)($user['accountType'] ?? '')) === 'CUSTOMER') ||
+        in_array(strtolower((string)($user['role'] ?? '')), ['customer', 'client'], true);
+    if ($isCust) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied for customer accounts.']);
+        exit;
+    }
+
+    $sanitized = sanitizeEmailSettingsPhp(getEmailSettingsInternalPhp($pdo));
+    http_response_code(200);
+    echo json_encode([
+        'success' => true,
+        'data' => [
+            'configured' => $sanitized['configured'],
+            'enabled' => $sanitized['enabled'],
+            'senderName' => $sanitized['senderName'],
+            'gmailAddress' => $sanitized['configured'] ? $sanitized['gmailAddress'] : ''
+        ]
+    ]);
+    exit;
+}
+
+// POST /api/email/send (Authenticated non-Customer ERP staff)
+if ($method === 'POST' && in_array($cleanPath, ['/email/send', '/email/send/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $user = requireAuthUserPhp($pdo);
+    $isCust = (strtoupper((string)($user['accountType'] ?? '')) === 'CUSTOMER') ||
+        in_array(strtolower((string)($user['role'] ?? '')), ['customer', 'client'], true);
+    if ($isCust) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied: Customer portal accounts cannot send ERP emails.']);
+        exit;
+    }
+
+    $row = getEmailSettingsInternalPhp($pdo);
+    if (!$row || empty($row['gmail_address']) || empty($row['encrypted_app_password']) || empty($row['iv']) || empty($row['auth_tag'])) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Gmail email integration is not configured yet. Ask an Administrator to configure Gmail SMTP in System Settings.'
+        ]);
+        exit;
+    }
+    if ((int)($row['enabled'] ?? 1) === 0) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Gmail email integration is currently disabled by the Administrator in System Settings.'
+        ]);
+        exit;
+    }
+
+    $normList = function ($val) {
+        if (empty($val)) return [];
+        $items = is_array($val) ? $val : explode(',', (string)$val);
+        return array_values(array_filter(array_map('trim', $items)));
+    };
+
+    $toList = $normList($body['to'] ?? null);
+    if (empty($toList)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Please enter a valid recipient email address.']);
+        exit;
+    }
+    foreach ($toList as $addr) {
+        if (!isValidEmailAddressPhp($addr)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Please enter a valid recipient email address.']);
+            exit;
+        }
+    }
+
+    $subject = trim((string)($body['subject'] ?? ''));
+    if (empty($subject)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Email subject is required.']);
+        exit;
+    }
+
+    $textBody = trim((string)($body['text'] ?? ''));
+    $htmlBody = trim((string)($body['html'] ?? ''));
+    if (empty($textBody) && empty($htmlBody)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Email message body is required.']);
+        exit;
+    }
+
+    $ccList = array_values(array_filter($normList($body['cc'] ?? null), 'isValidEmailAddressPhp'));
+    $bccList = array_values(array_filter($normList($body['bcc'] ?? null), 'isValidEmailAddressPhp'));
+
+    try {
+        $decryptedPassword = decryptEmailSecretPhp($row['encrypted_app_password'], $row['iv'], $row['auth_tag'], $dbConfig);
+        $sanitized = sanitizeEmailSettingsPhp($row);
+        $result = sendSmtpEmailPhp(
+            $sanitized,
+            $decryptedPassword,
+            [
+                'to' => $toList,
+                'cc' => $ccList,
+                'bcc' => $bccList,
+                'replyTo' => $body['replyTo'] ?? null,
+                'subject' => $subject,
+                'text' => $textBody,
+                'html' => $htmlBody,
+                'attachments' => is_array($body['attachments'] ?? null) ? $body['attachments'] : []
+            ]
+        );
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Email sent successfully to ' . implode(', ', $result['accepted']) . '.',
+            'data' => $result
+        ]);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => formatSmtpErrorPhp($e->getMessage())
+        ]);
         exit;
     }
 }

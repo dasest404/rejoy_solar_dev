@@ -157,6 +157,14 @@ async function createServerApp() {
     req.url = '/auth' + (req.url === '/' ? '' : req.url);
     apiRouter(req, res, next);
   });
+  app.use('/settings/email', (req, res, next) => {
+    req.url = '/settings/email' + (req.url === '/' ? '' : req.url);
+    apiRouter(req, res, next);
+  });
+  app.use('/email', (req, res, next) => {
+    req.url = '/email' + (req.url === '/' ? '' : req.url);
+    apiRouter(req, res, next);
+  });
 
   // API Health & Status Check
   app.get(['/api/health', '/api/status', '/api/status.php'], (_req, res) => {
