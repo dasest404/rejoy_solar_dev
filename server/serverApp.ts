@@ -165,6 +165,18 @@ async function createServerApp() {
     req.url = '/email' + (req.url === '/' ? '' : req.url);
     apiRouter(req, res, next);
   });
+  app.use('/vendor-sales-invoices', (req, res, next) => {
+    req.url = '/vendor-sales-invoices' + (req.url === '/' ? '' : req.url);
+    apiRouter(req, res, next);
+  });
+  app.use('/vendors', (req, res, next) => {
+    req.url = '/vendors' + (req.url === '/' ? '' : req.url);
+    apiRouter(req, res, next);
+  });
+  app.use('/products', (req, res, next) => {
+    req.url = '/products' + (req.url === '/' ? '' : req.url);
+    apiRouter(req, res, next);
+  });
 
   // API Health & Status Check
   app.get(['/api/health', '/api/status', '/api/status.php'], (_req, res) => {

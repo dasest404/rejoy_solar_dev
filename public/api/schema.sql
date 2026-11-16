@@ -819,6 +819,99 @@ CREATE TABLE IF NOT EXISTS `solar_email_settings` (
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------
+-- Table structure for table `solar_vendor_sales_invoices`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_vendor_sales_invoices` (
+  `id` VARCHAR(64) PRIMARY KEY,
+  `invoice_number` VARCHAR(64) NOT NULL UNIQUE,
+  `vendor_id` VARCHAR(64) NOT NULL,
+  `vendor_code` VARCHAR(64) DEFAULT '',
+  `vendor_name` VARCHAR(255) NOT NULL,
+  `vendor_gst` VARCHAR(64) DEFAULT '',
+  `vendor_address` TEXT,
+  `vendor_city` VARCHAR(128) DEFAULT '',
+  `vendor_state` VARCHAR(128) DEFAULT '',
+  `vendor_contact_person` VARCHAR(128) DEFAULT '',
+  `vendor_phone` VARCHAR(64) DEFAULT '',
+  `vendor_email` VARCHAR(191) DEFAULT '',
+  `company_state` VARCHAR(128) DEFAULT 'Chhattisgarh',
+  `supply_type` VARCHAR(32) NOT NULL DEFAULT 'INTRA_STATE',
+  `invoice_date` DATE NOT NULL,
+  `due_date` DATE DEFAULT NULL,
+  `payment_terms` VARCHAR(128) DEFAULT '30 Days',
+  `notes` TEXT,
+  `gross_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `subtotal` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `paid_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `balance_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'ISSUED',
+  `created_by` VARCHAR(255) DEFAULT '',
+  `updated_by` VARCHAR(255) DEFAULT '',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_vsi_vendor` (`vendor_id`),
+  INDEX `idx_vsi_status` (`status`),
+  INDEX `idx_vsi_date` (`invoice_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `solar_vendor_sales_invoice_items`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_vendor_sales_invoice_items` (
+  `id` VARCHAR(64) PRIMARY KEY,
+  `invoice_id` VARCHAR(64) NOT NULL,
+  `product_id` VARCHAR(64) DEFAULT NULL,
+  `line_order` INT NOT NULL DEFAULT 0,
+  `description` VARCHAR(500) NOT NULL,
+  `hsn_code` VARCHAR(32) DEFAULT '',
+  `quantity` DECIMAL(12,3) NOT NULL DEFAULT 1.000,
+  `unit` VARCHAR(32) NOT NULL DEFAULT 'NOS',
+  `rate` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `discount_type` VARCHAR(16) NOT NULL DEFAULT 'PERCENT',
+  `discount_value` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `taxable_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `gst_rate` DECIMAL(5,2) NOT NULL DEFAULT 18.00,
+  `cgst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `sgst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `igst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_vsii_invoice` (`invoice_id`),
+  INDEX `idx_vsii_product` (`product_id`),
+  CONSTRAINT `fk_vsii_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `solar_vendor_sales_invoices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `solar_vendor_sales_payments`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_vendor_sales_payments` (
+  `id` VARCHAR(64) PRIMARY KEY,
+  `invoice_id` VARCHAR(64) NOT NULL,
+  `vendor_id` VARCHAR(64) NOT NULL,
+  `payment_date` DATE NOT NULL,
+  `amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `payment_mode` VARCHAR(64) NOT NULL DEFAULT 'Bank NEFT/RTGS',
+  `reference_no` VARCHAR(128) DEFAULT '',
+  `notes` TEXT,
+  `recorded_by` VARCHAR(255) DEFAULT '',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_vsip_invoice` (`invoice_id`),
+  INDEX `idx_vsip_vendor` (`vendor_id`),
+  CONSTRAINT `fk_vsip_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `solar_vendor_sales_invoices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==========================================================

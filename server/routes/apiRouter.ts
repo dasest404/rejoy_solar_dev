@@ -1816,7 +1816,7 @@ apiRouter.delete('/sales-invoices/:id', async (req: Request, res: Response) => {
 });
 
 // Vendor Sales Invoices (Strict Admin-Only APIs)
-apiRouter.get('/vendor-sales-invoices', requireVendorSalesInvoiceAdmin, async (_req: Request, res: Response) => {
+apiRouter.get(['/vendor-sales-invoices', '/vendor-sales-invoices/'], requireVendorSalesInvoiceAdmin, async (_req: Request, res: Response) => {
   try {
     const items = await dbManager.getVendorSalesInvoices();
     res.json({ success: true, count: items.length, data: items });
@@ -1825,7 +1825,7 @@ apiRouter.get('/vendor-sales-invoices', requireVendorSalesInvoiceAdmin, async (_
   }
 });
 
-apiRouter.get('/vendor-sales-invoices/next-number', requireVendorSalesInvoiceAdmin, async (_req: Request, res: Response) => {
+apiRouter.get(['/vendor-sales-invoices/next-number', '/vendor-sales-invoices/next-number/'], requireVendorSalesInvoiceAdmin, async (_req: Request, res: Response) => {
   try {
     const nextNumber = await dbManager.getNextVendorSalesInvoiceNumber();
     res.json({ success: true, data: { invoiceNumber: nextNumber } });
@@ -1834,7 +1834,7 @@ apiRouter.get('/vendor-sales-invoices/next-number', requireVendorSalesInvoiceAdm
   }
 });
 
-apiRouter.get('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+apiRouter.get(['/vendor-sales-invoices/:id', '/vendor-sales-invoices/:id/'], requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
   try {
     const invoice = await dbManager.getVendorSalesInvoiceById(req.params.id);
     if (!invoice) {
@@ -1846,7 +1846,7 @@ apiRouter.get('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, asyn
   }
 });
 
-apiRouter.post('/vendor-sales-invoices', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+apiRouter.post(['/vendor-sales-invoices', '/vendor-sales-invoices/'], requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
   try {
     const actor = (req as any).user;
     const payload = { ...(req.body || {}), id: req.body?.id || `vsi-${Date.now()}` };
@@ -1857,7 +1857,7 @@ apiRouter.post('/vendor-sales-invoices', requireVendorSalesInvoiceAdmin, async (
   }
 });
 
-apiRouter.put('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+const handleVendorSalesInvoiceUpdate = async (req: Request, res: Response) => {
   try {
     const actor = (req as any).user;
     const saved = await dbManager.saveVendorSalesInvoice({ ...(req.body || {}), id: req.params.id }, actor);
@@ -1865,9 +1865,12 @@ apiRouter.put('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, asyn
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update vendor sales invoice');
   }
-});
+};
 
-apiRouter.post('/vendor-sales-invoices/:id/payments', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+apiRouter.put(['/vendor-sales-invoices/:id', '/vendor-sales-invoices/:id/'], requireVendorSalesInvoiceAdmin, handleVendorSalesInvoiceUpdate);
+apiRouter.post(['/vendor-sales-invoices/:id', '/vendor-sales-invoices/:id/'], requireVendorSalesInvoiceAdmin, handleVendorSalesInvoiceUpdate);
+
+apiRouter.post(['/vendor-sales-invoices/:id/payments', '/vendor-sales-invoices/:id/payments/'], requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
   try {
     const actor = (req as any).user;
     const updated = await dbManager.recordVendorSalesPayment(req.params.id, req.body || {}, actor);
@@ -1877,7 +1880,7 @@ apiRouter.post('/vendor-sales-invoices/:id/payments', requireVendorSalesInvoiceA
   }
 });
 
-apiRouter.delete('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+apiRouter.delete(['/vendor-sales-invoices/:id', '/vendor-sales-invoices/:id/'], requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
   try {
     await dbManager.deleteVendorSalesInvoice(req.params.id);
     res.json({ success: true, message: 'Vendor sales invoice deleted from MySQL.' });

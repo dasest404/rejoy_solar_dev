@@ -522,6 +522,99 @@ function ensureRequiredTables($pdo) {
         error_log('Notice ensuring solar_service_tickets / history schema: ' . $e->getMessage());
     }
 
+    // Ensure normalized Vendor Sales Invoices tables exist
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_vendor_sales_invoices` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `invoice_number` VARCHAR(64) NOT NULL UNIQUE,
+              `vendor_id` VARCHAR(64) NOT NULL,
+              `vendor_code` VARCHAR(64) DEFAULT '',
+              `vendor_name` VARCHAR(255) NOT NULL,
+              `vendor_gst` VARCHAR(64) DEFAULT '',
+              `vendor_address` TEXT,
+              `vendor_city` VARCHAR(128) DEFAULT '',
+              `vendor_state` VARCHAR(128) DEFAULT '',
+              `vendor_contact_person` VARCHAR(128) DEFAULT '',
+              `vendor_phone` VARCHAR(64) DEFAULT '',
+              `vendor_email` VARCHAR(191) DEFAULT '',
+              `company_state` VARCHAR(128) DEFAULT 'Chhattisgarh',
+              `supply_type` VARCHAR(32) NOT NULL DEFAULT 'INTRA_STATE',
+              `invoice_date` DATE NOT NULL,
+              `due_date` DATE DEFAULT NULL,
+              `payment_terms` VARCHAR(128) DEFAULT '30 Days',
+              `notes` TEXT,
+              `gross_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `discount_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `subtotal` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `paid_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `balance_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `status` VARCHAR(32) NOT NULL DEFAULT 'ISSUED',
+              `created_by` VARCHAR(255) DEFAULT '',
+              `updated_by` VARCHAR(255) DEFAULT '',
+              `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX `idx_vsi_vendor` (`vendor_id`),
+              INDEX `idx_vsi_status` (`status`),
+              INDEX `idx_vsi_date` (`invoice_date`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_vendor_sales_invoice_items` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `invoice_id` VARCHAR(64) NOT NULL,
+              `product_id` VARCHAR(64) DEFAULT NULL,
+              `line_order` INT NOT NULL DEFAULT 0,
+              `description` VARCHAR(500) NOT NULL,
+              `hsn_code` VARCHAR(32) DEFAULT '',
+              `quantity` DECIMAL(12,3) NOT NULL DEFAULT 1.000,
+              `unit` VARCHAR(32) NOT NULL DEFAULT 'NOS',
+              `rate` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `discount_type` VARCHAR(16) NOT NULL DEFAULT 'PERCENT',
+              `discount_value` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              `discount_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `taxable_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `gst_rate` DECIMAL(5,2) NOT NULL DEFAULT 18.00,
+              `cgst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `sgst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `igst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              INDEX `idx_vsii_invoice` (`invoice_id`),
+              INDEX `idx_vsii_product` (`product_id`),
+              CONSTRAINT `fk_vsii_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `solar_vendor_sales_invoices` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_vendor_sales_payments` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `invoice_id` VARCHAR(64) NOT NULL,
+              `vendor_id` VARCHAR(64) NOT NULL,
+              `payment_date` DATE NOT NULL,
+              `amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `payment_mode` VARCHAR(64) NOT NULL DEFAULT 'Bank NEFT/RTGS',
+              `reference_no` VARCHAR(128) DEFAULT '',
+              `notes` TEXT,
+              `recorded_by` VARCHAR(255) DEFAULT '',
+              `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              INDEX `idx_vsip_invoice` (`invoice_id`),
+              INDEX `idx_vsip_vendor` (`vendor_id`),
+              CONSTRAINT `fk_vsip_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `solar_vendor_sales_invoices` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    } catch (Exception $e) {
+        error_log('Notice ensuring vendor sales invoice schema: ' . $e->getMessage());
+    }
+
     $tablesVerified = true;
 }
 
@@ -1968,6 +2061,813 @@ function saveSalesInvoiceToDb($pdo, $item) {
     ]);
 }
 
+// ==========================================================
+// Helper: Vendor Sales Invoices (Indian GST + Transactional MySQL)
+// ==========================================================
+function roundCurrencyPhp($val) {
+    $f = floatval($val);
+    if (!is_finite($f)) return 0.0;
+    return round($f + 1e-9, 2);
+}
+
+function toSqlDateVendorPhp($val) {
+    if ($val === null || $val === '') return null;
+    $str = trim((string)$val);
+    if (preg_match('/^\d{4}-\d{2}-\d{2}/', $str, $m)) {
+        return $m[0];
+    }
+    $ts = strtotime($str);
+    return $ts !== false ? date('Y-m-d', $ts) : null;
+}
+
+function getIndianGstStateCodesPhp() {
+    return [
+        '01' => 'Jammu & Kashmir',
+        '02' => 'Himachal Pradesh',
+        '03' => 'Punjab',
+        '04' => 'Chandigarh',
+        '05' => 'Uttarakhand',
+        '06' => 'Haryana',
+        '07' => 'Delhi',
+        '08' => 'Rajasthan',
+        '09' => 'Uttar Pradesh',
+        '10' => 'Bihar',
+        '11' => 'Sikkim',
+        '12' => 'Arunachal Pradesh',
+        '13' => 'Nagaland',
+        '14' => 'Manipur',
+        '15' => 'Mizoram',
+        '16' => 'Tripura',
+        '17' => 'Meghalaya',
+        '18' => 'Assam',
+        '19' => 'West Bengal',
+        '20' => 'Jharkhand',
+        '21' => 'Odisha',
+        '22' => 'Chhattisgarh',
+        '23' => 'Madhya Pradesh',
+        '24' => 'Gujarat',
+        '26' => 'Dadra & Nagar Haveli and Daman & Diu',
+        '27' => 'Maharashtra',
+        '29' => 'Karnataka',
+        '30' => 'Goa',
+        '31' => 'Lakshadweep',
+        '32' => 'Kerala',
+        '33' => 'Tamil Nadu',
+        '34' => 'Puducherry',
+        '35' => 'Andaman & Nicobar Islands',
+        '36' => 'Telangana',
+        '37' => 'Andhra Pradesh',
+        '38' => 'Ladakh'
+    ];
+}
+
+function extractStateCodeFromGstinPhp($gstin = '') {
+    $states = getIndianGstStateCodesPhp();
+    $clean = strtoupper(trim((string)$gstin));
+    if (preg_match('/^\d{2}[A-Z0-9]{13}$/', $clean) || preg_match('/^\d{2}[A-Z]{5}\d{4}/', $clean)) {
+        $code = substr($clean, 0, 2);
+        if (isset($states[$code])) return $code;
+    }
+    return '';
+}
+
+function resolveStateNameAndCodePhp($stateName = '', $gstin = '', $addressFallback = '') {
+    $states = getIndianGstStateCodesPhp();
+    $codeFromGst = extractStateCodeFromGstinPhp($gstin);
+    $rawState = trim((string)$stateName);
+
+    if ($rawState !== '') {
+        $lower = strtolower($rawState);
+        foreach ($states as $code => $canonical) {
+            $canonLower = strtolower($canonical);
+            if ($lower === $canonLower || str_contains($lower, $canonLower)) {
+                return ['stateName' => $canonical, 'stateCode' => $code];
+            }
+        }
+        return ['stateName' => $rawState, 'stateCode' => $codeFromGst];
+    }
+
+    if ($codeFromGst !== '' && isset($states[$codeFromGst])) {
+        return ['stateName' => $states[$codeFromGst], 'stateCode' => $codeFromGst];
+    }
+
+    if (!empty($addressFallback)) {
+        $addrLower = strtolower((string)$addressFallback);
+        foreach ($states as $code => $canonical) {
+            if (str_contains($addrLower, strtolower($canonical))) {
+                return ['stateName' => $canonical, 'stateCode' => $code];
+            }
+        }
+    }
+
+    return ['stateName' => '', 'stateCode' => ''];
+}
+
+function determineVendorSupplyTypePhp($params) {
+    $company = resolveStateNameAndCodePhp(
+        $params['companyState'] ?? '',
+        $params['companyGst'] ?? '',
+        $params['companyAddress'] ?? ''
+    );
+    $effectiveCompanyState = !empty($company['stateName']) ? $company['stateName'] : 'Chhattisgarh';
+    $effectiveCompanyCode = !empty($company['stateCode']) ? $company['stateCode'] : '22';
+
+    $vendor = resolveStateNameAndCodePhp(
+        $params['vendorState'] ?? '',
+        $params['vendorGst'] ?? '',
+        $params['vendorAddress'] ?? ''
+    );
+
+    $supplyType = 'INTRA_STATE';
+    if (!empty($vendor['stateCode']) && !empty($effectiveCompanyCode)) {
+        $supplyType = ($vendor['stateCode'] === $effectiveCompanyCode) ? 'INTRA_STATE' : 'INTER_STATE';
+    } elseif (!empty($vendor['stateName']) && !empty($effectiveCompanyState)) {
+        $supplyType = (strtolower(trim($vendor['stateName'])) === strtolower(trim($effectiveCompanyState)))
+            ? 'INTRA_STATE'
+            : 'INTER_STATE';
+    }
+
+    return [
+        'supplyType' => $supplyType,
+        'companyStateName' => $effectiveCompanyState,
+        'companyStateCode' => $effectiveCompanyCode,
+        'vendorStateName' => !empty($vendor['stateName']) ? $vendor['stateName'] : $effectiveCompanyState,
+        'vendorStateCode' => $vendor['stateCode'] ?? ''
+    ];
+}
+
+function computeVendorSalesLineItemPhp($input, $supplyType) {
+    $quantity = max(0.0, floatval($input['quantity'] ?? 0));
+    $rate = max(0.0, floatval($input['rate'] ?? 0));
+    $gstRate = min(100.0, max(0.0, floatval($input['gstRate'] ?? 0)));
+    $discountType = (isset($input['discountType']) && strtoupper((string)$input['discountType']) === 'FLAT') ? 'FLAT' : 'PERCENT';
+    $rawDiscountVal = max(0.0, floatval($input['discountValue'] ?? 0));
+
+    $lineGross = roundCurrencyPhp($quantity * $rate);
+    $discountValue = ($discountType === 'PERCENT') ? min(100.0, $rawDiscountVal) : min($lineGross, $rawDiscountVal);
+    $discountAmount = ($discountType === 'FLAT')
+        ? roundCurrencyPhp(min($lineGross, $discountValue))
+        : roundCurrencyPhp(($lineGross * $discountValue) / 100.0);
+
+    $taxableAmount = roundCurrencyPhp(max(0.0, $lineGross - $discountAmount));
+
+    $cgstRate = 0.0;
+    $sgstRate = 0.0;
+    $igstRate = 0.0;
+    $cgstAmount = 0.0;
+    $sgstAmount = 0.0;
+    $igstAmount = 0.0;
+
+    if ($supplyType === 'INTER_STATE') {
+        $igstRate = $gstRate;
+        $igstAmount = roundCurrencyPhp(($taxableAmount * $igstRate) / 100.0);
+    } else {
+        $cgstRate = roundCurrencyPhp($gstRate / 2.0);
+        $sgstRate = roundCurrencyPhp($gstRate / 2.0);
+        $cgstAmount = roundCurrencyPhp(($taxableAmount * $cgstRate) / 100.0);
+        $sgstAmount = roundCurrencyPhp(($taxableAmount * $sgstRate) / 100.0);
+    }
+
+    $taxAmount = roundCurrencyPhp($cgstAmount + $sgstAmount + $igstAmount);
+    $totalAmount = roundCurrencyPhp($taxableAmount + $taxAmount);
+
+    return [
+        'id' => !empty($input['id']) ? (string)$input['id'] : ('vsli-' . round(microtime(true) * 1000) . '-' . mt_rand(100, 9999)),
+        'productId' => !empty($input['productId']) ? (string)$input['productId'] : null,
+        'description' => trim((string)($input['description'] ?? '')),
+        'hsnCode' => trim((string)($input['hsnCode'] ?? '')),
+        'quantity' => $quantity,
+        'unit' => !empty(trim((string)($input['unit'] ?? ''))) ? trim((string)$input['unit']) : 'NOS',
+        'rate' => $rate,
+        'discountType' => $discountType,
+        'discountValue' => $discountValue,
+        'discountAmount' => $discountAmount,
+        'taxableAmount' => $taxableAmount,
+        'gstRate' => $gstRate,
+        'cgstRate' => $cgstRate,
+        'cgstAmount' => $cgstAmount,
+        'sgstRate' => $sgstRate,
+        'sgstAmount' => $sgstAmount,
+        'igstRate' => $igstRate,
+        'igstAmount' => $igstAmount,
+        'taxAmount' => $taxAmount,
+        'totalAmount' => $totalAmount
+    ];
+}
+
+function computeVendorSalesInvoiceTotalsPhp($items, $supplyType) {
+    $computedItems = [];
+    $grossAmount = 0.0;
+    $discountAmount = 0.0;
+    $subtotal = 0.0;
+    $cgstAmount = 0.0;
+    $sgstAmount = 0.0;
+    $igstAmount = 0.0;
+
+    foreach ($items as $it) {
+        $c = computeVendorSalesLineItemPhp($it, $supplyType);
+        $computedItems[] = $c;
+        $grossAmount += roundCurrencyPhp($c['quantity'] * $c['rate']);
+        $discountAmount += $c['discountAmount'];
+        $subtotal += $c['taxableAmount'];
+        $cgstAmount += $c['cgstAmount'];
+        $sgstAmount += $c['sgstAmount'];
+        $igstAmount += $c['igstAmount'];
+    }
+
+    $grossAmount = roundCurrencyPhp($grossAmount);
+    $discountAmount = roundCurrencyPhp($discountAmount);
+    $subtotal = roundCurrencyPhp($subtotal);
+    $cgstAmount = roundCurrencyPhp($cgstAmount);
+    $sgstAmount = roundCurrencyPhp($sgstAmount);
+    $igstAmount = roundCurrencyPhp($igstAmount);
+    $taxAmount = roundCurrencyPhp($cgstAmount + $sgstAmount + $igstAmount);
+    $totalAmount = roundCurrencyPhp($subtotal + $taxAmount);
+
+    return [
+        'items' => $computedItems,
+        'grossAmount' => $grossAmount,
+        'discountAmount' => $discountAmount,
+        'subtotal' => $subtotal,
+        'cgstAmount' => $cgstAmount,
+        'sgstAmount' => $sgstAmount,
+        'igstAmount' => $igstAmount,
+        'taxAmount' => $taxAmount,
+        'totalAmount' => $totalAmount
+    ];
+}
+
+function resolveEffectiveVendorInvoiceStatusPhp($rawStatus, $dueDate, $totalAmount, $paidAmount) {
+    $status = strtoupper(trim((string)($rawStatus ?: 'ISSUED')));
+    $balance = roundCurrencyPhp(max(0.0, floatval($totalAmount) - floatval($paidAmount)));
+    if ($status === 'DRAFT' && floatval($paidAmount) <= 0) {
+        return 'DRAFT';
+    }
+    if (floatval($totalAmount) > 0 && $balance <= 0.01) {
+        return 'PAID';
+    }
+    if (floatval($paidAmount) > 0) {
+        return 'PARTIALLY_PAID';
+    }
+    if (!empty($dueDate)) {
+        $today = date('Y-m-d');
+        if ($dueDate < $today) {
+            return 'OVERDUE';
+        }
+    }
+    return ($status === 'OVERDUE') ? 'OVERDUE' : 'ISSUED';
+}
+
+function mapVendorSalesItemRowPhp($r) {
+    return [
+        'id' => $r['id'],
+        'productId' => !empty($r['product_id']) ? $r['product_id'] : null,
+        'description' => $r['description'],
+        'hsnCode' => $r['hsn_code'] ?? '',
+        'quantity' => floatval($r['quantity'] ?? 0),
+        'unit' => $r['unit'] ?? 'NOS',
+        'rate' => roundCurrencyPhp($r['rate'] ?? 0),
+        'discountType' => (($r['discount_type'] ?? 'PERCENT') === 'FLAT') ? 'FLAT' : 'PERCENT',
+        'discountValue' => roundCurrencyPhp($r['discount_value'] ?? 0),
+        'discountAmount' => roundCurrencyPhp($r['discount_amount'] ?? 0),
+        'taxableAmount' => roundCurrencyPhp($r['taxable_amount'] ?? 0),
+        'gstRate' => floatval($r['gst_rate'] ?? 0),
+        'cgstRate' => floatval($r['cgst_rate'] ?? 0),
+        'cgstAmount' => roundCurrencyPhp($r['cgst_amount'] ?? 0),
+        'sgstRate' => floatval($r['sgst_rate'] ?? 0),
+        'sgstAmount' => roundCurrencyPhp($r['sgst_amount'] ?? 0),
+        'igstRate' => floatval($r['igst_rate'] ?? 0),
+        'igstAmount' => roundCurrencyPhp($r['igst_amount'] ?? 0),
+        'taxAmount' => roundCurrencyPhp($r['tax_amount'] ?? 0),
+        'totalAmount' => roundCurrencyPhp($r['total_amount'] ?? 0)
+    ];
+}
+
+function mapVendorSalesPaymentRowPhp($r) {
+    return [
+        'id' => $r['id'],
+        'invoiceId' => $r['invoice_id'],
+        'vendorId' => $r['vendor_id'],
+        'paymentDate' => toSqlDateVendorPhp($r['payment_date']) ?: '',
+        'amount' => roundCurrencyPhp($r['amount'] ?? 0),
+        'paymentMode' => $r['payment_mode'] ?? 'Bank NEFT/RTGS',
+        'referenceNo' => $r['reference_no'] ?? '',
+        'notes' => $r['notes'] ?? '',
+        'recordedBy' => $r['recorded_by'] ?? '',
+        'createdAt' => $r['created_at'] ?? null
+    ];
+}
+
+function mapVendorSalesInvoiceRowPhp($row, $items = [], $payments = []) {
+    $invoiceDate = toSqlDateVendorPhp($row['invoice_date'] ?? null) ?: '';
+    $dueDate = toSqlDateVendorPhp($row['due_date'] ?? null) ?: '';
+    $totalAmount = roundCurrencyPhp($row['total_amount'] ?? 0);
+    $paidAmount = roundCurrencyPhp($row['paid_amount'] ?? 0);
+    $balanceAmount = roundCurrencyPhp(max(0.0, $totalAmount - $paidAmount));
+    $status = resolveEffectiveVendorInvoiceStatusPhp(
+        $row['status'] ?? 'ISSUED',
+        $dueDate,
+        $totalAmount,
+        $paidAmount
+    );
+
+    return [
+        'id' => $row['id'],
+        'invoiceNumber' => $row['invoice_number'],
+        'vendorId' => $row['vendor_id'],
+        'vendorCode' => $row['vendor_code'] ?? '',
+        'vendorName' => $row['vendor_name'],
+        'vendorGst' => $row['vendor_gst'] ?? '',
+        'vendorAddress' => $row['vendor_address'] ?? '',
+        'vendorCity' => $row['vendor_city'] ?? '',
+        'vendorState' => $row['vendor_state'] ?? '',
+        'vendorContactPerson' => $row['vendor_contact_person'] ?? '',
+        'vendorPhone' => $row['vendor_phone'] ?? '',
+        'vendorEmail' => $row['vendor_email'] ?? '',
+        'companyState' => $row['company_state'] ?? 'Chhattisgarh',
+        'supplyType' => (($row['supply_type'] ?? 'INTRA_STATE') === 'INTER_STATE') ? 'INTER_STATE' : 'INTRA_STATE',
+        'invoiceDate' => $invoiceDate,
+        'dueDate' => $dueDate,
+        'paymentTerms' => $row['payment_terms'] ?? '30 Days',
+        'notes' => $row['notes'] ?? '',
+        'items' => $items,
+        'grossAmount' => roundCurrencyPhp($row['gross_amount'] ?? 0),
+        'discountAmount' => roundCurrencyPhp($row['discount_amount'] ?? 0),
+        'subtotal' => roundCurrencyPhp($row['subtotal'] ?? 0),
+        'cgstAmount' => roundCurrencyPhp($row['cgst_amount'] ?? 0),
+        'sgstAmount' => roundCurrencyPhp($row['sgst_amount'] ?? 0),
+        'igstAmount' => roundCurrencyPhp($row['igst_amount'] ?? 0),
+        'taxAmount' => roundCurrencyPhp($row['tax_amount'] ?? 0),
+        'totalAmount' => $totalAmount,
+        'paidAmount' => $paidAmount,
+        'balanceAmount' => $balanceAmount,
+        'status' => $status,
+        'payments' => $payments,
+        'createdBy' => $row['created_by'] ?? '',
+        'updatedBy' => $row['updated_by'] ?? '',
+        'createdAt' => $row['created_at'] ?? null,
+        'updatedAt' => $row['updated_at'] ?? ($row['created_at'] ?? null)
+    ];
+}
+
+function getNextVendorSalesInvoiceNumberPhp($pdo) {
+    $year = date('Y');
+    $prefix = "VSI-{$year}-";
+    $stmt = $pdo->prepare('SELECT `invoice_number` FROM `solar_vendor_sales_invoices` WHERE `invoice_number` LIKE ?');
+    $stmt->execute([$prefix . '%']);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $maxSeq = 0;
+    foreach ($rows as $r) {
+        $numStr = substr((string)($r['invoice_number'] ?? ''), strlen($prefix));
+        if (ctype_digit($numStr)) {
+            $parsed = intval($numStr);
+            if ($parsed > $maxSeq) $maxSeq = $parsed;
+        } else {
+            $parsed = intval($numStr);
+            if ($parsed > $maxSeq) $maxSeq = $parsed;
+        }
+    }
+    return $prefix . str_pad((string)($maxSeq + 1), 3, '0', STR_PAD_LEFT);
+}
+
+function getVendorSalesInvoicesPhp($pdo) {
+    $invStmt = $pdo->query('SELECT * FROM `solar_vendor_sales_invoices` ORDER BY `invoice_date` DESC, `created_at` DESC');
+    $invoiceRows = $invStmt ? ($invStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+    if (empty($invoiceRows)) return [];
+
+    $itemStmt = $pdo->query('SELECT * FROM `solar_vendor_sales_invoice_items` ORDER BY `line_order` ASC, `created_at` ASC');
+    $itemRows = $itemStmt ? ($itemStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+
+    $payStmt = $pdo->query('SELECT * FROM `solar_vendor_sales_payments` ORDER BY `payment_date` DESC, `created_at` DESC');
+    $paymentRows = $payStmt ? ($payStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+
+    $itemsByInv = [];
+    foreach ($itemRows as $r) {
+        $k = (string)$r['invoice_id'];
+        if (!isset($itemsByInv[$k])) $itemsByInv[$k] = [];
+        $itemsByInv[$k][] = mapVendorSalesItemRowPhp($r);
+    }
+
+    $paymentsByInv = [];
+    foreach ($paymentRows as $r) {
+        $k = (string)$r['invoice_id'];
+        if (!isset($paymentsByInv[$k])) $paymentsByInv[$k] = [];
+        $paymentsByInv[$k][] = mapVendorSalesPaymentRowPhp($r);
+    }
+
+    return array_map(function ($row) use ($itemsByInv, $paymentsByInv) {
+        $id = (string)$row['id'];
+        return mapVendorSalesInvoiceRowPhp(
+            $row,
+            $itemsByInv[$id] ?? [],
+            $paymentsByInv[$id] ?? []
+        );
+    }, $invoiceRows);
+}
+
+function getVendorSalesInvoiceByIdPhp($pdo, $id) {
+    $stmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1');
+    $stmt->execute([$id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
+
+    $itStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ? ORDER BY `line_order` ASC, `created_at` ASC');
+    $itStmt->execute([$id]);
+    $items = array_map('mapVendorSalesItemRowPhp', $itStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+
+    $payStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ? ORDER BY `payment_date` DESC, `created_at` DESC');
+    $payStmt->execute([$id]);
+    $payments = array_map('mapVendorSalesPaymentRowPhp', $payStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+
+    return mapVendorSalesInvoiceRowPhp($row, $items, $payments);
+}
+
+function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
+    if (!is_array($item)) {
+        throw new Exception('Invalid vendor sales invoice payload.', 400);
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $id = !empty(trim((string)($item['id'] ?? '')))
+            ? trim((string)$item['id'])
+            : ('vsi-' . round(microtime(true) * 1000));
+
+        $exStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1');
+        $exStmt->execute([$id]);
+        $existing = $exStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+        $vendorId = trim((string)($item['vendorId'] ?? ($item['vendor_id'] ?? ($existing['vendor_id'] ?? ''))));
+        if ($vendorId === '') {
+            throw new Exception('Please select an existing vendor from MySQL records.', 400);
+        }
+
+        $vStmt = $pdo->prepare('SELECT * FROM `solar_vendors` WHERE `id` = ? LIMIT 1');
+        $vStmt->execute([$vendorId]);
+        $vendorRow = $vStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$vendorRow) {
+            throw new Exception("Selected vendor ({$vendorId}) does not exist in MySQL vendor records.", 400);
+        }
+
+        $rawItems = (isset($item['items']) && is_array($item['items'])) ? $item['items'] : [];
+        if (empty($rawItems)) {
+            throw new Exception('Invoice must include at least one line item.', 400);
+        }
+
+        // Validate referenced productIds exist in solar_products
+        $productIds = [];
+        foreach ($rawItems as $li) {
+            $pid = trim((string)($li['productId'] ?? ($li['product_id'] ?? '')));
+            if ($pid !== '') $productIds[$pid] = true;
+        }
+        $uniqueProductIds = array_keys($productIds);
+        if (!empty($uniqueProductIds)) {
+            $placeholders = implode(',', array_fill(0, count($uniqueProductIds), '?'));
+            $pStmt = $pdo->prepare("SELECT `id` FROM `solar_products` WHERE `id` IN ({$placeholders})");
+            $pStmt->execute($uniqueProductIds);
+            $foundProdIds = [];
+            foreach ($pStmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $pr) {
+                $foundProdIds[(string)$pr['id']] = true;
+            }
+            foreach ($uniqueProductIds as $pid) {
+                if (!isset($foundProdIds[$pid])) {
+                    throw new Exception("Referenced product ({$pid}) was not found in MySQL product catalog.", 400);
+                }
+            }
+        }
+
+        foreach ($rawItems as $idx => $li) {
+            $lineNo = $idx + 1;
+            $desc = trim((string)($li['description'] ?? ''));
+            $qty = isset($li['quantity']) && is_numeric($li['quantity']) ? floatval($li['quantity']) : NAN;
+            $rate = isset($li['rate']) && is_numeric($li['rate']) ? floatval($li['rate']) : NAN;
+            $gstRaw = $li['gstRate'] ?? ($li['taxRatePercent'] ?? 0);
+            $gst = is_numeric($gstRaw) ? floatval($gstRaw) : NAN;
+            $discRaw = $li['discountValue'] ?? 0;
+            $disc = is_numeric($discRaw) ? floatval($discRaw) : NAN;
+
+            if ($desc === '') {
+                throw new Exception("Line item #{$lineNo}: description is required.", 400);
+            }
+            if (!is_finite($qty) || $qty <= 0) {
+                throw new Exception("Line item #{$lineNo}: quantity must be greater than 0.", 400);
+            }
+            if (!is_finite($rate) || $rate < 0) {
+                throw new Exception("Line item #{$lineNo}: rate cannot be negative.", 400);
+            }
+            if (!is_finite($gst) || $gst < 0 || $gst > 100) {
+                throw new Exception("Line item #{$lineNo}: GST rate must be between 0% and 100%.", 400);
+            }
+            if (!is_finite($disc) || $disc < 0) {
+                throw new Exception("Line item #{$lineNo}: discount cannot be negative.", 400);
+            }
+        }
+
+        // Load company global settings from MySQL
+        $settings = [];
+        try {
+            $sStmt = $pdo->query("SELECT `setting_value` FROM `solar_system_settings` WHERE `setting_key` = 'global_settings' LIMIT 1");
+            $sRow = $sStmt ? $sStmt->fetch(PDO::FETCH_ASSOC) : null;
+            if ($sRow && !empty($sRow['setting_value'])) {
+                $settings = json_decode($sRow['setting_value'], true) ?: [];
+            }
+        } catch (Exception $e) {}
+
+        $vendorCode = $vendorRow['vendor_code'] ?? ($item['vendorCode'] ?? '');
+        $vendorName = $vendorRow['name'] ?? ($item['vendorName'] ?? 'Solar Vendor');
+        $vendorGst = trim((string)($item['vendorGst'] ?? ($vendorRow['gst_number'] ?? '')));
+        $vendorCity = trim((string)($item['vendorCity'] ?? ($vendorRow['city'] ?? '')));
+        $vendorState = trim((string)($item['vendorState'] ?? ($vendorRow['state'] ?? '')));
+        $addrParts = array_values(array_filter(array_map(function ($s) {
+            return trim((string)$s);
+        }, [$vendorRow['address'] ?? '', $vendorCity, $vendorState])));
+        $formattedVendorAddr = implode(', ', $addrParts);
+        $vendorAddress = trim((string)($item['vendorAddress'] ?? $formattedVendorAddr));
+        $vendorContactPerson = trim((string)($item['vendorContactPerson'] ?? ($vendorRow['contact_person'] ?? '')));
+        $vendorPhone = trim((string)($item['vendorPhone'] ?? ($vendorRow['phone'] ?? '')));
+        $vendorEmail = trim((string)($item['vendorEmail'] ?? ($vendorRow['email'] ?? '')));
+
+        $jurisdiction = determineVendorSupplyTypePhp([
+            'companyState' => $item['companyState'] ?? ($settings['companyState'] ?? ''),
+            'companyGst' => $settings['companyGst'] ?? '',
+            'companyAddress' => $settings['companyAddress'] ?? '',
+            'vendorState' => $vendorState,
+            'vendorGst' => $vendorGst,
+            'vendorAddress' => $vendorAddress
+        ]);
+
+        $draftItems = array_map(function ($li) {
+            return [
+                'id' => $li['id'] ?? null,
+                'productId' => $li['productId'] ?? ($li['product_id'] ?? null),
+                'description' => $li['description'] ?? '',
+                'hsnCode' => $li['hsnCode'] ?? ($li['hsn_code'] ?? ''),
+                'quantity' => floatval($li['quantity'] ?? 0),
+                'unit' => $li['unit'] ?? 'NOS',
+                'rate' => floatval($li['rate'] ?? 0),
+                'discountType' => (isset($li['discountType']) && strtoupper((string)$li['discountType']) === 'FLAT') ? 'FLAT' : 'PERCENT',
+                'discountValue' => floatval($li['discountValue'] ?? 0),
+                'gstRate' => floatval($li['gstRate'] ?? ($li['taxRatePercent'] ?? 18))
+            ];
+        }, $rawItems);
+
+        $computed = computeVendorSalesInvoiceTotalsPhp($draftItems, $jurisdiction['supplyType']);
+
+        $invoiceNumber = trim((string)($item['invoiceNumber'] ?? ($existing['invoice_number'] ?? '')));
+        if ($invoiceNumber === '') {
+            $invoiceNumber = getNextVendorSalesInvoiceNumberPhp($pdo);
+        }
+
+        // Enforce unique invoice number
+        $dupStmt = $pdo->prepare('SELECT `id` FROM `solar_vendor_sales_invoices` WHERE `invoice_number` = ? AND `id` <> ? LIMIT 1');
+        $dupStmt->execute([$invoiceNumber, $id]);
+        if ($dupStmt->fetch(PDO::FETCH_ASSOC)) {
+            throw new Exception("Invoice number \"{$invoiceNumber}\" already exists.", 409);
+        }
+
+        $invoiceDate = toSqlDateVendorPhp($item['invoiceDate'] ?? ($existing['invoice_date'] ?? null)) ?: date('Y-m-d');
+        $dueDate = toSqlDateVendorPhp($item['dueDate'] ?? ($existing['due_date'] ?? null)) ?: $invoiceDate;
+        $paymentTerms = trim((string)($item['paymentTerms'] ?? ($existing['payment_terms'] ?? ($vendorRow['payment_terms'] ?? '30 Days'))));
+        $notes = trim((string)($item['notes'] ?? ($existing['notes'] ?? '')));
+
+        $paySumStmt = $pdo->prepare('SELECT COALESCE(SUM(`amount`), 0) AS paidSum FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?');
+        $paySumStmt->execute([$id]);
+        $paySumRow = $paySumStmt->fetch(PDO::FETCH_ASSOC);
+        $recordedPaymentsTotal = roundCurrencyPhp($paySumRow['paidSum'] ?? 0);
+        $paidAmount = $existing
+            ? $recordedPaymentsTotal
+            : min($computed['totalAmount'], roundCurrencyPhp($item['paidAmount'] ?? 0));
+        $balanceAmount = roundCurrencyPhp(max(0.0, $computed['totalAmount'] - $paidAmount));
+
+        $requestedStatus = strtoupper(trim((string)($item['status'] ?? ($existing['status'] ?? 'ISSUED'))));
+        $status = resolveEffectiveVendorInvoiceStatusPhp(
+            $requestedStatus,
+            $dueDate,
+            $computed['totalAmount'],
+            $paidAmount
+        );
+
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? ($item['updatedBy'] ?? ($item['createdBy'] ?? 'Admin')))));
+        if ($actorName === '') $actorName = 'Admin';
+        $createdBy = !empty($existing['created_by']) ? (string)$existing['created_by'] : trim((string)($item['createdBy'] ?? $actorName));
+
+        $pdo->prepare("
+            INSERT INTO `solar_vendor_sales_invoices` (
+              `id`, `invoice_number`, `vendor_id`, `vendor_code`, `vendor_name`, `vendor_gst`,
+              `vendor_address`, `vendor_city`, `vendor_state`, `vendor_contact_person`, `vendor_phone`, `vendor_email`,
+              `company_state`, `supply_type`, `invoice_date`, `due_date`, `payment_terms`, `notes`,
+              `gross_amount`, `discount_amount`, `subtotal`, `cgst_amount`, `sgst_amount`, `igst_amount`, `tax_amount`,
+              `total_amount`, `paid_amount`, `balance_amount`, `status`, `created_by`, `updated_by`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              `invoice_number` = VALUES(`invoice_number`),
+              `vendor_id` = VALUES(`vendor_id`),
+              `vendor_code` = VALUES(`vendor_code`),
+              `vendor_name` = VALUES(`vendor_name`),
+              `vendor_gst` = VALUES(`vendor_gst`),
+              `vendor_address` = VALUES(`vendor_address`),
+              `vendor_city` = VALUES(`vendor_city`),
+              `vendor_state` = VALUES(`vendor_state`),
+              `vendor_contact_person` = VALUES(`vendor_contact_person`),
+              `vendor_phone` = VALUES(`vendor_phone`),
+              `vendor_email` = VALUES(`vendor_email`),
+              `company_state` = VALUES(`company_state`),
+              `supply_type` = VALUES(`supply_type`),
+              `invoice_date` = VALUES(`invoice_date`),
+              `due_date` = VALUES(`due_date`),
+              `payment_terms` = VALUES(`payment_terms`),
+              `notes` = VALUES(`notes`),
+              `gross_amount` = VALUES(`gross_amount`),
+              `discount_amount` = VALUES(`discount_amount`),
+              `subtotal` = VALUES(`subtotal`),
+              `cgst_amount` = VALUES(`cgst_amount`),
+              `sgst_amount` = VALUES(`sgst_amount`),
+              `igst_amount` = VALUES(`igst_amount`),
+              `tax_amount` = VALUES(`tax_amount`),
+              `total_amount` = VALUES(`total_amount`),
+              `paid_amount` = VALUES(`paid_amount`),
+              `balance_amount` = VALUES(`balance_amount`),
+              `status` = VALUES(`status`),
+              `updated_by` = VALUES(`updated_by`)
+        ")->execute([
+            $id,
+            $invoiceNumber,
+            $vendorId,
+            $vendorCode,
+            $vendorName,
+            $vendorGst,
+            $vendorAddress,
+            $vendorCity,
+            !empty($jurisdiction['vendorStateName']) ? $jurisdiction['vendorStateName'] : $vendorState,
+            $vendorContactPerson,
+            $vendorPhone,
+            $vendorEmail,
+            $jurisdiction['companyStateName'],
+            $jurisdiction['supplyType'],
+            $invoiceDate,
+            $dueDate,
+            $paymentTerms,
+            $notes,
+            $computed['grossAmount'],
+            $computed['discountAmount'],
+            $computed['subtotal'],
+            $computed['cgstAmount'],
+            $computed['sgstAmount'],
+            $computed['igstAmount'],
+            $computed['taxAmount'],
+            $computed['totalAmount'],
+            $paidAmount,
+            $balanceAmount,
+            $status,
+            $createdBy,
+            $actorName
+        ]);
+
+        // Replace line items atomically
+        $pdo->prepare('DELETE FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ?')->execute([$id]);
+        $itemInsert = $pdo->prepare("
+            INSERT INTO `solar_vendor_sales_invoice_items` (
+              `id`, `invoice_id`, `product_id`, `line_order`, `description`, `hsn_code`,
+              `quantity`, `unit`, `rate`, `discount_type`, `discount_value`, `discount_amount`,
+              `taxable_amount`, `gst_rate`, `cgst_rate`, `cgst_amount`, `sgst_rate`, `sgst_amount`,
+              `igst_rate`, `igst_amount`, `tax_amount`, `total_amount`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        foreach ($computed['items'] as $idx => $li) {
+            $lineId = 'vsii-' . $id . '-' . $idx . '-' . base_convert((string)round(microtime(true) * 1000), 10, 36);
+            $itemInsert->execute([
+                $lineId,
+                $id,
+                $li['productId'] ?: null,
+                $idx,
+                $li['description'],
+                $li['hsnCode'] ?: '',
+                $li['quantity'],
+                $li['unit'],
+                $li['rate'],
+                $li['discountType'],
+                $li['discountValue'],
+                $li['discountAmount'],
+                $li['taxableAmount'],
+                $li['gstRate'],
+                $li['cgstRate'],
+                $li['cgstAmount'],
+                $li['sgstRate'],
+                $li['sgstAmount'],
+                $li['igstRate'],
+                $li['igstAmount'],
+                $li['taxAmount'],
+                $li['totalAmount']
+            ]);
+        }
+
+        if (!$existing && $paidAmount > 0) {
+            $payId = 'vsip-' . round(microtime(true) * 1000) . '-' . mt_rand(100, 999);
+            $pdo->prepare("
+                INSERT INTO `solar_vendor_sales_payments` (
+                  `id`, `invoice_id`, `vendor_id`, `payment_date`, `amount`, `payment_mode`, `reference_no`, `notes`, `recorded_by`
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ")->execute([
+                $payId,
+                $id,
+                $vendorId,
+                $invoiceDate,
+                $paidAmount,
+                'Bank NEFT/RTGS',
+                '',
+                'Initial payment recorded on invoice creation',
+                $actorName
+            ]);
+        }
+
+        $pdo->commit();
+        return getVendorSalesInvoiceByIdPhp($pdo, $id);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+function recordVendorSalesPaymentPhp($pdo, $invoiceId, $payment, $actor = null) {
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE');
+        $stmt->execute([$invoiceId]);
+        $inv = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$inv) {
+            throw new Exception('Vendor sales invoice not found.', 404);
+        }
+
+        if (strtoupper(trim((string)($inv['status'] ?? ''))) === 'DRAFT') {
+            throw new Exception('Cannot record payment against a DRAFT invoice. Issue the invoice first.', 400);
+        }
+
+        $totalAmount = roundCurrencyPhp($inv['total_amount'] ?? 0);
+        $currentPaid = roundCurrencyPhp($inv['paid_amount'] ?? 0);
+        $remaining = roundCurrencyPhp(max(0.0, $totalAmount - $currentPaid));
+        $amount = roundCurrencyPhp($payment['amount'] ?? 0);
+
+        if (!is_finite($amount) || $amount <= 0) {
+            throw new Exception('Payment amount must be greater than zero.', 400);
+        }
+        if ($amount > $remaining + 0.01) {
+            throw new Exception("Payment amount (₹{$amount}) exceeds remaining balance due (₹{$remaining}).", 400);
+        }
+
+        $paymentId = 'vsip-' . round(microtime(true) * 1000) . '-' . mt_rand(100, 999);
+        $paymentDate = toSqlDateVendorPhp($payment['paymentDate'] ?? null) ?: date('Y-m-d');
+        $paymentMode = trim((string)($payment['paymentMode'] ?? 'Bank NEFT/RTGS')) ?: 'Bank NEFT/RTGS';
+        $referenceNo = trim((string)($payment['referenceNo'] ?? ''));
+        $notes = trim((string)($payment['notes'] ?? ''));
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
+
+        $pdo->prepare("
+            INSERT INTO `solar_vendor_sales_payments` (
+              `id`, `invoice_id`, `vendor_id`, `payment_date`, `amount`, `payment_mode`, `reference_no`, `notes`, `recorded_by`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ")->execute([$paymentId, $invoiceId, $inv['vendor_id'], $paymentDate, $amount, $paymentMode, $referenceNo, $notes, $actorName]);
+
+        $newPaid = roundCurrencyPhp($currentPaid + $amount);
+        $newBalance = roundCurrencyPhp(max(0.0, $totalAmount - $newPaid));
+        $dueDate = toSqlDateVendorPhp($inv['due_date'] ?? null) ?: '';
+        $nextStatus = resolveEffectiveVendorInvoiceStatusPhp('ISSUED', $dueDate, $totalAmount, $newPaid);
+
+        $pdo->prepare('UPDATE `solar_vendor_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ?, `updated_by` = ? WHERE `id` = ?')
+            ->execute([$newPaid, $newBalance, $nextStatus, $actorName, $invoiceId]);
+
+        $pdo->commit();
+        return getVendorSalesInvoiceByIdPhp($pdo, $invoiceId);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+function deleteVendorSalesInvoicePhp($pdo, $id) {
+    $pdo->beginTransaction();
+    try {
+        $chk = $pdo->prepare('SELECT `id` FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1');
+        $chk->execute([$id]);
+        if (!$chk->fetch(PDO::FETCH_ASSOC)) {
+            throw new Exception('Vendor sales invoice not found.', 404);
+        }
+        $pdo->prepare('DELETE FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM `solar_vendor_sales_invoices` WHERE `id` = ?')->execute([$id]);
+        $pdo->commit();
+        return true;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
 // Helper: Attendance
 function saveAttendanceToDb($pdo, $item) {
     if (empty($item['id'])) $item['id'] = 'att-' . round(microtime(true) * 1000);
@@ -3359,6 +4259,9 @@ function saveItemToDb($pdo, $collection, $item, $actor = null) {
         case 'purchase_orders': return savePurchaseOrderToDb($pdo, $item);
         case 'boms': return saveBOMToDb($pdo, $item);
         case 'sales_invoices': return saveSalesInvoiceToDb($pdo, $item);
+        case 'vendor_sales_invoices':
+        case 'solar_vendor_sales_invoices':
+            return saveVendorSalesInvoicePhp($pdo, $item, $actor);
         case 'attendance': return saveAttendanceToDb($pdo, $item);
         case 'payslips': return savePayslipToDb($pdo, $item);
         case 'holidays': return saveHolidayToDb($pdo, $item);
@@ -3382,6 +4285,9 @@ function saveItemToDb($pdo, $collection, $item, $actor = null) {
 // Master Delete Dispatcher (Cascades cleanly across coupled auth & personnel tables)
 function deleteItemFromDb($pdo, $collection, $id, $actor = null) {
     if (empty($id)) return false;
+    if ($collection === 'vendor_sales_invoices' || $collection === 'solar_vendor_sales_invoices') {
+        return deleteVendorSalesInvoicePhp($pdo, $id);
+    }
     $tableMap = [
         'customers' => 'solar_customers',
         'leads' => 'solar_leads',
@@ -3394,6 +4300,7 @@ function deleteItemFromDb($pdo, $collection, $id, $actor = null) {
         'purchase_orders' => 'solar_purchase_orders',
         'boms' => 'solar_boms',
         'sales_invoices' => 'solar_sales_invoices',
+        'vendor_sales_invoices' => 'solar_vendor_sales_invoices',
         'attendance' => 'solar_attendance',
         'payslips' => 'solar_payslips',
         'holidays' => 'solar_holidays',
@@ -6365,10 +7272,10 @@ if ($method === 'POST' && in_array($cleanPath, ['/sync/push', '/sync/push/'])) {
             echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to project stages, progress, and system data.']);
             exit;
         }
-    } elseif (in_array($normCol, ['users', 'solar_users', 'acl_config', 'solar_acl_config', 'settings', 'solar_system_settings', 'warehouses', 'solar_warehouses'], true)) {
-        if (!in_array($actorRole, ['Admin', 'Super Admin'], true)) {
+    } elseif (in_array($normCol, ['users', 'solar_users', 'acl_config', 'solar_acl_config', 'settings', 'solar_system_settings', 'warehouses', 'solar_warehouses', 'vendor_sales_invoices', 'solar_vendor_sales_invoices'], true)) {
+        if (!in_array(strtoupper(trim((string)$actorRole)), ['ADMIN', 'SUPER ADMIN'], true)) {
             http_response_code(403);
-            echo json_encode(['success' => false, 'error' => 'Forbidden: Only Administrators can modify users, permissions, warehouses, or system settings.']);
+            echo json_encode(['success' => false, 'error' => 'Forbidden: Only Administrators can modify users, permissions, warehouses, system settings, or vendor sales invoices.']);
             exit;
         }
     } elseif (in_array($normCol, ['employees', 'employee', 'solar_employees', 'solar_employee'], true)) {
@@ -6446,12 +7353,20 @@ if ($method === 'POST' && in_array($cleanPath, ['/sync/push', '/sync/push/'])) {
             $pdo->rollBack();
         }
         $msg = $e->getMessage();
-        $code = (str_contains($msg, 'Primary/Default warehouse') || str_contains($msg, 'Invalid GST rate')) ? 400 : 500;
+        $exCode = intval($e->getCode());
+        if ($exCode >= 400 && $exCode < 600) {
+            $code = $exCode;
+        } elseif (str_contains($msg, 'Primary/Default warehouse') || str_contains($msg, 'Invalid GST rate')) {
+            $code = 400;
+        } else {
+            $code = 500;
+        }
         error_log("Error in /sync/push ($collection): " . $msg);
         http_response_code($code);
         echo json_encode([
             'success' => false,
-            'error' => $code === 400 ? $msg : ('Database persistence error: ' . $msg),
+            'error' => $code < 500 ? $msg : ('Database persistence error: ' . $msg),
+            'message' => $code < 500 ? $msg : ('Database persistence error: ' . $msg),
             'collection' => $collection
         ]);
         exit;
@@ -7325,6 +8240,20 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
             ];
         }, $rows ?: []);
     } catch (Exception $e) { $bootstrapErrors[] = 'acl_audit_logs: ' . $e->getMessage(); }
+
+    // 28. Vendor Sales Invoices (Admin / Super Admin Only)
+    try {
+        $bootUser = getAuthenticatedUserPhp($pdo);
+        $bootRole = strtoupper(trim((string)($bootUser['role'] ?? '')));
+        if ($bootUser && in_array($bootRole, ['ADMIN', 'SUPER ADMIN'], true)) {
+            $data['vendor_sales_invoices'] = getVendorSalesInvoicesPhp($pdo);
+        } else {
+            $data['vendor_sales_invoices'] = [];
+        }
+    } catch (Exception $e) {
+        $data['vendor_sales_invoices'] = [];
+        error_log('Notice hydrating vendor_sales_invoices in bootstrap: ' . $e->getMessage());
+    }
 
     if (!empty($bootstrapErrors)) {
         http_response_code(500);
@@ -9059,6 +9988,276 @@ if ($method === 'POST' && in_array($cleanPath, ['/email/send', '/email/send/'], 
             'message' => formatSmtpErrorPhp($e->getMessage())
         ]);
         exit;
+    }
+}
+
+// ==========================================================
+// SALES & PURCHASE ERP REST ENDPOINTS (PRODUCTS, VENDORS, VENDOR SALES INVOICES)
+// ==========================================================
+
+// GET|POST /api/products
+if (in_array($cleanPath, ['/products', '/products/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_products` ORDER BY `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            $whStocks = !empty($r['warehouse_stocks_json']) ? (json_decode($r['warehouse_stocks_json'], true) ?: []) : [];
+            $minStock = isset($r['reorder_level']) ? floatval($r['reorder_level']) : 0.0;
+            $gst = isset($r['gst_rate']) ? floatval($r['gst_rate']) : 18.0;
+            return [
+                'id' => $r['id'],
+                'name' => $r['name'],
+                'sku' => $r['sku'],
+                'itemCode' => $r['sku'],
+                'category' => $r['category'],
+                'brand' => $r['brand'] ?? '',
+                'model' => $r['model'] ?? '',
+                'specifications' => $r['specifications'] ?? '',
+                'specification' => $r['specifications'] ?? '',
+                'unit' => $r['unit'] ?? 'Nos',
+                'hsnCode' => $r['hsn_code'] ?? '',
+                'gstRate' => $gst,
+                'taxRate' => $gst,
+                'unitPrice' => floatval($r['unit_price'] ?? 0),
+                'sellingPrice' => floatval($r['selling_price'] ?? 0),
+                'currentStock' => floatval($r['current_stock'] ?? 0),
+                'reorderLevel' => $minStock,
+                'minStockLevel' => $minStock,
+                'minStockThreshold' => $minStock,
+                'location' => $r['location'] ?? ($r['warehouse_name'] ?? ''),
+                'warehouseId' => $r['warehouse_id'] ?? '',
+                'warehouseName' => $r['warehouse_name'] ?? '',
+                'warehouseStocks' => $whStocks,
+                'preferredVendorId' => $r['preferred_vendor_id'] ?? '',
+                'preferredVendorName' => $r['preferred_vendor_name'] ?? '',
+                'status' => $r['status'] ?? 'ACTIVE',
+                'createdAt' => $r['created_at'],
+                'updatedAt' => $r['updated_at'] ?? $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $actor = requireAuthUserPhp($pdo);
+        $saved = saveProductToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|DELETE /api/products/{id}
+if (preg_match('#^/products/([^/]+)/?$#', $cleanPath, $matches)) {
+    $prodId = urldecode($matches[1]);
+    if ($prodId !== 'import') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAuthUserPhp($pdo);
+
+        if ($method === 'PUT' || $method === 'POST') {
+            $body['id'] = $prodId;
+            $saved = saveProductToDb($pdo, $body);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $saved]);
+            exit;
+        }
+        if ($method === 'DELETE') {
+            deleteItemFromDb($pdo, 'products', $prodId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Product deleted from MySQL.']);
+            exit;
+        }
+    }
+}
+
+// GET|POST /api/vendors
+if (in_array($cleanPath, ['/vendors', '/vendors/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_vendors` ORDER BY `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            $cats = json_decode($r['categories_json'] ?? '[]', true) ?: [];
+            $bank = !empty($r['bank_details_json']) ? json_decode($r['bank_details_json'], true) : null;
+            $cat = $cats[0] ?? 'Solar Modules';
+            return [
+                'id' => $r['id'],
+                'name' => $r['name'],
+                'vendorCode' => $r['vendor_code'],
+                'contactPerson' => $r['contact_person'] ?? '',
+                'phone' => $r['phone'] ?? '',
+                'email' => $r['email'] ?? '',
+                'address' => $r['address'] ?? '',
+                'city' => $r['city'] ?? '',
+                'state' => $r['state'] ?? '',
+                'gstNumber' => $r['gst_number'] ?? '',
+                'panNumber' => $r['pan_number'] ?? '',
+                'paymentTerms' => $r['payment_terms'] ?? '30 Days',
+                'rating' => floatval($r['rating'] ?? 4.5),
+                'category' => $cat,
+                'categories' => !empty($cats) ? $cats : [$cat],
+                'bankDetails' => $bank,
+                'status' => $r['status'] ?? 'ACTIVE',
+                'createdAt' => $r['created_at'],
+                'updatedAt' => $r['updated_at'] ?? $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $actor = requireAuthUserPhp($pdo);
+        $saved = saveVendorToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|DELETE /api/vendors/{id}
+if (preg_match('#^/vendors/([^/]+)/?$#', $cleanPath, $matches)) {
+    $venId = urldecode($matches[1]);
+    if ($venId !== 'import') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAuthUserPhp($pdo);
+
+        if ($method === 'PUT' || $method === 'POST') {
+            $body['id'] = $venId;
+            $saved = saveVendorToDb($pdo, $body);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $saved]);
+            exit;
+        }
+        if ($method === 'DELETE') {
+            deleteItemFromDb($pdo, 'vendors', $venId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Vendor deleted from MySQL.']);
+            exit;
+        }
+    }
+}
+
+// GET /api/vendor-sales-invoices/next-number (Strict Admin-Only)
+if ($method === 'GET' && in_array($cleanPath, ['/vendor-sales-invoices/next-number', '/vendor-sales-invoices/next-number/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    requireAdminUserPhp($pdo);
+    $nextNumber = getNextVendorSalesInvoiceNumberPhp($pdo);
+    http_response_code(200);
+    echo json_encode(['success' => true, 'data' => ['invoiceNumber' => $nextNumber]]);
+    exit;
+}
+
+// GET|POST /api/vendor-sales-invoices (Strict Admin-Only)
+if (in_array($cleanPath, ['/vendor-sales-invoices', '/vendor-sales-invoices/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $items = getVendorSalesInvoicesPhp($pdo);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        try {
+            $payload = $body;
+            if (empty($payload['id'])) {
+                $payload['id'] = 'vsi-' . round(microtime(true) * 1000);
+            }
+            $saved = saveVendorSalesInvoicePhp($pdo, $payload, $actor);
+            http_response_code(201);
+            echo json_encode(['success' => true, 'data' => $saved]);
+            exit;
+        } catch (Exception $e) {
+            $code = intval($e->getCode());
+            http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+            exit;
+        }
+    }
+}
+
+// POST /api/vendor-sales-invoices/{id}/payments (Strict Admin-Only)
+if ($method === 'POST' && preg_match('#^/vendor-sales-invoices/([^/]+)/payments/?$#', $cleanPath, $matches)) {
+    $vsiId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminUserPhp($pdo);
+    try {
+        $updated = recordVendorSalesPaymentPhp($pdo, $vsiId, $body, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $updated]);
+        exit;
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// GET|PUT|POST|DELETE /api/vendor-sales-invoices/{id} (Strict Admin-Only)
+if (preg_match('#^/vendor-sales-invoices/([^/]+)/?$#', $cleanPath, $matches)) {
+    $vsiId = urldecode($matches[1]);
+    if ($vsiId !== 'next-number') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAdminUserPhp($pdo);
+
+        if ($method === 'GET') {
+            $invoice = getVendorSalesInvoiceByIdPhp($pdo, $vsiId);
+            if (!$invoice) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Vendor sales invoice not found.']);
+                exit;
+            }
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $invoice]);
+            exit;
+        }
+
+        if ($method === 'PUT' || $method === 'POST') {
+            try {
+                $body['id'] = $vsiId;
+                $saved = saveVendorSalesInvoicePhp($pdo, $body, $actor);
+                http_response_code(200);
+                echo json_encode(['success' => true, 'data' => $saved]);
+                exit;
+            } catch (Exception $e) {
+                $code = intval($e->getCode());
+                http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+                echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+                exit;
+            }
+        }
+
+        if ($method === 'DELETE') {
+            try {
+                deleteVendorSalesInvoicePhp($pdo, $vsiId);
+                http_response_code(200);
+                echo json_encode(['success' => true, 'message' => 'Vendor sales invoice deleted from MySQL.']);
+                exit;
+            } catch (Exception $e) {
+                $code = intval($e->getCode());
+                http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+                echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+                exit;
+            }
+        }
     }
 }
 
