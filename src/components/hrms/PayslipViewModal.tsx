@@ -1,10 +1,12 @@
 import React from 'react';
 import { Payslip } from '../../types/solar';
 import { storageService } from '../../services/storage';
+import { useApp } from '../../context/AppContext';
 import { numberToIndianWords } from '../../utils/indianNumberWords';
 import {
   X,
   Printer,
+  Mail,
   Building2,
   Calendar,
   CreditCard,
@@ -26,7 +28,25 @@ export const PayslipViewModal: React.FC<PayslipViewModalProps> = ({
   payslip,
   onEdit
 }) => {
+  const { openEmailModal } = useApp();
   if (!isOpen || !payslip) return null;
+
+  const handleEmailPayslip = () => {
+    const emp = storageService.getEmployees().find(
+      e => e.id === payslip.employeeId || e.name === payslip.employeeName
+    );
+    openEmailModal({
+      recipientEmail: emp?.email || '',
+      recipientName: payslip.employeeName,
+      type: 'PAYSLIP_SHARE',
+      data: {
+        payslipNumber: payslip.payslipNumber,
+        month: payslip.month,
+        netSalary: payslip.netPay,
+        status: payslip.status
+      }
+    });
+  };
 
   const settings = storageService.getSettings();
   const companyName = settings.companyName || 'Rejoy Solar Power Pvt. Ltd.';
@@ -89,6 +109,14 @@ export const PayslipViewModal: React.FC<PayslipViewModalProps> = ({
                 Edit Slip
               </button>
             )}
+            <button
+              type="button"
+              onClick={handleEmailPayslip}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-2xs transition-colors cursor-pointer"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Email Payslip</span>
+            </button>
             <button
               type="button"
               onClick={handlePrint}

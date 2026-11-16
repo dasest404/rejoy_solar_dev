@@ -43,6 +43,7 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
     activeView,
     openCustomerControlCenter,
     openWhatsAppModal,
+    openEmailModal,
     openImportExportModal,
     showToast,
     triggerRefresh,
@@ -580,6 +581,21 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                               >
                                 <MessageSquare className="w-4 h-4" />
                               </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openEmailModal({
+                                    recipientEmail: lead.email || '',
+                                    recipientName: lead.customerName,
+                                    type: 'LEAD_WELCOME',
+                                    data: { capacityKw: lead.solarCapacityKw }
+                                  })
+                                }
+                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Send Email via Gmail"
+                              >
+                                <Mail className="w-4 h-4" />
+                              </button>
                               {canDeleteLeads && (
                                 <button
                                   type="button"
@@ -670,6 +686,21 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                             title="Send WhatsApp Welcome"
                           >
                             <MessageSquare className="w-4 h-4 inline" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openEmailModal({
+                                recipientEmail: lead.email || '',
+                                recipientName: lead.customerName,
+                                type: 'LEAD_WELCOME',
+                                data: { capacityKw: lead.solarCapacityKw }
+                              })
+                            }
+                            className="p-1 text-blue-600 hover:bg-blue-50 rounded-md"
+                            title="Send Email via Gmail"
+                          >
+                            <Mail className="w-4 h-4 inline" />
                           </button>
                           {canDeleteLeads && (
                             <button
@@ -775,28 +806,45 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                 </div>
               </div>
 
-              <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between text-xs">
+              <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between text-xs gap-2">
                 <span className="text-slate-500">
                   Sanctioned: {cust.sanctionedLoadKw ? `${cust.sanctionedLoadKw} kW` : 'Not specified'}
                 </span>
-                {canManageCustomers && (
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setPasswordModalCustomer(cust);
-                      setNewCustomerPassword('');
-                      setConfirmCustomerPassword('');
-                      setPasswordError('');
-                      setShowUpdatePassword(false);
-                      setIsUpdatePasswordOpen(true);
+                      openEmailModal({
+                        recipientEmail: cust.email || '',
+                        recipientName: cust.name,
+                        type: 'CUSTOMER_MESSAGE'
+                      });
                     }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition-all cursor-pointer"
+                    className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-colors cursor-pointer"
+                    title="Send Email via Gmail"
                   >
-                    <KeyRound className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Update Password</span>
+                    <Mail className="w-3.5 h-3.5" />
                   </button>
-                )}
+                  {canManageCustomers && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPasswordModalCustomer(cust);
+                        setNewCustomerPassword('');
+                        setConfirmCustomerPassword('');
+                        setPasswordError('');
+                        setShowUpdatePassword(false);
+                        setIsUpdatePasswordOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition-all cursor-pointer"
+                    >
+                      <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Update Password</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -981,6 +1029,30 @@ export const CrmView: React.FC<{ defaultTab?: 'LEADS' | 'CUSTOMERS' | 'QUOTATION
                               title="Share on WhatsApp"
                             >
                               <MessageSquare className="w-4 h-4" />
+                            </button>
+
+                            {/* Email Quotation */}
+                            <button
+                              onClick={() => {
+                                const matchedCust = customers.find(
+                                  c => (q.customerId && c.id === q.customerId) || c.name === q.customerName
+                                );
+                                openEmailModal({
+                                  recipientEmail: matchedCust?.email || '',
+                                  recipientName: q.customerName,
+                                  type: 'QUOTATION_SHARE',
+                                  data: {
+                                    quotationNumber: q.quotationNumber,
+                                    capacityKw: q.capacityKw,
+                                    amount: totalCost,
+                                    validUntil: q.validUntil
+                                  }
+                                });
+                              }}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Email Quotation via Gmail"
+                            >
+                              <Mail className="w-4 h-4" />
                             </button>
 
                             {/* Delete */}

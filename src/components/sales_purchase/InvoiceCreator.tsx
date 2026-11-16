@@ -18,11 +18,12 @@ import {
   DollarSign,
   PackageCheck,
   Calendar,
-  Loader2
+  Loader2,
+  Mail
 } from 'lucide-react';
 
 export const InvoiceCreator: React.FC = () => {
-  const { refreshTrigger, triggerRefresh, showToast } = useApp();
+  const { refreshTrigger, triggerRefresh, showToast, openEmailModal } = useApp();
   const { currentUser } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -872,6 +873,30 @@ export const InvoiceCreator: React.FC = () => {
                 <h3 className="text-lg font-bold text-slate-900 mt-1">Tax Invoice</h3>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const matchedCust = customers.find(
+                      c => c.id === viewingInvoice.customerId || c.name === viewingInvoice.customerName
+                    );
+                    openEmailModal({
+                      recipientEmail: matchedCust?.email || '',
+                      recipientName: viewingInvoice.customerName,
+                      type: 'INVOICE_SHARE',
+                      data: {
+                        invoiceNumber: viewingInvoice.invoiceNumber,
+                        invoiceDate: viewingInvoice.invoiceDate,
+                        dueDate: viewingInvoice.dueDate,
+                        totalAmount: viewingInvoice.totalAmount,
+                        status: viewingInvoice.status
+                      }
+                    });
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  Email Invoice
+                </button>
                 <button
                   onClick={() => window.print()}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"

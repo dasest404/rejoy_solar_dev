@@ -1119,6 +1119,138 @@ class ApiClient {
     await this.handleResponse(res);
     return true;
   }
+
+  // --- Gmail Email SMTP Configuration (Admin Only) & App Email ---
+  async getEmailSettings(): Promise<EmailSettingsInfo> {
+    const res = await this.request(`${this.baseUrl}/settings/email`, {
+      headers: this.getAuthHeaders()
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || data.error || `Failed to load Gmail settings (${res.status})`);
+    }
+    return data.data;
+  }
+
+  async saveEmailSettings(payload: EmailConfigSavePayload): Promise<{ data: EmailSettingsInfo; message: string }> {
+    const res = await this.request(`${this.baseUrl}/settings/email`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || data.error || `Failed to save Gmail settings (${res.status})`);
+    }
+    return {
+      data: data.data,
+      message: data.message || 'Gmail SMTP configuration saved securely.'
+    };
+  }
+
+  async deleteEmailSettings(): Promise<{ data: EmailSettingsInfo; message: string }> {
+    const res = await this.request(`${this.baseUrl}/settings/email`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || data.error || `Failed to remove Gmail settings (${res.status})`);
+    }
+    return {
+      data: data.data,
+      message: data.message || 'Gmail SMTP credentials removed.'
+    };
+  }
+
+  async testEmailSettings(payload: {
+    testRecipient: string;
+    gmailAddress?: string;
+    appPassword?: string;
+    smtpHost?: string;
+    smtpPort?: number;
+    smtpSecurity?: 'TLS' | 'SSL';
+    senderName?: string;
+  }): Promise<{ message: string; data?: any }> {
+    const res = await this.request(`${this.baseUrl}/settings/email/test`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || data.error || `SMTP verification failed (${res.status})`);
+    }
+    return {
+      message: data.message || 'Test email sent successfully.',
+      data: data.data
+    };
+  }
+
+  async getEmailStatus(): Promise<{
+    configured: boolean;
+    enabled: boolean;
+    senderName: string;
+    gmailAddress: string;
+  }> {
+    const res = await this.request(`${this.baseUrl}/email/status`, {
+      headers: this.getAuthHeaders()
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || data.error || 'Failed to check email gateway status');
+    }
+    return data.data;
+  }
+
+  async sendEmail(payload: {
+    to: string | string[];
+    cc?: string | string[];
+    replyTo?: string;
+    subject: string;
+    text: string;
+    html?: string;
+  }): Promise<{ message: string; data: { messageId: string; accepted: string[]; sentAt: string } }> {
+    const res = await this.request(`${this.baseUrl}/email/send`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || data.error || `Failed to send email (${res.status})`);
+    }
+    return {
+      message: data.message || 'Email sent successfully.',
+      data: data.data
+    };
+  }
+}
+
+export interface EmailSettingsInfo {
+  configured: boolean;
+  hasAppPassword: boolean;
+  gmailAddress: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: 'TLS' | 'SSL';
+  senderName: string;
+  enabled: boolean;
+  lastTestedAt: string | null;
+  lastTestStatus: 'SUCCESS' | 'FAILED' | null;
+  lastTestMessage: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
+
+export interface EmailConfigSavePayload {
+  gmailAddress: string;
+  appPassword?: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: 'TLS' | 'SSL';
+  senderName: string;
+  enabled: boolean;
 }
 
 export const apiClient = new ApiClient();

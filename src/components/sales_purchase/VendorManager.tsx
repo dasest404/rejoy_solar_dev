@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 
 export const VendorManager: React.FC = () => {
-  const { refreshTrigger, triggerRefresh, showToast, openImportExportModal } = useApp();
+  const { refreshTrigger, triggerRefresh, showToast, openImportExportModal, openEmailModal } = useApp();
   const { hasPermission } = useAuth();
   const canManageVendors = hasPermission('inventory.vendors_manage');
 
@@ -377,13 +377,21 @@ export const VendorManager: React.FC = () => {
                 >
                   <Phone className="w-4 h-4" />
                 </a>
-                <a
-                  href={`mailto:${vendor.email}`}
-                  className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  title="Email Vendor"
+                <button
+                  type="button"
+                  onClick={() =>
+                    openEmailModal({
+                      recipientEmail: vendor.email || '',
+                      recipientName: vendor.name,
+                      type: 'VENDOR_MESSAGE',
+                      data: { contactPerson: vendor.contactPerson }
+                    })
+                  }
+                  className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                  title="Send Email via ERP Gmail"
                 >
                   <Mail className="w-4 h-4" />
-                </a>
+                </button>
               </div>
 
               {canManageVendors && (

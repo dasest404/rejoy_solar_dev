@@ -15,11 +15,12 @@ import {
   Calendar,
   AlertTriangle,
   FileSpreadsheet,
-  X
+  X,
+  Mail
 } from 'lucide-react';
 
 export const ServiceView: React.FC = () => {
-  const { openWhatsAppModal, openImportExportModal, showToast, triggerRefresh, refreshTrigger } = useApp();
+  const { openWhatsAppModal, openEmailModal, openImportExportModal, showToast, triggerRefresh, refreshTrigger } = useApp();
   const { currentUser, isCustomer } = useAuth();
 
   const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger]);
@@ -198,17 +199,42 @@ export const ServiceView: React.FC = () => {
             </div>
 
             <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between">
-              <button
-                onClick={() =>
-                  openWhatsAppModal('919879544321', t.customerName, 'SERVICE_TICKET', {
-                    ticketId: t.ticketId
-                  })
-                }
-                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                title="Send WhatsApp Update"
-              >
-                <MessageSquare className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() =>
+                    openWhatsAppModal('919879544321', t.customerName, 'SERVICE_TICKET', {
+                      ticketId: t.ticketId
+                    })
+                  }
+                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                  title="Send WhatsApp Update"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const matchedCust = customers.find(
+                      c => (t.customerId && c.id === t.customerId) || c.name === t.customerName
+                    );
+                    openEmailModal({
+                      recipientEmail: matchedCust?.email || '',
+                      recipientName: t.customerName,
+                      type: 'SERVICE_TICKET',
+                      data: {
+                        ticketId: t.ticketId,
+                        issue: t.issue,
+                        technician: t.assignedToName || t.assignedTechnicianName,
+                        status: t.status
+                      }
+                    });
+                  }}
+                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  title="Send Email Update via Gmail"
+                >
+                  <Mail className="w-4 h-4" />
+                </button>
+              </div>
 
               {t.status !== 'RESOLVED' ? (
                 <button

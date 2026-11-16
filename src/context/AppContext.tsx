@@ -3,8 +3,18 @@ import { Customer, SolarProject, AppNotification, SystemSettings } from '../type
 import { storageService } from '../services/storage';
 import { ExportModule } from '../services/exportImport';
 import { ReportCategory } from '../types/reports';
+import type { EmailDispatchType } from '../components/common/EmailDispatchModal';
 
-export type SettingsTab = 'general' | 'tally' | 'whatsapp' | 'acl' | 'users' | 'database';
+export type SettingsTab = 'general' | 'tally' | 'whatsapp' | 'acl' | 'users' | 'email';
+
+export interface EmailModalPayload {
+  recipientEmail: string;
+  recipientName: string;
+  type: EmailDispatchType;
+  data?: any;
+  defaultSubject?: string;
+  defaultBody?: string;
+}
 
 export type AppView =
   | 'dashboard'
@@ -54,6 +64,10 @@ interface AppContextType {
   } | null;
   openWhatsAppModal: (phone: string, name: string, type: any, data: any) => void;
   closeWhatsAppModal: () => void;
+  isEmailOpen: boolean;
+  emailData: EmailModalPayload | null;
+  openEmailModal: (payload: EmailModalPayload) => void;
+  closeEmailModal: () => void;
   isImportExportOpen: boolean;
   importExportModule: ExportModule;
   openImportExportModal: (module: ExportModule) => void;
@@ -104,8 +118,11 @@ const getInitialViewFromPath = (): { view: AppView; filterKey: string | null; se
   if (path === '/settings/acl' || path.endsWith('/settings/acl') || path === '/acl' || path === '/roles') {
     return { view: 'settings', filterKey: null, settingsTab: 'acl' };
   }
+  if (path === '/settings/email' || path.endsWith('/settings/email') || path === '/settings/gmail' || path.endsWith('/settings/gmail')) {
+    return { view: 'settings', filterKey: null, settingsTab: 'email' };
+  }
   if (path === '/settings/database' || path.endsWith('/settings/database') || path === '/database' || path === '/mysql') {
-    return { view: 'settings', filterKey: null, settingsTab: 'database' };
+    return { view: 'settings', filterKey: null, settingsTab: 'general' };
   }
   if (path === '/settings/tally' || path.endsWith('/settings/tally')) {
     return { view: 'settings', filterKey: null, settingsTab: 'tally' };
@@ -403,6 +420,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     type: any;
     data: any;
   } | null>(null);
+  const [isEmailOpen, setIsEmailOpen] = useState(false);
+  const [emailData, setEmailData] = useState<EmailModalPayload | null>(null);
 
   const [isImportExportOpen, setIsImportExportOpen] = useState(false);
   const [importExportModule, setImportExportModule] = useState<ExportModule>('Leads');
@@ -484,6 +503,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setWhatsAppData(null);
   };
 
+  const openEmailModal = (payload: EmailModalPayload) => {
+    setEmailData(payload);
+    setIsEmailOpen(true);
+  };
+
+  const closeEmailModal = () => {
+    setIsEmailOpen(false);
+    setEmailData(null);
+  };
+
   const openImportExportModal = (module: ExportModule) => {
     setImportExportModule(module);
     setIsImportExportOpen(true);
@@ -537,6 +566,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         whatsAppData,
         openWhatsAppModal,
         closeWhatsAppModal,
+        isEmailOpen,
+        emailData,
+        openEmailModal,
+        closeEmailModal,
         isImportExportOpen,
         importExportModule,
         openImportExportModal,

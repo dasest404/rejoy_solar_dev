@@ -7,6 +7,7 @@ import { MobileBottomNav } from './components/layout/MobileBottomNav';
 import { Toast } from './components/common/Toast';
 import { GlobalSearchModal } from './components/common/GlobalSearchModal';
 import { WhatsAppModal } from './components/common/WhatsAppModal';
+import { EmailDispatchModal } from './components/common/EmailDispatchModal';
 import { ImportExportModal } from './components/common/ImportExportModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { LoginView } from './components/auth/LoginView';
@@ -184,6 +185,7 @@ const MainLayout: React.FC = () => {
       {/* Global Application Modals & Notification Toasters */}
       <GlobalSearchModal />
       <WhatsAppModal />
+      <EmailDispatchModal />
       <ImportExportModal />
       <Toast />
     </div>

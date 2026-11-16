@@ -4,6 +4,17 @@ import path from 'path';
 import { dbManager, getDbConfigFromEnv } from '../mysqlDatabase';
 import { generateToken, verifyToken } from '../services/tokenService';
 import { authService } from '../services/authService';
+import {
+  decryptSecret,
+  encryptSecret,
+  formatSmtpError,
+  isValidEmailAddress,
+  normalizeAppPassword,
+  sendConfiguredEmail,
+  SmtpSecurity,
+  validateEmailConfigInput,
+  verifyAndSendTestEmail
+} from '../services/emailService';
 
 export const apiRouter = Router();
 
@@ -147,6 +158,25 @@ async function checkAdminAuth(req: Request, res: Response, next: () => void) {
     return;
   }
   res.status(403).json({ success: false, error: 'Access Denied: Administrative authorization required for database operations.' });
+}
+
+// Strict Admin-only middleware for sensitive Gmail SMTP credential endpoints (no localhost bypass)
+function requireAdminOnly(req: Request, res: Response, next: () => void) {
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required. Please log in as an Administrator.'
+    });
+  }
+  const role = String(user.role || '').trim().toUpperCase();
+  if (role !== 'ADMIN' && role !== 'SUPER ADMIN') {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied: Only authorized Administrators can view or modify Gmail email configuration.'
+    });
+  }
+  next();
 }
 
 function sendApiError(res: Response, err: any, fallbackMessage: string, extra?: Record<string, any>) {
@@ -2175,6 +2205,225 @@ apiRouter.post('/settings', async (req: Request, res: Response) => {
     res.json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to save settings');
+  }
+});
+
+// ==========================================================
+// GMAIL SMTP CONFIGURATION (STRICT ADMIN ONLY) & APP EMAIL
+// ==========================================================
+apiRouter.get('/settings/email', requireAdminOnly, async (_req: Request, res: Response) => {
+  try {
+    const data = await dbManager.getSanitizedEmailSettings();
+    res.json({ success: true, data });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to load Gmail email configuration');
+  }
+});
+
+const handleSaveEmailSettings = async (req: Request, res: Response) => {
+  try {
+    const existing = await dbManager.getEmailSettingsInternal();
+    const hasExistingPassword = Boolean(existing?.encrypted_app_password && existing?.iv && existing?.auth_tag);
+
+    const validation = validateEmailConfigInput(req.body, hasExistingPassword);
+    if (validation.valid === false) {
+      return res.status(400).json({ success: false, message: validation.error });
+    }
+
+    let encryptedAppPassword = existing?.encrypted_app_password || '';
+    let iv = existing?.iv || '';
+    let authTag = existing?.auth_tag || '';
+
+    if (validation.data.appPassword) {
+      const enc = encryptSecret(validation.data.appPassword);
+      encryptedAppPassword = enc.ciphertext;
+      iv = enc.iv;
+      authTag = enc.authTag;
+    }
+
+    const user = (req as any).user;
+    const updatedBy = String(user?.email || user?.name || user?.id || 'Admin');
+
+    const saved = await dbManager.saveEmailSettings({
+      gmailAddress: validation.data.gmailAddress,
+      smtpHost: validation.data.smtpHost,
+      smtpPort: validation.data.smtpPort,
+      smtpSecurity: validation.data.smtpSecurity,
+      senderName: validation.data.senderName,
+      encryptedAppPassword,
+      iv,
+      authTag,
+      enabled: validation.data.enabled,
+      updatedBy
+    });
+
+    res.json({
+      success: true,
+      message: 'Gmail SMTP configuration saved securely to MySQL.',
+      data: saved
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to save Gmail email configuration');
+  }
+};
+
+apiRouter.post('/settings/email', requireAdminOnly, handleSaveEmailSettings);
+apiRouter.put('/settings/email', requireAdminOnly, handleSaveEmailSettings);
+
+apiRouter.delete('/settings/email', requireAdminOnly, async (_req: Request, res: Response) => {
+  try {
+    await dbManager.deleteEmailSettings();
+    const data = await dbManager.getSanitizedEmailSettings();
+    res.json({
+      success: true,
+      message: 'Gmail SMTP credentials removed from MySQL.',
+      data
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete Gmail email configuration');
+  }
+});
+
+apiRouter.post('/settings/email/test', requireAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const stored = await dbManager.getEmailSettingsInternal();
+    const body = req.body || {};
+
+    const gmailAddress = String(body.gmailAddress || stored?.gmail_address || '').trim().toLowerCase();
+    const smtpSecurity: SmtpSecurity =
+      String(body.smtpSecurity || stored?.smtp_security || 'TLS').toUpperCase() === 'SSL' ? 'SSL' : 'TLS';
+    const smtpHost = String(body.smtpHost || stored?.smtp_host || 'smtp.gmail.com').trim();
+    const smtpPort = Number(body.smtpPort || stored?.smtp_port || (smtpSecurity === 'SSL' ? 465 : 587));
+    const senderName = String(body.senderName || stored?.sender_name || 'Rejoy Solar ERP').trim();
+    const recipientEmail = String(body.testRecipient || gmailAddress || user?.email || '').trim();
+
+    if (!isValidEmailAddress(gmailAddress)) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid Gmail email address before testing.' });
+    }
+    if (!isValidEmailAddress(recipientEmail)) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid test recipient email address.' });
+    }
+
+    let decryptedPassword = body.appPassword ? normalizeAppPassword(body.appPassword) : '';
+    if (!decryptedPassword && stored?.encrypted_app_password && stored?.iv && stored?.auth_tag) {
+      decryptedPassword = decryptSecret(stored.encrypted_app_password, stored.iv, stored.auth_tag);
+    }
+
+    if (!decryptedPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Gmail App Password is required to send a test email.'
+      });
+    }
+
+    try {
+      const result = await verifyAndSendTestEmail({
+        config: { gmailAddress, smtpHost, smtpPort, smtpSecurity, senderName },
+        decryptedPassword,
+        recipientEmail,
+        requestedBy: String(user?.name || user?.email || 'Admin')
+      });
+
+      let latestSanitized = null;
+      if (stored) {
+        latestSanitized = await dbManager.updateEmailTestStatus(
+          'SUCCESS',
+          `Test email delivered to ${recipientEmail} (Message ID: ${result.messageId})`,
+          result.sentAt
+        );
+      }
+
+      return res.json({
+        success: true,
+        message: `Test email sent successfully to ${recipientEmail}.`,
+        data: {
+          messageId: result.messageId,
+          sentAt: result.sentAt,
+          recipientEmail,
+          settings: latestSanitized
+        }
+      });
+    } catch (smtpErr: any) {
+      const cleanMessage = formatSmtpError(smtpErr);
+      let latestSanitized = null;
+      if (stored) {
+        latestSanitized = await dbManager.updateEmailTestStatus('FAILED', cleanMessage).catch(() => null);
+      }
+      return res.status(400).json({
+        success: false,
+        message: cleanMessage,
+        data: latestSanitized ? { settings: latestSanitized } : undefined
+      });
+    }
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to run Gmail SMTP test');
+  }
+});
+
+// Safe status endpoint for authenticated ERP staff workflows (never exposes secrets)
+apiRouter.get('/email/status', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required.' });
+    }
+    if (isCustomerUser(user)) {
+      return res.status(403).json({ success: false, message: 'Access denied for customer accounts.' });
+    }
+    const sanitized = await dbManager.getSanitizedEmailSettings();
+    res.json({
+      success: true,
+      data: {
+        configured: sanitized.configured,
+        enabled: sanitized.enabled,
+        senderName: sanitized.senderName,
+        gmailAddress: sanitized.configured ? sanitized.gmailAddress : ''
+      }
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to check email configuration status');
+  }
+});
+
+// Application email sending endpoint for authenticated ERP workflows
+apiRouter.post('/email/send', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required to send emails.' });
+    }
+    if (isCustomerUser(user)) {
+      return res.status(403).json({ success: false, message: 'Access denied: Customer portal accounts cannot send ERP emails.' });
+    }
+
+    const row = await dbManager.getEmailSettingsInternal();
+    try {
+      const result = await sendConfiguredEmail(row, {
+        to: req.body?.to,
+        cc: req.body?.cc,
+        bcc: req.body?.bcc,
+        replyTo: req.body?.replyTo,
+        subject: req.body?.subject,
+        text: req.body?.text,
+        html: req.body?.html,
+        attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : undefined
+      });
+      res.json({
+        success: true,
+        message: `Email sent successfully to ${result.accepted.join(', ')}.`,
+        data: result
+      });
+    } catch (sendErr: any) {
+      const status = typeof sendErr?.statusCode === 'number' ? sendErr.statusCode : 400;
+      const msg = sendErr?.statusCode === 400 ? sendErr.message : formatSmtpError(sendErr);
+      res.status(status).json({
+        success: false,
+        message: msg
+      });
+    }
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to send email');
   }
 });
 

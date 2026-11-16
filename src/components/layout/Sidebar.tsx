@@ -40,7 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     activeSettingsTab,
     openSettingsTab
   } = useApp();
-  const { currentUser, isCustomer, isFieldStaff, canAccessModule, hasPermission, currentRole, logout } = useAuth();
+  const { currentUser, isCustomer, isAdmin, isFieldStaff, canAccessModule, hasPermission, currentRole, logout } = useAuth();
 
   const [crmOpen, setCrmOpen] = useState(true);
   const [salesPurchaseOpen, setSalesPurchaseOpen] = useState(true);
@@ -646,14 +646,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                         (hasPermission('settings.tally') && 'tally') ||
                         (hasPermission('settings.whatsapp') && 'whatsapp') ||
                         (hasPermission('settings.acl_manage') && 'acl') ||
-                        (hasPermission('settings.database') && 'database') ||
+                        (isAdmin && 'email') ||
                         'general';
                       const isCurrentAllowed =
                         (activeSettingsTab === 'general' && hasPermission('settings.manage')) ||
                         (activeSettingsTab === 'tally' && hasPermission('settings.tally')) ||
                         (activeSettingsTab === 'whatsapp' && hasPermission('settings.whatsapp')) ||
                         (activeSettingsTab === 'acl' && hasPermission('settings.acl_manage')) ||
-                        (activeSettingsTab === 'database' && hasPermission('settings.database'));
+                        (activeSettingsTab === 'email' && isAdmin);
                       openSettingsTab(isCurrentAllowed ? activeSettingsTab : firstAllowedSettingsTab);
                       onCloseMobile();
                     }}
@@ -721,6 +721,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                           className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'acl')}
                         >
                           <span>Role-Based Access Control</span>
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          onClick={() => {
+                            openSettingsTab('email');
+                            onCloseMobile();
+                          }}
+                          className={subNavItemClass(activeView === 'settings' && activeSettingsTab === 'email')}
+                        >
+                          <span>Gmail Email Configuration</span>
                         </button>
                       )}
                     </div>

@@ -29,6 +29,8 @@ import {
 import { Quotation } from '../../types/solar';
 import { formatINR, numberToIndianWords } from '../../utils/indianNumberWords';
 import { generateQuotationPdf, WATERMARK_TEXT } from '../../utils/quotationPdfGenerator';
+import { useApp } from '../../context/AppContext';
+import { storageService } from '../../services/storage';
 
 interface QuotationPdfPreviewModalProps {
   quotation: Quotation;
@@ -43,10 +45,29 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
   onClose,
   onShareWhatsApp
 }) => {
+  const { openEmailModal } = useApp();
   const [zoom, setZoom] = useState<number>(100);
   const containerRef = useRef<HTMLDivElement>(null);
 
   if (!isOpen) return null;
+
+  const handleEmailQuote = () => {
+    const customers = storageService.getCustomers();
+    const matchedCust = customers.find(
+      c => (quotation.customerId && c.id === quotation.customerId) || c.name === quotation.customerName
+    );
+    openEmailModal({
+      recipientEmail: quotation.customerEmail || matchedCust?.email || '',
+      recipientName: quotation.customerName,
+      type: 'QUOTATION_SHARE',
+      data: {
+        quotationNumber: quotation.quotationNumber,
+        capacityKw: quotation.capacityKw,
+        amount: quotation.totalProjectCost || quotation.baseProjectPrice,
+        validUntil: quotation.validUntil
+      }
+    });
+  };
 
   const handlePrint = () => {
     window.print();
@@ -238,6 +259,15 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               <span className="hidden sm:inline">WhatsApp</span>
             </button>
           )}
+
+          <button
+            onClick={handleEmailQuote}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-xs transition-colors"
+            title="Email Quotation via Gmail"
+          >
+            <Mail className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Email Quote</span>
+          </button>
 
           <button
             onClick={handleDownload}

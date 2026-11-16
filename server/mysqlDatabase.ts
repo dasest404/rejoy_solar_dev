@@ -7,6 +7,12 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { ensureLocalMySqlRunning } from './mysqlDaemon';
 import { authService } from './services/authService';
+import {
+  EmailSettingsRecord,
+  SanitizedEmailSettings,
+  SmtpSecurity,
+  sanitizeEmailConfig
+} from './services/emailService';
 
 export interface DbConfig {
   host: string;
@@ -402,6 +408,32 @@ class MySqlDatabaseManager {
         `);
       } catch (err: any) {
         console.warn('[MySQL Migration] Notice creating solar_employee_documents table:', err.message);
+      }
+
+      // Ensure persistent solar_email_settings table exists (isolated from bootstrap/general settings)
+      try {
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_email_settings\` (
+            \`id\` VARCHAR(64) PRIMARY KEY,
+            \`gmail_address\` VARCHAR(255) NOT NULL,
+            \`smtp_host\` VARCHAR(255) NOT NULL DEFAULT 'smtp.gmail.com',
+            \`smtp_port\` INT NOT NULL DEFAULT 587,
+            \`smtp_security\` VARCHAR(16) NOT NULL DEFAULT 'TLS',
+            \`sender_name\` VARCHAR(255) NOT NULL DEFAULT 'Rejoy Solar ERP',
+            \`encrypted_app_password\` TEXT NOT NULL,
+            \`iv\` VARCHAR(64) NOT NULL,
+            \`auth_tag\` VARCHAR(64) NOT NULL,
+            \`enabled\` TINYINT(1) NOT NULL DEFAULT 1,
+            \`last_tested_at\` VARCHAR(64) DEFAULT NULL,
+            \`last_test_status\` VARCHAR(32) DEFAULT NULL,
+            \`last_test_message\` TEXT DEFAULT NULL,
+            \`updated_by\` VARCHAR(255) DEFAULT NULL,
+            \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+      } catch (err: any) {
+        console.warn('[MySQL Migration] Notice creating solar_email_settings table:', err.message);
       }
 
       await this.ensureHashedPasswords();
@@ -6361,6 +6393,93 @@ class MySqlDatabaseManager {
       ['global_settings', val]
     );
     return settings;
+  }
+
+  // ==========================================================
+  // CRUD: GMAIL EMAIL SMTP SETTINGS (ENCRYPTED AT REST)
+  // ==========================================================
+  public async getEmailSettingsInternal(): Promise<EmailSettingsRecord | null> {
+    this.assertDbConnected();
+    const [rows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_email_settings` WHERE `id` = ? LIMIT 1',
+      ['default_gmail_smtp']
+    );
+    if (Array.isArray(rows) && rows.length > 0) {
+      return rows[0] as EmailSettingsRecord;
+    }
+    return null;
+  }
+
+  public async getSanitizedEmailSettings(): Promise<SanitizedEmailSettings> {
+    const row = await this.getEmailSettingsInternal();
+    return sanitizeEmailConfig(row);
+  }
+
+  public async saveEmailSettings(input: {
+    gmailAddress: string;
+    smtpHost: string;
+    smtpPort: number;
+    smtpSecurity: SmtpSecurity;
+    senderName: string;
+    encryptedAppPassword: string;
+    iv: string;
+    authTag: string;
+    enabled: boolean;
+    updatedBy: string;
+  }): Promise<SanitizedEmailSettings> {
+    this.assertDbConnected();
+    await this.pool!.query(
+      `INSERT INTO \`solar_email_settings\` (
+        \`id\`, \`gmail_address\`, \`smtp_host\`, \`smtp_port\`, \`smtp_security\`,
+        \`sender_name\`, \`encrypted_app_password\`, \`iv\`, \`auth_tag\`,
+        \`enabled\`, \`updated_by\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        \`gmail_address\` = VALUES(\`gmail_address\`),
+        \`smtp_host\` = VALUES(\`smtp_host\`),
+        \`smtp_port\` = VALUES(\`smtp_port\`),
+        \`smtp_security\` = VALUES(\`smtp_security\`),
+        \`sender_name\` = VALUES(\`sender_name\`),
+        \`encrypted_app_password\` = VALUES(\`encrypted_app_password\`),
+        \`iv\` = VALUES(\`iv\`),
+        \`auth_tag\` = VALUES(\`auth_tag\`),
+        \`enabled\` = VALUES(\`enabled\`),
+        \`updated_by\` = VALUES(\`updated_by\`),
+        \`updated_at\` = CURRENT_TIMESTAMP`,
+      [
+        'default_gmail_smtp',
+        input.gmailAddress,
+        input.smtpHost,
+        input.smtpPort,
+        input.smtpSecurity,
+        input.senderName,
+        input.encryptedAppPassword,
+        input.iv,
+        input.authTag,
+        input.enabled ? 1 : 0,
+        input.updatedBy
+      ]
+    );
+    return await this.getSanitizedEmailSettings();
+  }
+
+  public async updateEmailTestStatus(
+    status: 'SUCCESS' | 'FAILED',
+    message: string,
+    testedAt?: string
+  ): Promise<SanitizedEmailSettings> {
+    this.assertDbConnected();
+    const ts = testedAt || new Date().toISOString();
+    await this.pool!.query(
+      'UPDATE `solar_email_settings` SET `last_tested_at` = ?, `last_test_status` = ?, `last_test_message` = ? WHERE `id` = ?',
+      [ts, status, message.slice(0, 1000), 'default_gmail_smtp']
+    );
+    return await this.getSanitizedEmailSettings();
+  }
+
+  public async deleteEmailSettings(): Promise<void> {
+    this.assertDbConnected();
+    await this.pool!.query('DELETE FROM `solar_email_settings` WHERE `id` = ?', ['default_gmail_smtp']);
   }
 
   // ==========================================================
