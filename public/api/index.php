@@ -275,6 +275,108 @@ function ensureRequiredTables($pdo) {
         } catch (Exception $e) {}
     }
 
+    // Ensure persistent solar_employee_documents table exists
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_employee_documents` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `employee_id` VARCHAR(64) NOT NULL,
+              `category` VARCHAR(64) NOT NULL,
+              `name` VARCHAR(255) NOT NULL,
+              `file_name` VARCHAR(255) NOT NULL,
+              `file_path` VARCHAR(500) NOT NULL,
+              `file_url` VARCHAR(500) NOT NULL,
+              `mime_type` VARCHAR(128) NOT NULL,
+              `file_size` BIGINT DEFAULT 0,
+              `uploaded_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+              `uploaded_by` VARCHAR(255) DEFAULT 'HR Administrator',
+              `notes` TEXT,
+              INDEX `idx_emp_docs_empid` (`employee_id`),
+              INDEX `idx_emp_docs_cat` (`category`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    } catch (Exception $e) {}
+
+    // Auto-migrate missing columns on solar_employee / solar_employees BEFORE refreshing view
+    try {
+        $empMigrations = [
+            'photo_url' => 'TEXT DEFAULT NULL',
+            'documents_json' => 'LONGTEXT DEFAULT NULL',
+            'joining_date' => 'DATE DEFAULT NULL',
+            'login_enabled' => 'TINYINT(1) DEFAULT 1',
+            'auth_uid' => 'VARCHAR(64) DEFAULT NULL',
+            'system_role' => "VARCHAR(64) DEFAULT 'Super Admin'",
+            'assigned_role' => 'VARCHAR(64) DEFAULT NULL',
+            'is_field_worker' => 'TINYINT(1) DEFAULT 0',
+            'account_status' => "VARCHAR(32) DEFAULT 'ACTIVE'",
+            'account_created_at' => 'VARCHAR(64) DEFAULT NULL',
+            'account_created_by' => 'VARCHAR(255) DEFAULT NULL',
+            'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
+        ];
+        $empTablesToMigrate = [];
+        $hasEmployeeBase = false;
+        $isEmployeesView = false;
+        try {
+            $t1 = $pdo->query("SHOW FULL TABLES LIKE 'solar_employee'")->fetchAll(PDO::FETCH_NUM);
+            if (!empty($t1)) {
+                $hasEmployeeBase = true;
+                if (strtoupper((string)($t1[0][1] ?? '')) === 'BASE TABLE') {
+                    $empTablesToMigrate[] = 'solar_employee';
+                }
+            }
+        } catch (Exception $e) {}
+        try {
+            $t2 = $pdo->query("SHOW FULL TABLES LIKE 'solar_employees'")->fetchAll(PDO::FETCH_NUM);
+            if (!empty($t2)) {
+                $t2Type = strtoupper((string)($t2[0][1] ?? ''));
+                if ($t2Type === 'VIEW') {
+                    $isEmployeesView = true;
+                } else {
+                    $empTablesToMigrate[] = 'solar_employees';
+                }
+            }
+        } catch (Exception $e) {}
+
+        foreach ($empTablesToMigrate as $empTbl) {
+            try {
+                $colsRes = $pdo->query("SHOW COLUMNS FROM `$empTbl`")->fetchAll(PDO::FETCH_ASSOC);
+                $existingCols = [];
+                foreach ($colsRes as $cr) {
+                    $existingCols[strtolower($cr['Field'])] = true;
+                }
+                foreach ($empMigrations as $colName => $colDef) {
+                    if (!isset($existingCols[strtolower($colName)])) {
+                        try { $pdo->exec("ALTER TABLE `$empTbl` ADD COLUMN `$colName` $colDef"); } catch (Exception $e) {}
+                    }
+                }
+                try { $pdo->exec("ALTER TABLE `$empTbl` MODIFY COLUMN `joining_date` DATE DEFAULT NULL"); } catch (Exception $e) {}
+            } catch (Exception $e) {}
+        }
+
+        if ($hasEmployeeBase && $isEmployeesView) {
+            try { $pdo->exec("CREATE OR REPLACE VIEW `solar_employees` AS SELECT * FROM `solar_employee`"); } catch (Exception $e) {}
+        }
+    } catch (Exception $e) {}
+
+    // Auto-migrate missing columns on solar_users (avatar, photo_url, is_field_worker)
+    try {
+        $uColsRes = $pdo->query("SHOW COLUMNS FROM `solar_users`")->fetchAll(PDO::FETCH_ASSOC);
+        $uExistingCols = [];
+        foreach ($uColsRes as $cr) {
+            $uExistingCols[strtolower($cr['Field'])] = true;
+        }
+        $userMigrations = [
+            'avatar' => 'TEXT DEFAULT NULL',
+            'photo_url' => 'TEXT DEFAULT NULL',
+            'is_field_worker' => 'TINYINT(1) DEFAULT 0'
+        ];
+        foreach ($userMigrations as $colName => $colDef) {
+            if (!isset($uExistingCols[strtolower($colName)])) {
+                try { $pdo->exec("ALTER TABLE `solar_users` ADD COLUMN `$colName` $colDef"); } catch (Exception $e) {}
+            }
+        }
+    } catch (Exception $e) {}
+
     // Auto-create centralized authentication tables (solar_auth_credentials & solar_auth_sessions)
     try {
         $pdo->exec("
@@ -989,6 +1091,17 @@ function saveProjectToDb($pdo, $item) {
     return $item;
 }
 
+function parseBoolFlagPhp($val, $fallback = false) {
+    if (is_bool($val)) return $val;
+    if (is_int($val) || is_float($val)) return $val != 0;
+    if (is_string($val)) {
+        $n = strtolower(trim($val));
+        if ($n === 'true' || $n === '1' || $n === 'yes') return true;
+        if ($n === 'false' || $n === '0' || $n === 'no' || $n === '') return false;
+    }
+    return (bool)$fallback;
+}
+
 // Helper: Employees
 function saveEmployeeToDb($pdo, $item, $actor = null) {
     if (empty($item['id'])) $item['id'] = 'emp-' . round(microtime(true) * 1000);
@@ -997,11 +1110,22 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
         $stmtEx = $pdo->prepare('SELECT * FROM `solar_employees` WHERE `id` = ? LIMIT 1');
         $stmtEx->execute([$item['id']]);
         $existingEmp = $stmtEx->fetch(PDO::FETCH_ASSOC) ?: null;
+        if (!$existingEmp && !empty($item['authUid'] ?? $item['auth_uid'] ?? '')) {
+            $stmtEx2 = $pdo->prepare('SELECT * FROM `solar_employees` WHERE `auth_uid` = ? LIMIT 1');
+            $stmtEx2->execute([$item['authUid'] ?? $item['auth_uid']]);
+            $existingEmp = $stmtEx2->fetch(PDO::FETCH_ASSOC) ?: null;
+            if ($existingEmp) $item['id'] = $existingEmp['id'];
+        }
     } catch (Exception $e) {}
 
     $code = $item['employeeCode'] ?? $item['employee_code'] ?? ($existingEmp['employee_code'] ?? $item['id']);
     $name = trim((string)($item['name'] ?? ($existingEmp['name'] ?? '')));
     $photoUrl = $item['photoUrl'] ?? $item['photo_url'] ?? ($existingEmp['photo_url'] ?? '');
+    $hasExplicitDocs = isset($item['documents']) && is_array($item['documents']);
+    $documents = $hasExplicitDocs
+        ? $item['documents']
+        : (json_decode($existingEmp['documents_json'] ?? '[]', true) ?: []);
+    $documentsJson = json_encode(array_values($documents));
     $dept = $item['department'] ?? ($existingEmp['department'] ?? 'Operations');
     $desig = $item['designation'] ?? ($existingEmp['designation'] ?? 'Solar Engineer');
     $phone = trim((string)($item['phone'] ?? ($existingEmp['phone'] ?? '+91 99999 00000')));
@@ -1012,29 +1136,33 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
     $salary = floatval($item['salaryMonthly'] ?? $item['salary_monthly'] ?? $item['salary'] ?? ($existingEmp['salary_monthly'] ?? 0));
     $status = $item['status'] ?? ($existingEmp['status'] ?? 'ACTIVE');
     $siteLoc = $item['currentSiteLocation'] ?? $item['current_site_location'] ?? ($existingEmp['current_site_location'] ?? '');
-    if (isset($item['loginEnabled'])) {
-        $loginEnabled = $item['loginEnabled'] ? 1 : 0;
-    } elseif (isset($item['login_enabled'])) {
-        $loginEnabled = intval($item['login_enabled']) ? 1 : 0;
-    } elseif ($existingEmp && isset($existingEmp['login_enabled'])) {
-        $loginEnabled = intval($existingEmp['login_enabled']) ? 1 : 0;
-    } else {
-        $loginEnabled = 1;
-    }
+
+    $loginRaw = array_key_exists('loginEnabled', $item) ? $item['loginEnabled'] : (array_key_exists('login_enabled', $item) ? $item['login_enabled'] : null);
+    $loginEnabled = ($loginRaw !== null ? parseBoolFlagPhp($loginRaw, true) : (!empty($existingEmp) ? parseBoolFlagPhp($existingEmp['login_enabled'] ?? 1, true) : true)) ? 1 : 0;
+
+    $authUid = $item['authUid'] ?? $item['auth_uid'] ?? ($existingEmp['auth_uid'] ?? $item['id']);
     $systemRole = $item['systemRole'] ?? $item['system_role'] ?? ($existingEmp['system_role'] ?? 'Site Survey Engineer');
-    $isFieldWorker = (isset($item['isFieldWorker']) ? !empty($item['isFieldWorker']) : (isset($item['is_field_worker']) ? !empty($item['is_field_worker']) : !empty($existingEmp['is_field_worker']))) ? 1 : 0;
+    $assignedRole = $item['assignedRole'] ?? $item['assigned_role'] ?? ($existingEmp['assigned_role'] ?? $systemRole);
+
+    $fwRaw = array_key_exists('isFieldWorker', $item) ? $item['isFieldWorker'] : (array_key_exists('is_field_worker', $item) ? $item['is_field_worker'] : null);
+    $isFieldWorker = ($fwRaw !== null ? parseBoolFlagPhp($fwRaw, false) : (!empty($existingEmp) && parseBoolFlagPhp($existingEmp['is_field_worker'] ?? 0, false))) ? 1 : 0;
+
     $accountStatus = $item['accountStatus'] ?? $item['account_status'] ?? ($existingEmp['account_status'] ?? ($loginEnabled ? 'ACTIVE' : 'DISABLED'));
+    $accountCreatedAt = $item['accountCreatedAt'] ?? $item['account_created_at'] ?? ($existingEmp['account_created_at'] ?? null);
+    $accountCreatedBy = $item['accountCreatedBy'] ?? $item['account_created_by'] ?? ($existingEmp['account_created_by'] ?? null);
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_employees` (
-            `id`, `employee_code`, `name`, `photo_url`, `department`,
+            `id`, `employee_code`, `name`, `photo_url`, `documents_json`, `department`,
             `designation`, `phone`, `email`, `joining_date`, `salary_monthly`,
-            `status`, `current_site_location`, `login_enabled`, `system_role`,
-            `is_field_worker`, `account_status`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `status`, `current_site_location`, `login_enabled`, `auth_uid`, `system_role`,
+            `assigned_role`, `is_field_worker`, `account_status`, `account_created_at`, `account_created_by`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
+            `employee_code` = VALUES(`employee_code`),
             `name` = VALUES(`name`),
             `photo_url` = VALUES(`photo_url`),
+            `documents_json` = VALUES(`documents_json`),
             `department` = VALUES(`department`),
             `designation` = VALUES(`designation`),
             `phone` = VALUES(`phone`),
@@ -1044,21 +1172,76 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
             `status` = VALUES(`status`),
             `current_site_location` = VALUES(`current_site_location`),
             `login_enabled` = VALUES(`login_enabled`),
+            `auth_uid` = VALUES(`auth_uid`),
             `system_role` = VALUES(`system_role`),
+            `assigned_role` = VALUES(`assigned_role`),
             `is_field_worker` = VALUES(`is_field_worker`),
-            `account_status` = VALUES(`account_status`)
+            `account_status` = VALUES(`account_status`),
+            `account_created_at` = COALESCE(VALUES(`account_created_at`), `account_created_at`),
+            `account_created_by` = COALESCE(VALUES(`account_created_by`), `account_created_by`)
     ");
     $stmt->execute([
-        $item['id'], $code, $name, $photoUrl, $dept,
+        $item['id'], $code, $name, $photoUrl, $documentsJson, $dept,
         $desig, $phone, $email, $joiningDate, $salary,
-        $status, $siteLoc, $loginEnabled, $systemRole,
-        $isFieldWorker, $accountStatus
+        $status, $siteLoc, $loginEnabled, $authUid, $systemRole,
+        $assignedRole, $isFieldWorker, $accountStatus, $accountCreatedAt, $accountCreatedBy
     ]);
 
-    // Synchronize to solar_users ONLY if active login AND (existing user exists OR brand-new employee OR explicit password supplied)
+    // Synchronize documents into solar_employee_documents table when explicitly supplied
+    if ($hasExplicitDocs) {
+        try {
+            $keepIds = [];
+            foreach ($documents as $d) {
+                if (!empty($d['id'])) $keepIds[] = $d['id'];
+            }
+            if (empty($keepIds)) {
+                $pdo->prepare('DELETE FROM `solar_employee_documents` WHERE `employee_id` = ?')->execute([$item['id']]);
+            } else {
+                $placeholders = implode(',', array_fill(0, count($keepIds), '?'));
+                $pdo->prepare("DELETE FROM `solar_employee_documents` WHERE `employee_id` = ? AND `id` NOT IN ($placeholders)")
+                    ->execute(array_merge([$item['id']], $keepIds));
+            }
+            foreach ($documents as $doc) {
+                if (empty($doc['id']) || empty($doc['fileName'])) continue;
+                $pdo->prepare("
+                    INSERT INTO `solar_employee_documents` (
+                        `id`, `employee_id`, `category`, `name`, `file_name`,
+                        `file_path`, `file_url`, `mime_type`, `file_size`,
+                        `uploaded_at`, `uploaded_by`, `notes`
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        `employee_id` = VALUES(`employee_id`),
+                        `category` = VALUES(`category`),
+                        `name` = VALUES(`name`),
+                        `file_name` = VALUES(`file_name`),
+                        `file_path` = VALUES(`file_path`),
+                        `file_url` = VALUES(`file_url`),
+                        `mime_type` = VALUES(`mime_type`),
+                        `file_size` = VALUES(`file_size`),
+                        `notes` = VALUES(`notes`)
+                ")->execute([
+                    $doc['id'],
+                    $item['id'],
+                    $doc['category'] ?? 'Other',
+                    $doc['name'] ?? $doc['fileName'],
+                    $doc['fileName'],
+                    $doc['filePath'] ?? ($doc['fileUrl'] ?? ''),
+                    $doc['fileUrl'] ?? '',
+                    $doc['mimeType'] ?? 'application/octet-stream',
+                    intval($doc['fileSize'] ?? 0),
+                    $doc['uploadedBy'] ?? 'HR Administrator',
+                    $doc['notes'] ?? null
+                ]);
+            }
+        } catch (Exception $e) {
+            error_log('Notice syncing employee docs to table: ' . $e->getMessage());
+        }
+    }
+
+    // Synchronize to solar_users
     try {
-        $stmtUserCheck = $pdo->prepare('SELECT id, password FROM `solar_users` WHERE `id` = ? OR `employee_id` = ? OR (LOWER(`email`) = ? AND `email` != "") LIMIT 1');
-        $stmtUserCheck->execute([$item['id'], $code, $email]);
+        $stmtUserCheck = $pdo->prepare('SELECT id, password FROM `solar_users` WHERE `id` = ? OR `id` = ? OR `employee_id` = ? OR (LOWER(`email`) = ? AND `email` != "") LIMIT 1');
+        $stmtUserCheck->execute([$item['id'], $authUid, $code, $email]);
         $existingU = $stmtUserCheck->fetch(PDO::FETCH_ASSOC) ?: null;
 
         $rawPass = $item['password'] ?? ($item['tempPassword'] ?? null);
@@ -1069,8 +1252,14 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
 
         if (!$isActiveLogin) {
             if ($existingU) {
-                $pdo->prepare("UPDATE `solar_users` SET `status` = 'DISABLED', `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ?")
-                    ->execute([$existingU['id']]);
+                $pdo->prepare("
+                    UPDATE `solar_users`
+                    SET `name` = ?, `department` = ?, `designation` = ?, `employee_id` = ?,
+                        `is_field_worker` = ?, `photo_url` = COALESCE(NULLIF(?, ''), `photo_url`),
+                        `avatar` = COALESCE(NULLIF(?, ''), `avatar`),
+                        `status` = 'DISABLED', `updated_at` = CURRENT_TIMESTAMP
+                    WHERE `id` = ?
+                ")->execute([$name, $dept, $desig, $code, $isFieldWorker, $photoUrl, $photoUrl, $existingU['id']]);
                 syncAuthCredentialPhp($pdo, $existingU['id'], $email, null, $systemRole, in_array($systemRole, ['Admin', 'Super Admin'], true) ? 'ADMIN' : 'EMPLOYEE', $item['id'], 'DISABLED');
                 logSolarUsersAuditPhp('DISABLE', 'saveEmployeeToDb', $existingU['id'], $email, $actor);
             }
@@ -1089,10 +1278,10 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
 
             $targetUserId = $existingU['id'] ?? $item['id'];
             if ($existingU) {
-                $upSql = 'UPDATE `solar_users` SET `name` = ?, `email` = ?, `role` = ?, `phone` = ?, `department` = ?, `designation` = ?, `employee_id` = ?, `is_field_worker` = ?, `status` = \'ACTIVE\', `updated_at` = CURRENT_TIMESTAMP'
+                $upSql = "UPDATE `solar_users` SET `name` = ?, `email` = ?, `role` = ?, `phone` = ?, `department` = ?, `designation` = ?, `employee_id` = ?, `avatar` = COALESCE(NULLIF(?, ''), `avatar`), `photo_url` = COALESCE(NULLIF(?, ''), `photo_url`), `is_field_worker` = ?, `status` = 'ACTIVE', `updated_at` = CURRENT_TIMESTAMP"
                     . ($hasExplicitPass ? ', `password` = ?' : '')
                     . ' WHERE `id` = ?';
-                $upParams = [$name, $email, $systemRole, $phone, $dept, $desig, $code, $isFieldWorker];
+                $upParams = [$name, $email, $systemRole, $phone, $dept, $desig, $code, $photoUrl, $photoUrl, $isFieldWorker];
                 if ($hasExplicitPass) $upParams[] = $userPassHash;
                 $upParams[] = $targetUserId;
                 $pdo->prepare($upSql)->execute($upParams);
@@ -1101,11 +1290,11 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
                 $pdo->prepare("
                     INSERT INTO `solar_users` (
                         `id`, `name`, `email`, `password`, `role`, `phone`,
-                        `department`, `designation`, `employee_id`, `is_field_worker`, `status`
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+                        `department`, `designation`, `employee_id`, `avatar`, `photo_url`, `is_field_worker`, `status`
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
                 ")->execute([
                     $targetUserId, $name, $email, $userPassHash, $systemRole, $phone,
-                    $dept, $desig, $code, $isFieldWorker
+                    $dept, $desig, $code, ($photoUrl ?: null), ($photoUrl ?: null), $isFieldWorker
                 ]);
                 logSolarUsersAuditPhp('INSERT', 'saveEmployeeToDb', $targetUserId, $email, $actor);
             }
@@ -1117,6 +1306,9 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
         error_log('Notice syncing user from employee: ' . $e->getMessage());
     }
 
+    $item['isFieldWorker'] = (bool)$isFieldWorker;
+    $item['photoUrl'] = $photoUrl;
+    $item['documents'] = array_values($documents);
     return $item;
 }
 
@@ -2309,13 +2501,29 @@ function saveNotificationToDb($pdo, $item) {
 function saveUserToDb($pdo, $item, $isUpdateOnly = false, $actor = null) {
     if (empty($item['id'])) $item['id'] = 'usr-' . round(microtime(true) * 1000);
     $cleanEmail = strtolower(trim((string)($item['email'] ?? '')));
+    $reqEmpCode = trim((string)($item['employeeId'] ?? ($item['employee_id'] ?? ($item['employeeCode'] ?? ''))));
 
     $existing = null;
+    $existingEmp = null;
     if ($isUpdateOnly) {
         $stmtCheck = $pdo->prepare('SELECT * FROM `solar_users` WHERE `id` = ? LIMIT 1');
         $stmtCheck->execute([$item['id']]);
         $existing = $stmtCheck->fetch(PDO::FETCH_ASSOC) ?: null;
-        if (!$existing) {
+
+        try {
+            $stmtEmpCheck = $pdo->prepare('SELECT * FROM `solar_employees` WHERE `id` = ? OR `auth_uid` = ? LIMIT 1');
+            $stmtEmpCheck->execute([$item['id'], $item['id']]);
+            $existingEmp = $stmtEmpCheck->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$existing && $existingEmp) {
+                $matchCode = !empty($reqEmpCode) ? $reqEmpCode : ($existingEmp['employee_code'] ?? '');
+                $matchEmail = !empty($cleanEmail) ? $cleanEmail : strtolower(trim((string)($existingEmp['email'] ?? '')));
+                $stmtLinkedU = $pdo->prepare('SELECT * FROM `solar_users` WHERE `id` = ? OR (`employee_id` = ? AND `employee_id` != "") OR (LOWER(`email`) = ? AND `email` != "") LIMIT 1');
+                $stmtLinkedU->execute([$existingEmp['auth_uid'] ?? $existingEmp['id'], $matchCode, $matchEmail]);
+                $existing = $stmtLinkedU->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+        } catch (Exception $e) {}
+
+        if (!$existing && !$existingEmp) {
             throw new Exception('User record "' . $item['id'] . '" not found in MySQL.', 404);
         }
     } else {
@@ -2326,9 +2534,9 @@ function saveUserToDb($pdo, $item, $isUpdateOnly = false, $actor = null) {
         } catch (Exception $e) {}
     }
 
-    $canonicalId = $existing['id'] ?? $item['id'];
-    $name = isset($item['name']) ? trim((string)$item['name']) : ($existing['name'] ?? 'Solar User');
-    $email = !empty($cleanEmail) ? $cleanEmail : ($existing['email'] ?? ($canonicalId . '@rejoysolar.com'));
+    $canonicalId = $existing['id'] ?? ($existingEmp['auth_uid'] ?? ($existingEmp['id'] ?? $item['id']));
+    $name = isset($item['name']) ? trim((string)$item['name']) : ($existing['name'] ?? ($existingEmp['name'] ?? 'Solar User'));
+    $email = !empty($cleanEmail) ? $cleanEmail : ($existing['email'] ?? ($existingEmp['email'] ?? ($canonicalId . '@rejoysolar.com')));
 
     $rawPass = $item['password'] ?? ($item['tempPassword'] ?? null);
     $password = $existing['password'] ?? null;
@@ -2346,16 +2554,21 @@ function saveUserToDb($pdo, $item, $isUpdateOnly = false, $actor = null) {
         $hasNewPassword = true;
     }
 
-    $role = $item['role'] ?? ($item['systemRole'] ?? ($existing['role'] ?? 'Super Admin'));
-    $phone = isset($item['phone']) ? trim((string)$item['phone']) : ($existing['phone'] ?? '');
-    $dept = isset($item['department']) ? trim((string)$item['department']) : ($existing['department'] ?? 'Operations');
-    $desig = isset($item['designation']) ? trim((string)$item['designation']) : ($existing['designation'] ?? '');
-    $empId = $item['employeeId'] ?? $item['employee_id'] ?? ($existing['employee_id'] ?? null);
-    $isField = (isset($item['isFieldWorker']) ? !empty($item['isFieldWorker']) : (isset($item['is_field_worker']) ? !empty($item['is_field_worker']) : !empty($existing['is_field_worker']))) ? 1 : 0;
+    $role = $item['role'] ?? ($item['systemRole'] ?? ($existing['role'] ?? ($existingEmp['system_role'] ?? 'Super Admin')));
+    $phone = isset($item['phone']) ? trim((string)$item['phone']) : ($existing['phone'] ?? ($existingEmp['phone'] ?? ''));
+    $dept = isset($item['department']) ? trim((string)$item['department']) : ($existing['department'] ?? ($existingEmp['department'] ?? 'Operations'));
+    $desig = isset($item['designation']) ? trim((string)$item['designation']) : ($existing['designation'] ?? ($existingEmp['designation'] ?? ''));
+    $empId = !empty($reqEmpCode) ? $reqEmpCode : ($existing['employee_id'] ?? ($existingEmp['employee_code'] ?? null));
 
-    $loginDisabledExplicit = (isset($item['loginEnabled']) && $item['loginEnabled'] === false)
-        || (isset($item['login_enabled']) && intval($item['login_enabled']) === 0);
-    $status = $loginDisabledExplicit ? 'DISABLED' : ($item['status'] ?? ($existing['status'] ?? 'ACTIVE'));
+    $fwRaw = array_key_exists('isFieldWorker', $item) ? $item['isFieldWorker'] : (array_key_exists('is_field_worker', $item) ? $item['is_field_worker'] : null);
+    $fallbackFw = $existing ? parseBoolFlagPhp($existing['is_field_worker'] ?? 0, false) : ($existingEmp ? parseBoolFlagPhp($existingEmp['is_field_worker'] ?? 0, false) : false);
+    $isField = ($fwRaw !== null ? parseBoolFlagPhp($fwRaw, $fallbackFw) : $fallbackFw) ? 1 : 0;
+
+    $loginDisabledExplicit = (array_key_exists('loginEnabled', $item) && !parseBoolFlagPhp($item['loginEnabled'], true))
+        || (array_key_exists('login_enabled', $item) && !parseBoolFlagPhp($item['login_enabled'], true));
+    $status = $loginDisabledExplicit
+        ? 'DISABLED'
+        : ($item['status'] ?? ($existing['status'] ?? ($existingEmp && isset($existingEmp['login_enabled']) && intval($existingEmp['login_enabled']) === 0 ? 'DISABLED' : 'ACTIVE')));
 
     if ($existing) {
         $upSql = 'UPDATE `solar_users` SET `name` = ?, `email` = ?, `role` = ?, `phone` = ?, `department` = ?, `designation` = ?, `employee_id` = ?, `is_field_worker` = ?, `status` = ?, `updated_at` = CURRENT_TIMESTAMP'
@@ -2365,7 +2578,7 @@ function saveUserToDb($pdo, $item, $isUpdateOnly = false, $actor = null) {
         if ($hasNewPassword) $upParams[] = $password;
         $upParams[] = $canonicalId;
         $pdo->prepare($upSql)->execute($upParams);
-    } else {
+    } elseif (!$isUpdateOnly || (!$loginDisabledExplicit && strtoupper((string)$status) === 'ACTIVE')) {
         $stmt = $pdo->prepare("
             INSERT INTO `solar_users` (
                 `id`, `name`, `email`, `password`, `role`, `phone`,
@@ -2378,41 +2591,58 @@ function saveUserToDb($pdo, $item, $isUpdateOnly = false, $actor = null) {
         ]);
     }
 
-    logSolarUsersAuditPhp($existing ? 'UPDATE' : 'INSERT', $isUpdateOnly ? 'saveUserToDb(updateOnly)' : 'saveUserToDb', $canonicalId, $email, $actor);
+    if ($existing || !$isUpdateOnly || (!$loginDisabledExplicit && strtoupper((string)$status) === 'ACTIVE')) {
+        logSolarUsersAuditPhp($existing ? 'UPDATE' : 'INSERT', $isUpdateOnly ? 'saveUserToDb(updateOnly)' : 'saveUserToDb', $canonicalId, $email, $actor);
+    }
 
     $credStatus = in_array(strtoupper((string)$status), ['DISABLED', 'INACTIVE'], true) ? 'DISABLED' : 'ACTIVE';
     $acctType = ($role === 'Customer') ? 'CUSTOMER' : (in_array($role, ['Admin', 'Super Admin'], true) ? 'ADMIN' : 'EMPLOYEE');
-    syncAuthCredentialPhp($pdo, $canonicalId, $email, $hasNewPassword ? $password : null, $role, $acctType, $canonicalId, $credStatus);
+    if ($existing || !$isUpdateOnly || $credStatus === 'ACTIVE') {
+        syncAuthCredentialPhp($pdo, $canonicalId, $email, $hasNewPassword ? $password : null, $role, $acctType, $existingEmp['id'] ?? $canonicalId, $credStatus);
+    }
 
-    // Also synchronize to solar_employees for internal staff
+    // Also synchronize to solar_employees without duplicating rows or overwriting photo_url/documents
     if ($role !== 'Customer') {
         try {
-            $empCode = $empId ?: ('EMP-' . substr(preg_replace('/\D/', '', $canonicalId) ?: '001', -3));
+            $empCode = $empId ?: ($existingEmp['employee_code'] ?? ('EMP-' . substr(preg_replace('/\D/', '', $canonicalId) ?: '001', -3)));
             $empStatus = ($credStatus === 'DISABLED') ? 'INACTIVE' : 'ACTIVE';
             $loginFlag = ($credStatus === 'DISABLED') ? 0 : 1;
-            $stmtEmp = $pdo->prepare("
-                INSERT INTO `solar_employees` (
-                    `id`, `employee_code`, `name`, `photo_url`, `department`,
-                    `designation`, `phone`, `email`, `joining_date`, `salary_monthly`,
-                    `status`, `current_site_location`, `login_enabled`, `system_role`,
-                    `is_field_worker`, `account_status`
-                ) VALUES (?, ?, ?, '', ?, ?, ?, ?, CURDATE(), 0.00, ?, '', ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    `name` = VALUES(`name`),
-                    `department` = VALUES(`department`),
-                    `designation` = VALUES(`designation`),
-                    `phone` = VALUES(`phone`),
-                    `email` = VALUES(`email`),
-                    `login_enabled` = VALUES(`login_enabled`),
-                    `system_role` = VALUES(`system_role`),
-                    `is_field_worker` = VALUES(`is_field_worker`),
-                    `status` = VALUES(`status`),
-                    `account_status` = VALUES(`account_status`)
-            ");
-            $stmtEmp->execute([
-                $canonicalId, $empCode, $name, $dept, $desig, $phone, $email,
-                $empStatus, $loginFlag, $role, $isField, $credStatus
-            ]);
+
+            $targetEmpRowId = $existingEmp['id'] ?? null;
+            if (!$targetEmpRowId) {
+                $stmtFindEmp = $pdo->prepare('SELECT id FROM `solar_employees` WHERE `id` = ? OR `auth_uid` = ? OR (`employee_code` = ? AND `employee_code` != "") OR (LOWER(`email`) = ? AND `email` != "") LIMIT 1');
+                $stmtFindEmp->execute([$canonicalId, $canonicalId, $empCode, $email]);
+                $foundEmp = $stmtFindEmp->fetch(PDO::FETCH_ASSOC);
+                if ($foundEmp) $targetEmpRowId = $foundEmp['id'];
+            }
+
+            if ($targetEmpRowId) {
+                $pdo->prepare("
+                    UPDATE `solar_employees`
+                    SET `employee_code` = ?, `name` = ?, `department` = ?, `designation` = ?,
+                        `phone` = ?, `email` = ?, `login_enabled` = ?, `auth_uid` = ?,
+                        `system_role` = ?, `assigned_role` = ?, `is_field_worker` = ?,
+                        `status` = ?, `account_status` = ?
+                    WHERE `id` = ?
+                ")->execute([
+                    $empCode, $name, $dept, $desig,
+                    $phone, $email, $loginFlag, $canonicalId,
+                    $role, $role, $isField,
+                    $empStatus, $credStatus, $targetEmpRowId
+                ]);
+            } else {
+                $pdo->prepare("
+                    INSERT INTO `solar_employees` (
+                        `id`, `employee_code`, `name`, `photo_url`, `department`,
+                        `designation`, `phone`, `email`, `joining_date`, `salary_monthly`,
+                        `status`, `current_site_location`, `login_enabled`, `auth_uid`, `system_role`,
+                        `assigned_role`, `is_field_worker`, `account_status`
+                    ) VALUES (?, ?, ?, '', ?, ?, ?, ?, CURDATE(), 0.00, ?, '', ?, ?, ?, ?, ?, ?)
+                ")->execute([
+                    $canonicalId, $empCode, $name, $dept, $desig, $phone, $email,
+                    $empStatus, $loginFlag, $canonicalId, $role, $role, $isField, $credStatus
+                ]);
+            }
         } catch (Exception $e) {
             error_log('Notice syncing employee from user: ' . $e->getMessage());
         }
@@ -3485,7 +3715,7 @@ if ($method === 'DELETE' && preg_match('#^/users/([^/]+)/?$#', $cleanPath, $matc
     exit;
 }
 
-// Direct /api/employees and /api/admin/create|update-employee-account endpoints (mirrors Node serverApp/apiRouter)
+// Direct /api/employees, photo/document upload endpoints, and /api/admin/create|update-employee-account
 if (in_array($cleanPath, ['/employees', '/employee'])) {
     $pdo = getDbConnection($dbConfig);
     ensureRequiredTables($pdo);
@@ -3493,17 +3723,44 @@ if (in_array($cleanPath, ['/employees', '/employee'])) {
         $actor = requireAuthUserPhp($pdo);
         $stmt = $pdo->query('SELECT * FROM `solar_employees` ORDER BY `created_at` ASC');
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $mapped = array_map(function($r) {
+        $docMap = [];
+        try {
+            $dStmt = $pdo->query('SELECT * FROM `solar_employee_documents` ORDER BY `uploaded_at` DESC');
+            foreach (($dStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) as $d) {
+                $docMap[$d['employee_id']][] = [
+                    'id' => $d['id'],
+                    'category' => $d['category'],
+                    'name' => $d['name'],
+                    'fileName' => $d['file_name'],
+                    'filePath' => $d['file_path'],
+                    'fileUrl' => $d['file_url'],
+                    'mimeType' => $d['mime_type'],
+                    'fileSize' => intval($d['file_size'] ?? 0),
+                    'uploadedAt' => !empty($d['uploaded_at']) ? date('c', strtotime($d['uploaded_at'])) : date('c'),
+                    'uploadedBy' => $d['uploaded_by'] ?? 'HR Administrator',
+                    'notes' => $d['notes'] ?? null
+                ];
+            }
+        } catch (Exception $e) {}
+
+        $mapped = array_map(function($r) use ($docMap) {
+            $docs = $docMap[$r['id']] ?? [];
+            if (empty($docs) && !empty($r['documents_json'])) {
+                $parsed = json_decode($r['documents_json'], true);
+                if (is_array($parsed)) $docs = $parsed;
+            }
             return [
                 'id' => $r['id'],
+                'authUid' => $r['auth_uid'] ?? $r['id'],
                 'employeeCode' => $r['employee_code'],
                 'name' => $r['name'],
                 'photoUrl' => $r['photo_url'] ?? '',
+                'documents' => $docs,
                 'department' => $r['department'] ?? 'Operations',
                 'designation' => $r['designation'] ?? '',
                 'phone' => $r['phone'] ?? '',
                 'email' => $r['email'] ?? '',
-                'joiningDate' => $r['joining_date'] ?? '',
+                'joiningDate' => !empty($r['joining_date']) ? substr((string)$r['joining_date'], 0, 10) : '',
                 'salaryMonthly' => floatval($r['salary_monthly'] ?? 0),
                 'status' => $r['status'] ?? 'ACTIVE',
                 'currentSiteLocation' => $r['current_site_location'] ?? '',
@@ -3526,6 +3783,324 @@ if (in_array($cleanPath, ['/employees', '/employee'])) {
         echo json_encode(['success' => true, 'data' => $saved]);
         exit;
     }
+}
+
+// GET /api/employees/{id}/documents
+if ($method === 'GET' && preg_match('#^/(?:employees|employee)/([^/]+)/documents/?$#', $cleanPath, $matches)) {
+    $empId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    $stmt = $pdo->prepare('SELECT * FROM `solar_employee_documents` WHERE `employee_id` = ? ORDER BY `uploaded_at` DESC');
+    $stmt->execute([$empId]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $docs = array_map(function($d) {
+        return [
+            'id' => $d['id'],
+            'employeeId' => $d['employee_id'],
+            'category' => $d['category'],
+            'name' => $d['name'],
+            'fileName' => $d['file_name'],
+            'filePath' => $d['file_path'],
+            'fileUrl' => $d['file_url'],
+            'mimeType' => $d['mime_type'],
+            'fileSize' => intval($d['file_size'] ?? 0),
+            'uploadedAt' => !empty($d['uploaded_at']) ? date('c', strtotime($d['uploaded_at'])) : date('c'),
+            'uploadedBy' => $d['uploaded_by'] ?? 'HR Administrator',
+            'notes' => $d['notes'] ?? null
+        ];
+    }, $rows);
+    http_response_code(200);
+    echo json_encode(['success' => true, 'count' => count($docs), 'data' => $docs]);
+    exit;
+}
+
+// POST /api/employees/{id}/documents/upload
+if ($method === 'POST' && preg_match('#^/(?:employees|employee)/([^/]+)/documents/upload/?$#', $cleanPath, $matches)) {
+    $empId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminOrHrUserPhp($pdo);
+
+    $fileName = trim((string)($body['fileName'] ?? ''));
+    $fileData = $body['fileData'] ?? '';
+    if (empty($fileName) || empty($fileData) || !is_string($fileData)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'File name and fileData (base64) are required.', 'message' => 'File name and fileData (base64) are required.']);
+        exit;
+    }
+
+    $safeEmpId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($empId));
+    $safeFileName = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($fileName));
+    $docId = 'doc-' . round(microtime(true) * 1000) . '-' . substr(bin2hex(random_bytes(3)), 0, 5);
+    $diskFileName = $docId . '_' . $safeFileName;
+
+    $webRoot = dirname(__DIR__);
+    $empDocsDir = $webRoot . '/uploads/employees/' . $safeEmpId . '/documents';
+    if (!is_dir($empDocsDir)) {
+        @mkdir($empDocsDir, 0755, true);
+    }
+    if (!is_dir($empDocsDir) || !is_writable($empDocsDir)) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Upload directory is not writable on server.', 'message' => 'Upload directory is not writable on server.']);
+        exit;
+    }
+
+    $base64Data = strpos($fileData, ',') !== false ? explode(',', $fileData, 2)[1] : $fileData;
+    $fileBuffer = base64_decode(preg_replace('/\s+/', '', $base64Data), true);
+    if ($fileBuffer === false || strlen($fileBuffer) === 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid or empty document payload.', 'message' => 'Invalid or empty document payload.']);
+        exit;
+    }
+    if (strlen($fileBuffer) > 20 * 1024 * 1024) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Document file size exceeds 20 MB limit.', 'message' => 'Document file size exceeds 20 MB limit.']);
+        exit;
+    }
+
+    $fullPath = $empDocsDir . '/' . $diskFileName;
+    if (@file_put_contents($fullPath, $fileBuffer) === false) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Failed to write document file to disk.', 'message' => 'Failed to write document file to disk.']);
+        exit;
+    }
+
+    $relativePath = 'uploads/employees/' . $safeEmpId . '/documents/' . $diskFileName;
+    $fileUrl = '/uploads/employees/' . $safeEmpId . '/documents/' . $diskFileName;
+    $category = trim((string)($body['category'] ?? 'Other')) ?: 'Other';
+    $docTitle = trim((string)($body['name'] ?? '')) ?: (preg_replace('/\.[^.]+$/', '', $fileName) ?: $fileName);
+    $mimeType = trim((string)($body['mimeType'] ?? '')) ?: 'application/octet-stream';
+    $uploadedBy = trim((string)($body['uploadedBy'] ?? ($actor['name'] ?? 'HR Administrator')));
+    $notes = isset($body['notes']) && trim((string)$body['notes']) !== '' ? trim((string)$body['notes']) : null;
+    $fileSize = strlen($fileBuffer);
+
+    $pdo->prepare("
+        INSERT INTO `solar_employee_documents` (
+            `id`, `employee_id`, `category`, `name`, `file_name`,
+            `file_path`, `file_url`, `mime_type`, `file_size`,
+            `uploaded_at`, `uploaded_by`, `notes`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
+        ON DUPLICATE KEY UPDATE
+            `category` = VALUES(`category`),
+            `name` = VALUES(`name`),
+            `file_name` = VALUES(`file_name`),
+            `file_path` = VALUES(`file_path`),
+            `file_url` = VALUES(`file_url`),
+            `mime_type` = VALUES(`mime_type`),
+            `file_size` = VALUES(`file_size`),
+            `notes` = VALUES(`notes`)
+    ")->execute([
+        $docId, $empId, $category, $docTitle, $safeFileName,
+        $relativePath, $fileUrl, $mimeType, $fileSize, $uploadedBy, $notes
+    ]);
+
+    try {
+        $dStmt = $pdo->prepare('SELECT * FROM `solar_employee_documents` WHERE `employee_id` = ? ORDER BY `uploaded_at` DESC');
+        $dStmt->execute([$empId]);
+        $allDocs = array_map(function($d) {
+            return [
+                'id' => $d['id'],
+                'category' => $d['category'],
+                'name' => $d['name'],
+                'fileName' => $d['file_name'],
+                'filePath' => $d['file_path'],
+                'fileUrl' => $d['file_url'],
+                'mimeType' => $d['mime_type'],
+                'fileSize' => intval($d['file_size'] ?? 0),
+                'uploadedAt' => !empty($d['uploaded_at']) ? date('c', strtotime($d['uploaded_at'])) : date('c'),
+                'uploadedBy' => $d['uploaded_by'] ?? 'HR Administrator',
+                'notes' => $d['notes'] ?? null
+            ];
+        }, $dStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        $pdo->prepare('UPDATE `solar_employees` SET `documents_json` = ? WHERE `id` = ? OR `auth_uid` = ?')
+            ->execute([json_encode($allDocs), $empId, $empId]);
+    } catch (Exception $e) {}
+
+    http_response_code(200);
+    echo json_encode([
+        'success' => true,
+        'message' => "Document \"$safeFileName\" uploaded and stored persistently on production server.",
+        'document' => [
+            'id' => $docId,
+            'employeeId' => $empId,
+            'category' => $category,
+            'name' => $docTitle,
+            'fileName' => $safeFileName,
+            'filePath' => $relativePath,
+            'fileUrl' => $fileUrl,
+            'mimeType' => $mimeType,
+            'fileSize' => $fileSize,
+            'uploadedAt' => date('c'),
+            'uploadedBy' => $uploadedBy,
+            'notes' => $notes
+        ]
+    ]);
+    exit;
+}
+
+// DELETE /api/employees/{id}/documents/{docId}
+if ($method === 'DELETE' && preg_match('#^/(?:employees|employee)/([^/]+)/documents/([^/]+)/?$#', $cleanPath, $matches)) {
+    $empId = urldecode($matches[1]);
+    $docId = urldecode($matches[2]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminOrHrUserPhp($pdo);
+
+    try {
+        $stmtPath = $pdo->prepare('SELECT file_path FROM `solar_employee_documents` WHERE `id` = ? AND `employee_id` = ? LIMIT 1');
+        $stmtPath->execute([$docId, $empId]);
+        $row = $stmtPath->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['file_path'])) {
+            $fullPath = dirname(__DIR__) . '/' . ltrim((string)$row['file_path'], '/');
+            if (file_exists($fullPath)) {
+                @unlink($fullPath);
+            }
+        }
+    } catch (Exception $e) {}
+
+    $pdo->prepare('DELETE FROM `solar_employee_documents` WHERE `id` = ? AND `employee_id` = ?')->execute([$docId, $empId]);
+
+    try {
+        $dStmt = $pdo->prepare('SELECT * FROM `solar_employee_documents` WHERE `employee_id` = ? ORDER BY `uploaded_at` DESC');
+        $dStmt->execute([$empId]);
+        $allDocs = array_map(function($d) {
+            return [
+                'id' => $d['id'],
+                'category' => $d['category'],
+                'name' => $d['name'],
+                'fileName' => $d['file_name'],
+                'filePath' => $d['file_path'],
+                'fileUrl' => $d['file_url'],
+                'mimeType' => $d['mime_type'],
+                'fileSize' => intval($d['file_size'] ?? 0),
+                'uploadedAt' => !empty($d['uploaded_at']) ? date('c', strtotime($d['uploaded_at'])) : date('c'),
+                'uploadedBy' => $d['uploaded_by'] ?? 'HR Administrator',
+                'notes' => $d['notes'] ?? null
+            ];
+        }, $dStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        $pdo->prepare('UPDATE `solar_employees` SET `documents_json` = ? WHERE `id` = ? OR `auth_uid` = ?')
+            ->execute([json_encode($allDocs), $empId, $empId]);
+    } catch (Exception $e) {}
+
+    http_response_code(200);
+    echo json_encode(['success' => true, 'message' => 'Document removed from server and database.']);
+    exit;
+}
+
+// POST /api/employees/{id}/photo/upload
+if ($method === 'POST' && preg_match('#^/(?:employees|employee)/([^/]+)/photo/upload/?$#', $cleanPath, $matches)) {
+    $empId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminOrHrUserPhp($pdo);
+
+    $photoData = $body['photoData'] ?? '';
+    $fileName = trim((string)($body['fileName'] ?? ''));
+    if (empty($photoData) || !is_string($photoData)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Photo data (base64) is required.', 'message' => 'Photo data (base64) is required.']);
+        exit;
+    }
+
+    $safeEmpId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($empId));
+    $ext = $fileName ? ('.' . strtolower(pathinfo($fileName, PATHINFO_EXTENSION))) : '.jpg';
+    $chosenExt = in_array($ext, ['.jpg', '.jpeg', '.png', '.webp'], true) ? $ext : '.jpg';
+    $diskFileName = 'photo-' . round(microtime(true) * 1000) . $chosenExt;
+
+    $webRoot = dirname(__DIR__);
+    $empProfileDir = $webRoot . '/uploads/employees/' . $safeEmpId . '/profile';
+    if (!is_dir($empProfileDir)) {
+        @mkdir($empProfileDir, 0755, true);
+    }
+    if (!is_dir($empProfileDir) || !is_writable($empProfileDir)) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Profile upload directory is not writable on server.', 'message' => 'Profile upload directory is not writable on server.']);
+        exit;
+    }
+
+    $base64Data = strpos($photoData, ',') !== false ? explode(',', $photoData, 2)[1] : $photoData;
+    $fileBuffer = base64_decode(preg_replace('/\s+/', '', $base64Data), true);
+    if ($fileBuffer === false || strlen($fileBuffer) === 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid or empty image payload.', 'message' => 'Invalid or empty image payload.']);
+        exit;
+    }
+    if (strlen($fileBuffer) > 5 * 1024 * 1024) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Profile photo exceeds 5 MB limit.', 'message' => 'Profile photo exceeds 5 MB limit.']);
+        exit;
+    }
+
+    $fullPath = $empProfileDir . '/' . $diskFileName;
+    if (@file_put_contents($fullPath, $fileBuffer) === false) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Failed to write profile photo to disk.', 'message' => 'Failed to write profile photo to disk.']);
+        exit;
+    }
+
+    $fileUrl = '/uploads/employees/' . $safeEmpId . '/profile/' . $diskFileName;
+
+    try {
+        $pdo->prepare('UPDATE `solar_employees` SET `photo_url` = ? WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ?')
+            ->execute([$fileUrl, $empId, $empId, $empId]);
+    } catch (Exception $e) {}
+    try {
+        $pdo->prepare('UPDATE `solar_users` SET `avatar` = ?, `photo_url` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `employee_id` = ?')
+            ->execute([$fileUrl, $fileUrl, $empId, $empId]);
+    } catch (Exception $e) {
+        try {
+            $pdo->prepare('UPDATE `solar_users` SET `avatar` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `employee_id` = ?')
+                ->execute([$fileUrl, $empId, $empId]);
+        } catch (Exception $e2) {}
+    }
+
+    http_response_code(200);
+    echo json_encode([
+        'success' => true,
+        'message' => 'Employee profile photo uploaded and saved successfully.',
+        'photoUrl' => $fileUrl
+    ]);
+    exit;
+}
+
+// GET /api/uploads/employees/{employeeId}/{category}/{filename} - Streaming fallback for uploaded files
+if ($method === 'GET' && preg_match('#^/uploads/employees/([^/]+)/([^/]+)/([^/]+)/?$#', $cleanPath, $matches)) {
+    $rawEmp = urldecode($matches[1]);
+    $rawCat = urldecode($matches[2]);
+    $rawFile = urldecode($matches[3]);
+    if (strpos($rawEmp, '..') !== false || strpos($rawCat, '..') !== false || strpos($rawFile, '..') !== false) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid file path access request.']);
+        exit;
+    }
+    $safeEmpId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($rawEmp));
+    $safeCat = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($rawCat));
+    $safeName = basename($rawFile);
+    $fullPath = dirname(__DIR__) . '/uploads/employees/' . $safeEmpId . '/' . $safeCat . '/' . $safeName;
+    if (!file_exists($fullPath) || !is_file($fullPath)) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'File not found on server.']);
+        exit;
+    }
+    $ext = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
+    $mimeMap = [
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        'pdf' => 'application/pdf',
+        'doc' => 'application/msword',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    $mime = $mimeMap[$ext] ?? 'application/octet-stream';
+    header_remove('Content-Type');
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($fullPath));
+    header('Content-Disposition: inline; filename="' . str_replace('"', '', $safeName) . '"');
+    header('Cache-Control: public, max-age=86400');
+    readfile($fullPath);
+    exit;
 }
 
 if (preg_match('#^/(?:employees|employee)/([^/]+)/?$#', $cleanPath, $matches)) {
@@ -3565,8 +4140,14 @@ if ($method === 'POST' && in_array($cleanPath, ['/admin/create-employee-account'
     $cleanName = trim((string)($body['displayName'] ?? explode('@', $email)[0] ?: 'Solar Employee'));
     $cleanRole = $body['systemRole'] ?? 'Site Survey Engineer';
     $cleanCode = !empty($body['employeeCode']) ? trim((string)$body['employeeCode']) : ('EMP-' . rand(100, 999));
-    $uid = 'usr-' . (!empty($body['employeeCode']) ? preg_replace('/[^a-z0-9_-]/', '', strtolower((string)$body['employeeCode'])) : round(microtime(true) * 1000));
-    $savedUser = saveUserToDb($pdo, [
+    $explicitId = !empty($body['id']) ? trim((string)$body['id']) : '';
+    $uid = !empty($explicitId)
+        ? $explicitId
+        : ('usr-' . (!empty($body['employeeCode']) ? preg_replace('/[^a-z0-9_-]/', '', strtolower((string)$body['employeeCode'])) : round(microtime(true) * 1000)));
+    $fwProvided = array_key_exists('isFieldWorker', $body) || array_key_exists('is_field_worker', $body);
+    $fwVal = $fwProvided ? parseBoolFlagPhp($body['isFieldWorker'] ?? $body['is_field_worker'], false) : null;
+
+    $userPayload = [
         'id' => $uid,
         'name' => $cleanName,
         'email' => $email,
@@ -3577,7 +4158,11 @@ if ($method === 'POST' && in_array($cleanPath, ['/admin/create-employee-account'
         'department' => $body['department'] ?? 'Operations',
         'designation' => $body['designation'] ?? $cleanRole,
         'status' => 'ACTIVE'
-    ], false, $actor);
+    ];
+    if ($fwVal !== null) {
+        $userPayload['isFieldWorker'] = $fwVal;
+    }
+    $savedUser = saveUserToDb($pdo, $userPayload, false, $actor);
     http_response_code(201);
     echo json_encode(['success' => true, 'uid' => $savedUser['id'] ?? $uid, 'message' => 'Account provisioned and securely saved to MySQL.']);
     exit;
@@ -3602,6 +4187,9 @@ if ($method === 'POST' && in_array($cleanPath, ['/admin/update-employee-account'
     }
     if (!empty($body['displayName'] ?? $body['name'])) $updates['name'] = trim((string)($body['displayName'] ?? $body['name']));
     if (!empty($body['systemRole'] ?? $body['role'])) $updates['role'] = $body['systemRole'] ?? $body['role'];
+    if (array_key_exists('isFieldWorker', $body) || array_key_exists('is_field_worker', $body)) {
+        $updates['isFieldWorker'] = parseBoolFlagPhp($body['isFieldWorker'] ?? $body['is_field_worker'], false);
+    }
     try {
         saveUserToDb($pdo, $updates, true, $actor);
         http_response_code(200);
@@ -5359,7 +5947,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                         'id' => $u['id'],
                         'employee_code' => $u['employee_id'] ?: ('EMP-' . substr($u['id'], -4)),
                         'name' => $u['name'],
-                        'photo_url' => '',
+                        'photo_url' => $u['photo_url'] ?? ($u['avatar'] ?? ''),
                         'department' => $u['department'] ?: 'Operations',
                         'designation' => $u['designation'] ?: ($u['role'] ?: 'Staff Member'),
                         'phone' => $u['phone'] ?: '',
@@ -5380,10 +5968,35 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
             }
         } catch (Exception $ue) { $bootstrapErrors[] = 'users_merge: ' . $ue->getMessage(); }
 
-        $data['employees'] = array_map(function ($r) {
+        $empDocMap = [];
+        try {
+            $dStmt = $pdo->query('SELECT * FROM `solar_employee_documents` ORDER BY `uploaded_at` DESC');
+            foreach (($dStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) as $d) {
+                $empDocMap[$d['employee_id']][] = [
+                    'id' => $d['id'],
+                    'category' => $d['category'],
+                    'name' => $d['name'],
+                    'fileName' => $d['file_name'],
+                    'filePath' => $d['file_path'],
+                    'fileUrl' => $d['file_url'],
+                    'mimeType' => $d['mime_type'],
+                    'fileSize' => intval($d['file_size'] ?? 0),
+                    'uploadedAt' => !empty($d['uploaded_at']) ? date('c', strtotime($d['uploaded_at'])) : date('c'),
+                    'uploadedBy' => $d['uploaded_by'] ?? 'HR Administrator',
+                    'notes' => $d['notes'] ?? null
+                ];
+            }
+        } catch (Exception $de) {}
+
+        $data['employees'] = array_map(function ($r) use ($empDocMap) {
+            $docs = $empDocMap[$r['id']] ?? [];
+            if (empty($docs) && !empty($r['documents_json'])) {
+                $parsed = json_decode($r['documents_json'], true);
+                if (is_array($parsed)) $docs = $parsed;
+            }
             return [
                 'id' => $r['id'],
-                'authUid' => $r['id'],
+                'authUid' => $r['auth_uid'] ?? $r['id'],
                 'employeeCode' => $r['employee_code'],
                 'name' => $r['name'],
                 'photoUrl' => $r['photo_url'] ?? '',
@@ -5391,7 +6004,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'designation' => $r['designation'],
                 'phone' => $r['phone'],
                 'email' => $r['email'],
-                'joiningDate' => $r['joining_date'],
+                'joiningDate' => !empty($r['joining_date']) ? substr((string)$r['joining_date'], 0, 10) : '',
                 'salaryMonthly' => floatval($r['salary_monthly'] ?? 0),
                 'status' => $r['status'] ?? 'ACTIVE',
                 'currentSiteLocation' => $r['current_site_location'] ?? '',
@@ -5400,7 +6013,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'assignedRole' => $r['assigned_role'] ?? ($r['system_role'] ?? 'Project Manager'),
                 'isFieldWorker' => (bool)($r['is_field_worker'] ?? 0),
                 'accountStatus' => $r['account_status'] ?? 'ACTIVE',
-                'documents' => json_decode($r['documents_json'] ?? '[]', true) ?: [],
+                'documents' => $docs,
                 'createdAt' => $r['created_at']
             ];
         }, $rows ?: []);

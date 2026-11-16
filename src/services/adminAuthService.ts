@@ -2,11 +2,16 @@ import { UserRole } from '../types/solar';
 import { apiClient } from './apiClient';
 
 export interface ProvisionAccountParams {
+  id?: string;
   email: string;
   password?: string;
   displayName: string;
   systemRole: UserRole;
   employeeCode: string;
+  phone?: string;
+  department?: string;
+  designation?: string;
+  isFieldWorker?: boolean;
 }
 
 export interface ProvisionAccountResult {
@@ -28,75 +33,90 @@ export async function provisionEmployeeAccount(
     throw new Error('Password must be at least 6 characters long.');
   }
 
-  // 1. Try authenticated server-side endpoint
-  try {
-    const res = await apiClient.request(`${apiClient.getBaseUrl()}/admin/create-employee-account`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: cleanEmail,
-        password,
-        displayName: params.displayName.trim(),
-        systemRole: params.systemRole,
-        employeeCode: params.employeeCode
-      })
-    });
+  // 1. Call authenticated server-side endpoint
+  const res = await apiClient.request(`${apiClient.getBaseUrl()}/admin/create-employee-account`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: params.id,
+      email: cleanEmail,
+      password,
+      displayName: params.displayName.trim(),
+      systemRole: params.systemRole,
+      employeeCode: params.employeeCode,
+      phone: params.phone,
+      department: params.department,
+      designation: params.designation,
+      isFieldWorker: params.isFieldWorker
+    })
+  });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.uid) {
-        return {
-          uid: data.uid,
-          provider: 'server_admin',
-          message: 'Account provisioned successfully.'
-        };
-      }
-    }
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
   } catch {
-    // Proceed to local generation
+    data = null;
   }
 
-  // 2. Direct local ERP account identifier
-  const uid = `usr-emp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.message || data?.error || `Failed to provision employee account (HTTP ${res.status}).`);
+  }
+
   return {
-    uid,
-    provider: 'local_offline',
-    message: 'Employee ERP account provisioned successfully.'
+    uid: data?.uid || params.id || `usr-emp-${Date.now()}`,
+    provider: 'server_admin',
+    message: data?.message || 'Account provisioned successfully.'
   };
 }
 
 /**
- * Updates an employee's credentials or account status.
+ * Updates an employee's credentials, field worker flag, or account status.
  */
 export async function updateEmployeeAccount(params: {
   uid: string;
   password?: string;
   disabled?: boolean;
+  isFieldWorker?: boolean;
+  displayName?: string;
+  systemRole?: UserRole;
 }): Promise<boolean> {
-  if (!params.password && typeof params.disabled !== 'boolean') {
+  if (
+    !params.password &&
+    typeof params.disabled !== 'boolean' &&
+    typeof params.isFieldWorker !== 'boolean' &&
+    !params.displayName &&
+    !params.systemRole
+  ) {
     return true;
   }
 
-  try {
-    const res = await apiClient.request(`${apiClient.getBaseUrl()}/admin/update-employee-account`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        uid: params.uid,
-        password: params.password,
-        disabled: params.disabled
-      })
-    });
+  const res = await apiClient.request(`${apiClient.getBaseUrl()}/admin/update-employee-account`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      uid: params.uid,
+      password: params.password,
+      disabled: params.disabled,
+      isFieldWorker: params.isFieldWorker,
+      displayName: params.displayName,
+      systemRole: params.systemRole
+    })
+  });
 
-    if (res.ok) {
-      const data = await res.json();
-      return Boolean(data.success);
-    }
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
   } catch {
-    // Endpoint unavailable or failed
+    data = null;
   }
 
-  return true;
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.message || data?.error || `Failed to update employee account (HTTP ${res.status}).`);
+  }
+
+  return Boolean(data?.success ?? true);
 }
 
 /**

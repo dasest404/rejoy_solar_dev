@@ -38,7 +38,7 @@ interface EmployeeFormData {
 }
 
 export const UserManagementView: React.FC = () => {
-  const { showToast, triggerRefresh } = useApp();
+  const { showToast, triggerRefresh, refreshTrigger } = useApp();
   const { currentUser, hasPermission } = useAuth();
   const canManageUsers = hasPermission('users.manage');
 
@@ -64,6 +64,9 @@ export const UserManagementView: React.FC = () => {
 
       if (existingId && resultMap.has(existingId)) {
         const existing = resultMap.get(existingId)!;
+        const resolvedIsFieldWorker = existing.isFieldWorker !== undefined
+          ? Boolean(existing.isFieldWorker)
+          : Boolean(u.isFieldWorker);
         resultMap.set(existingId, {
           ...existing,
           employeeCode: existing.employeeCode || u.employeeId || `EMP-${u.id.slice(-4).toUpperCase()}`,
@@ -75,7 +78,7 @@ export const UserManagementView: React.FC = () => {
           status: (u.status === 'INACTIVE' || u.status === 'DISABLED') ? 'INACTIVE' : existing.status,
           accountStatus: u.status === 'DISABLED' ? 'DISABLED' : (existing.accountStatus || 'ACTIVE'),
           loginEnabled: u.status !== 'DISABLED',
-          isFieldWorker: Boolean(u.isFieldWorker ?? existing.isFieldWorker)
+          isFieldWorker: resolvedIsFieldWorker
         });
       } else {
         const isFw = Boolean(u.isFieldWorker || [
@@ -160,6 +163,10 @@ export const UserManagementView: React.FC = () => {
   const reloadEmployees = () => {
     setEmployees(loadMergedPersonnel());
   };
+
+  React.useEffect(() => {
+    setEmployees(loadMergedPersonnel());
+  }, [refreshTrigger]);
 
   React.useEffect(() => {
     // Initial fetch from backend to ensure latest MySQL records
@@ -462,6 +469,8 @@ export const UserManagementView: React.FC = () => {
             phone: formData.phone.trim(),
             status: formData.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
             employee_id: cleanCode,
+            isFieldWorker: Boolean(formData.isFieldWorker),
+            is_field_worker: formData.isFieldWorker ? 1 : 0,
             login_enabled: formData.loginEnabled ? 1 : 0
           });
           if (formData.tempPassword && formData.tempPassword.trim().length >= 6) {
@@ -963,7 +972,7 @@ export const UserManagementView: React.FC = () => {
                         ...formData,
                         role: newRole,
                         department: roleDef?.department || formData.department,
-                        isFieldWorker: isFwRole
+                        isFieldWorker: editingEmployee ? formData.isFieldWorker : isFwRole
                       });
                     }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-medium"

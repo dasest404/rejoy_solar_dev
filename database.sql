@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS `solar_users` (
   `employee_id` VARCHAR(64) DEFAULT NULL,
   `customer_id` VARCHAR(64) DEFAULT NULL,
   `avatar` TEXT,
+  `photo_url` TEXT DEFAULT NULL,
   `is_field_worker` TINYINT(1) DEFAULT 0,
   `status` VARCHAR(32) DEFAULT 'ACTIVE',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -280,14 +281,19 @@ CREATE TABLE IF NOT EXISTS `solar_employees` (
   `status` VARCHAR(32) DEFAULT 'ACTIVE',
   `current_site_location` VARCHAR(255) DEFAULT '',
   `login_enabled` TINYINT(1) DEFAULT 1,
+  `auth_uid` VARCHAR(64) DEFAULT NULL,
   `system_role` VARCHAR(64) DEFAULT 'Super Admin',
   `assigned_role` VARCHAR(64) DEFAULT NULL,
   `is_field_worker` TINYINT(1) DEFAULT 0,
   `account_status` VARCHAR(32) DEFAULT 'ACTIVE',
+  `account_created_at` VARCHAR(64) DEFAULT NULL,
+  `account_created_by` VARCHAR(255) DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_employees_dept` (`department`),
-  INDEX `idx_employees_status` (`status`)
+  INDEX `idx_employees_status` (`status`),
+  INDEX `idx_employees_auth_uid` (`auth_uid`),
+  INDEX `idx_employees_email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------

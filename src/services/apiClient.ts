@@ -501,9 +501,15 @@ class ApiClient {
       headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(docData)
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.error || data.message || `Upload failed with status ${res.status}`);
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    if (!res.ok || data?.success === false || !data?.document?.fileUrl) {
+      throw new Error(data?.error || data?.message || `Document upload failed with status ${res.status}`);
     }
     return data.document;
   }
@@ -513,8 +519,14 @@ class ApiClient {
       method: 'DELETE',
       headers: this.getAuthHeaders()
     });
-    const data = await res.json();
-    return Boolean(data.success);
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    return Boolean(res.ok && data?.success !== false);
   }
 
   async getEmployeeDocuments(employeeId: string): Promise<any[]> {
@@ -522,8 +534,9 @@ class ApiClient {
       const res = await this.request(`${this.baseUrl}/employees/${encodeURIComponent(employeeId)}/documents`, {
         headers: this.getAuthHeaders()
       });
-      const data = await res.json();
-      return data.data || [];
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : null;
+      return data?.data || [];
     } catch {
       return [];
     }
@@ -535,9 +548,15 @@ class ApiClient {
       headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ photoData, fileName })
     });
-    const data = await res.json();
-    if (!res.ok || data.success === false) {
-      throw new Error(data.error || data.message || `Photo upload failed with status ${res.status}`);
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    if (!res.ok || data?.success === false || !data?.photoUrl) {
+      throw new Error(data?.error || data?.message || `Photo upload failed with status ${res.status}`);
     }
     return data.photoUrl;
   }
@@ -1028,11 +1047,17 @@ class ApiClient {
         headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(user)
       });
-      const data = await res.json();
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || data.error || 'Failed to save user');
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
       }
-      return data.data || user;
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || data?.error || `Failed to save user (HTTP ${res.status})`);
+      }
+      return data?.data || user;
     } catch (e: any) {
       console.error('[apiClient] saveUser error:', e);
       throw e;
@@ -1046,11 +1071,17 @@ class ApiClient {
         headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(updates)
       });
-      const data = await res.json();
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || data.error || 'Failed to update user');
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
       }
-      return data.data || updates;
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || data?.error || `Failed to update user (HTTP ${res.status})`);
+      }
+      return data?.data || updates;
     } catch (e: any) {
       console.error('[apiClient] updateUser error:', e);
       throw e;

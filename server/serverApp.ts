@@ -842,7 +842,7 @@ async function createServerApp() {
       const actor = await verifyAdminOrHrSession(req, res);
       if (!actor) return;
 
-      const { email, password, displayName, systemRole, employeeCode, phone, department, designation } = req.body || {};
+      const { id, email, password, displayName, systemRole, employeeCode, phone, department, designation, isFieldWorker, is_field_worker } = req.body || {};
 
       if (!email || typeof email !== 'string' || !email.includes('@')) {
         res.status(400).json({ success: false, message: 'A valid email address is required.' });
@@ -858,7 +858,11 @@ async function createServerApp() {
       const cleanName = (displayName || cleanEmail.split('@')[0] || 'Solar Employee').trim();
       const cleanRole = systemRole || 'Site Survey Engineer';
       const cleanCode = employeeCode ? String(employeeCode).trim() : `EMP-${Math.floor(100 + Math.random() * 900)}`;
-      const uid = `usr-${employeeCode ? String(employeeCode).toLowerCase().replace(/[^a-z0-9_-]/g, '') : Date.now()}`;
+      const uid = (id && typeof id === 'string' && id.trim())
+        ? id.trim()
+        : `usr-${employeeCode ? String(employeeCode).toLowerCase().replace(/[^a-z0-9_-]/g, '') : Date.now()}`;
+      const rawFw = isFieldWorker !== undefined ? isFieldWorker : is_field_worker;
+      const resolvedFieldWorker = rawFw !== undefined ? Boolean(rawFw === true || rawFw === 1 || rawFw === 'true' || rawFw === '1') : undefined;
 
       // Save user record to MySQL with bcrypt password hashing
       const savedUser = await dbManager.saveUser({
@@ -871,12 +875,14 @@ async function createServerApp() {
         phone: phone || '',
         department: department || 'Operations',
         designation: designation || cleanRole,
+        ...(resolvedFieldWorker !== undefined ? { isFieldWorker: resolvedFieldWorker } : {}),
         status: 'ACTIVE'
       });
 
       // Save corresponding employee record to MySQL
       await dbManager.saveEmployee({
-        id: uid,
+        id: savedUser.id || uid,
+        authUid: savedUser.id || uid,
         employee_code: cleanCode,
         employeeCode: cleanCode,
         name: cleanName,
@@ -886,6 +892,7 @@ async function createServerApp() {
         designation: designation || cleanRole,
         system_role: cleanRole,
         systemRole: cleanRole,
+        ...(resolvedFieldWorker !== undefined ? { isFieldWorker: resolvedFieldWorker } : {}),
         login_enabled: 1,
         loginEnabled: true,
         account_status: 'ACTIVE',
@@ -912,7 +919,7 @@ async function createServerApp() {
       const actor = await verifyAdminOrHrSession(req, res);
       if (!actor) return;
 
-      const { uid, password, disabled, name, displayName, systemRole, role, phone, department, designation, employeeCode } = req.body || {};
+      const { uid, password, disabled, name, displayName, systemRole, role, phone, department, designation, employeeCode, isFieldWorker, is_field_worker } = req.body || {};
 
       if (!uid || typeof uid !== 'string') {
         res.status(400).json({ success: false, message: 'Employee Auth UID is required.' });
@@ -925,6 +932,7 @@ async function createServerApp() {
       }
 
       const statusValue = typeof disabled === 'boolean' ? (disabled ? 'DISABLED' : 'ACTIVE') : undefined;
+      const rawFw = isFieldWorker !== undefined ? isFieldWorker : is_field_worker;
 
       const userUpdates: any = { id: uid };
       if (name || displayName) userUpdates.name = (displayName || name).trim();
@@ -934,6 +942,9 @@ async function createServerApp() {
       if (designation) userUpdates.designation = designation.trim();
       if (employeeCode) userUpdates.employee_id = employeeCode.trim();
       if (statusValue) userUpdates.status = statusValue;
+      if (rawFw !== undefined) {
+        userUpdates.isFieldWorker = Boolean(rawFw === true || rawFw === 1 || rawFw === 'true' || rawFw === '1');
+      }
 
       await dbManager.saveUser(userUpdates, { updateOnly: true });
 

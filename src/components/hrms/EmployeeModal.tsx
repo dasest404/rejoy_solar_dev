@@ -79,6 +79,20 @@ const SYSTEM_ROLES: { role: UserRole; description: string }[] = [
   { role: 'Technician', description: 'Field diagnostics, string testing & preventive maintenance' }
 ];
 
+const FIELD_WORKER_ROLES: UserRole[] = [
+  'Site Survey Engineer',
+  'Site Inspector',
+  'Civil Team',
+  'Structure Team',
+  'Installation Team',
+  'Electrical Team',
+  'Technician'
+];
+
+function isDefaultFieldWorkerRole(role: UserRole): boolean {
+  return FIELD_WORKER_ROLES.includes(role);
+}
+
 function getDefaultSystemRole(dept: string, desig: string): UserRole {
   const d = (dept || '').toLowerCase();
   const title = (desig || '').toLowerCase();
@@ -231,12 +245,17 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     currentSiteLocation: ''
   });
 
-  // ERP Login Account state
+  // Stable authoritative Employee ID for new employee uploads & MySQL row consistency
+  const [draftEmployeeId, setDraftEmployeeId] = useState<string>(() => `emp-${Date.now()}`);
+  const fieldWorkerTouchedRef = useRef<boolean>(false);
+
+  // ERP Login Account & Workforce state
   const [loginEnabled, setLoginEnabled] = useState<boolean>(true);
   const [loginEmail, setLoginEmail] = useState<string>('');
   const [systemRole, setSystemRole] = useState<UserRole>('Site Survey Engineer');
+  const [isFieldWorker, setIsFieldWorker] = useState<boolean>(true);
   const [accountStatus, setAccountStatus] = useState<'ACTIVE' | 'DISABLED' | 'PENDING'>('ACTIVE');
-  
+
   // Ephemeral password fields (NEVER persisted to Employee or localStorage)
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
@@ -245,12 +264,14 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   const [shouldResetPassword, setShouldResetPassword] = useState<boolean>(false);
   const [passwordGeneratedTip, setPasswordGeneratedTip] = useState<string | null>(null);
 
-  // HR Documents state
+  // HR Documents & Photo state
   const [documents, setDocuments] = useState<EmployeeDocument[]>([]);
   const [docCategory, setDocCategory] = useState<EmployeeDocumentCategory>('Offer Letter');
   const [docNotes, setDocNotes] = useState<string>('');
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isPhotoUploading, setIsPhotoUploading] = useState<boolean>(false);
+  const [photoUploadError, setPhotoUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -272,22 +293,30 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         currentSiteLocation: employeeToEdit.currentSiteLocation || ''
       });
 
-      // Populate ERP account fields
+      const resolvedRole = (employeeToEdit.systemRole ||
+        employeeToEdit.assignedRole ||
+        getDefaultSystemRole(employeeToEdit.department, employeeToEdit.designation)) as UserRole;
+
+      // Populate ERP account & field worker fields
+      setDraftEmployeeId(employeeToEdit.id);
       setLoginEnabled(employeeToEdit.loginEnabled ?? true);
       setLoginEmail(employeeToEdit.email || '');
-      setSystemRole(
-        employeeToEdit.systemRole ||
-        employeeToEdit.assignedRole ||
-        getDefaultSystemRole(employeeToEdit.department, employeeToEdit.designation)
+      setSystemRole(resolvedRole);
+      setIsFieldWorker(
+        employeeToEdit.isFieldWorker !== undefined
+          ? Boolean(employeeToEdit.isFieldWorker)
+          : isDefaultFieldWorkerRole(resolvedRole)
       );
+      fieldWorkerTouchedRef.current = true;
       setAccountStatus(employeeToEdit.accountStatus || 'ACTIVE');
       setShouldResetPassword(false);
 
       // Populate documents
       setDocuments(Array.isArray(employeeToEdit.documents) ? [...employeeToEdit.documents] : []);
     } else {
-      // Suggest next employee code
+      // Suggest next employee code & allocate a single stable ID for uploads + save
       const nextNum = existingEmployees.length + 101;
+      setDraftEmployeeId(`emp-${Date.now()}`);
       setFormData({
         name: '',
         employeeCode: `EMP-${nextNum}`,
@@ -305,6 +334,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
       setLoginEnabled(true);
       setLoginEmail('');
       setSystemRole('Site Survey Engineer');
+      setIsFieldWorker(true);
+      fieldWorkerTouchedRef.current = false;
       setAccountStatus('ACTIVE');
       setShouldResetPassword(false);
       setDocuments([]);
@@ -325,6 +356,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     setDocCategory('Offer Letter');
     setDocNotes('');
     setUploadErrors([]);
+    setPhotoUploadError(null);
     setErrors({});
   }, [employeeToEdit, isOpen, existingEmployees.length]);
 
@@ -336,11 +368,15 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     }
   };
 
-  // Suggest matching system role when department changes
+  // Suggest matching system role and field worker flag when department changes (for new employees)
   const handleDepartmentChange = (newDept: Employee['department']) => {
     setFormData(prev => ({ ...prev, department: newDept }));
     if (!employeeToEdit?.systemRole) {
-      setSystemRole(getDefaultSystemRole(newDept, formData.designation));
+      const nextRole = getDefaultSystemRole(newDept, formData.designation);
+      setSystemRole(nextRole);
+      if (!fieldWorkerTouchedRef.current) {
+        setIsFieldWorker(isDefaultFieldWorkerRole(nextRole));
+      }
     }
   };
 
@@ -375,7 +411,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     if (validFiles.length > 0) {
       setIsUploading(true);
       try {
-        const targetEmpId = employeeToEdit?.id || (formData.employeeCode ? `emp-${formData.employeeCode.toLowerCase().replace(/[^a-z0-9]/g, '')}` : `emp-${Date.now()}`);
+        const targetEmpId = employeeToEdit?.id || draftEmployeeId;
 
         const uploadPromises = validFiles.map(file => {
           return new Promise<EmployeeDocument>((resolve, reject) => {
@@ -383,52 +419,29 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
             reader.onload = async () => {
               try {
                 const dataUrl = reader.result as string;
-                // Persistent server upload
-                try {
-                  const uploaded = await apiClient.uploadEmployeeDocument(targetEmpId, {
-                    name: file.name.replace(/\.[^/.]+$/, '') || file.name,
-                    category: docCategory,
-                    fileName: file.name,
-                    mimeType: getMimeType(file),
-                    fileData: dataUrl,
-                    notes: docNotes.trim() || undefined,
-                    uploadedBy: currentUser?.name || 'HR Administrator'
-                  });
-                  if (uploaded && uploaded.fileUrl) {
-                    resolve({
-                      id: uploaded.id,
-                      name: uploaded.name,
-                      category: uploaded.category,
-                      fileName: uploaded.fileName,
-                      mimeType: uploaded.mimeType,
-                      fileSize: uploaded.fileSize,
-                      fileUrl: uploaded.fileUrl,
-                      uploadedAt: uploaded.uploadedAt,
-                      uploadedBy: uploaded.uploadedBy,
-                      notes: uploaded.notes
-                    });
-                    return;
-                  }
-                } catch (uploadErr) {
-                  console.warn('Direct upload notice, falling back:', uploadErr);
-                }
-
-                // Fallback client representation
-                const newDoc: EmployeeDocument = {
-                  id: `doc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+                const uploaded = await apiClient.uploadEmployeeDocument(targetEmpId, {
                   name: file.name.replace(/\.[^/.]+$/, '') || file.name,
                   category: docCategory,
                   fileName: file.name,
                   mimeType: getMimeType(file),
-                  fileSize: file.size,
-                  fileUrl: dataUrl,
-                  uploadedAt: new Date().toISOString(),
-                  uploadedBy: currentUser?.name || 'HR Administrator',
-                  notes: docNotes.trim() || undefined
-                };
-                resolve(newDoc);
-              } catch (readErr) {
-                reject(readErr);
+                  fileData: dataUrl,
+                  notes: docNotes.trim() || undefined,
+                  uploadedBy: currentUser?.name || 'HR Administrator'
+                });
+                resolve({
+                  id: uploaded.id,
+                  name: uploaded.name,
+                  category: uploaded.category,
+                  fileName: uploaded.fileName,
+                  mimeType: uploaded.mimeType,
+                  fileSize: uploaded.fileSize,
+                  fileUrl: uploaded.fileUrl,
+                  uploadedAt: uploaded.uploadedAt,
+                  uploadedBy: uploaded.uploadedBy,
+                  notes: uploaded.notes
+                });
+              } catch (uploadErr) {
+                reject(uploadErr instanceof Error ? uploadErr : new Error(`Failed to upload "${file.name}" to server.`));
               }
             };
             reader.onerror = () => {
@@ -438,11 +451,21 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
           });
         });
 
-        const newDocs = await Promise.all(uploadPromises);
-        setDocuments(prev => [...prev, ...newDocs]);
-        setDocNotes('');
+        const settled = await Promise.allSettled(uploadPromises);
+        const successfulDocs: EmployeeDocument[] = [];
+        settled.forEach((res) => {
+          if (res.status === 'fulfilled') {
+            successfulDocs.push(res.value);
+          } else {
+            currentErrors.push(res.reason instanceof Error ? res.reason.message : 'Document upload failed.');
+          }
+        });
+        if (successfulDocs.length > 0) {
+          setDocuments(prev => [...prev, ...successfulDocs]);
+          setDocNotes('');
+        }
       } catch (err) {
-        currentErrors.push(err instanceof Error ? err.message : 'Failed to read uploaded file(s).');
+        currentErrors.push(err instanceof Error ? err.message : 'Failed to upload selected file(s).');
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
@@ -458,7 +481,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   };
 
   const handleRemoveDocument = (id: string) => {
-    const targetEmpId = employeeToEdit?.id;
+    const targetEmpId = employeeToEdit?.id || draftEmployeeId;
     if (targetEmpId) {
       apiClient.deleteEmployeeDocument(targetEmpId, id).catch(() => {});
     }
@@ -468,29 +491,36 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setPhotoUploadError(null);
     if (!file.type.startsWith('image/')) {
-      alert('Please select a valid image file (JPG, PNG, WebP).');
+      setPhotoUploadError('Please select a valid image file (JPG, PNG, WebP).');
+      e.target.value = '';
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      alert('Photo file size exceeds 5 MB limit.');
+      setPhotoUploadError('Photo file size exceeds 5 MB limit.');
+      e.target.value = '';
       return;
     }
 
-    const targetEmpId = employeeToEdit?.id || (formData.employeeCode ? `emp-${formData.employeeCode.toLowerCase().replace(/[^a-z0-9]/g, '')}` : `emp-${Date.now()}`);
+    const targetEmpId = employeeToEdit?.id || draftEmployeeId;
+    setIsPhotoUploading(true);
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         const dataUrl = reader.result as string;
-        try {
-          const photoUrl = await apiClient.uploadEmployeePhoto(targetEmpId, dataUrl, file.name);
-          setFormData(prev => ({ ...prev, photoUrl }));
-        } catch {
-          setFormData(prev => ({ ...prev, photoUrl: dataUrl }));
-        }
+        const photoUrl = await apiClient.uploadEmployeePhoto(targetEmpId, dataUrl, file.name);
+        setFormData(prev => ({ ...prev, photoUrl }));
       } catch (err: any) {
-        console.warn('Photo read error:', err);
+        const msg = err instanceof Error ? err.message : 'Failed to upload photo to server.';
+        setPhotoUploadError(msg);
+      } finally {
+        setIsPhotoUploading(false);
       }
+    };
+    reader.onerror = () => {
+      setIsPhotoUploading(false);
+      setPhotoUploadError(`Failed to read image file "${file.name}".`);
     };
     reader.readAsDataURL(file);
   };
@@ -637,6 +667,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     const activeLoginEmail = (loginEmail || formData.email).trim();
 
     try {
+      const effectiveId = employeeToEdit ? employeeToEdit.id : draftEmployeeId;
       let linkedAuthUid = employeeToEdit?.authUid;
 
       // Provision or update ERP credentials if login is enabled
@@ -644,17 +675,23 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         const isNewAuth = !employeeToEdit?.authUid || !isEditing;
         if (isNewAuth) {
           const provisionResult = await provisionEmployeeAccount({
+            id: effectiveId,
             email: activeLoginEmail,
             password: password,
             displayName: formData.name.trim(),
             systemRole: systemRole,
-            employeeCode: formData.employeeCode.trim()
+            employeeCode: formData.employeeCode.trim(),
+            phone: formData.phone.trim(),
+            department: formData.department,
+            designation: formData.designation.trim(),
+            isFieldWorker: isFieldWorker
           });
           linkedAuthUid = provisionResult.uid;
         } else if (shouldResetPassword && password) {
           await updateEmployeeAccount({
             uid: employeeToEdit.authUid,
-            password: password
+            password: password,
+            isFieldWorker: isFieldWorker
           });
         }
 
@@ -663,7 +700,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         // If login was disabled for an existing user, disable their account
         await updateEmployeeAccount({
           uid: employeeToEdit.authUid,
-          disabled: true
+          disabled: true,
+          isFieldWorker: isFieldWorker
         });
       }
 
@@ -671,11 +709,6 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
       // Clear all password variables from component state immediately
       setPassword('');
       setConfirmPassword('');
-
-      // Authoritative employee ID resolution: preserve existing ID on edit, or use provisioned auth UID, or generate code-based ID
-      const effectiveId = employeeToEdit
-        ? employeeToEdit.id
-        : (linkedAuthUid || (formData.employeeCode ? `emp-${formData.employeeCode.toLowerCase().replace(/[^a-z0-9]/g, '')}` : `emp-${Date.now()}`));
 
       // Build safe final employee model with NO PLAINTEXT PASSWORD
       const finalEmployee: Employee = {
@@ -692,11 +725,12 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         photoUrl: formData.photoUrl.trim() || undefined,
         currentSiteLocation: formData.currentSiteLocation.trim() || undefined,
 
-        // Safe account linkage fields only
+        // Safe account linkage & Field Worker fields
         loginEnabled: loginEnabled,
         authUid: linkedAuthUid || effectiveId,
         systemRole: systemRole,
         assignedRole: systemRole,
+        isFieldWorker: Boolean(isFieldWorker),
         accountStatus: loginEnabled ? accountStatus : 'DISABLED',
         accountCreatedAt: employeeToEdit?.accountCreatedAt || (loginEnabled ? new Date().toISOString() : undefined),
         accountCreatedBy: employeeToEdit?.accountCreatedBy || (loginEnabled ? (currentUser?.name || 'System Administrator') : undefined),
@@ -1011,7 +1045,13 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                       </label>
                       <select
                         value={systemRole}
-                        onChange={e => setSystemRole(e.target.value as UserRole)}
+                        onChange={e => {
+                          const nextRole = e.target.value as UserRole;
+                          setSystemRole(nextRole);
+                          if (!isEditing && !fieldWorkerTouchedRef.current) {
+                            setIsFieldWorker(isDefaultFieldWorkerRole(nextRole));
+                          }
+                        }}
                         className="w-full text-xs border border-slate-200 rounded-xl p-2.5 bg-white font-medium focus:outline-hidden focus:ring-2 focus:ring-amber-500 cursor-pointer"
                       >
                         {SYSTEM_ROLES.map(({ role }) => (
@@ -1025,6 +1065,27 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                       </p>
                     </div>
                   </div>
+
+                  {/* Field Worker Flag */}
+                  <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200/80 cursor-pointer hover:bg-amber-50/30 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={isFieldWorker}
+                      onChange={e => {
+                        fieldWorkerTouchedRef.current = true;
+                        setIsFieldWorker(e.target.checked);
+                      }}
+                      className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">
+                        Field Worker (Live GPS Tracking)
+                      </span>
+                      <span className="text-[11px] text-slate-500 block">
+                        Include this employee in Live Workforce GPS tracking and field dispatch assignments
+                      </span>
+                    </div>
+                  </label>
 
                   {/* Account Status */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -1162,6 +1223,27 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                   )}
                 </div>
               )}
+              {!loginEnabled && (
+                <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-50 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={isFieldWorker}
+                    onChange={e => {
+                      fieldWorkerTouchedRef.current = true;
+                      setIsFieldWorker(e.target.checked);
+                    }}
+                    className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">
+                      Field Worker (Live GPS Tracking)
+                    </span>
+                    <span className="text-[11px] text-slate-500 block">
+                      Mark employee as an active field worker in HRMS & User Management
+                    </span>
+                  </div>
+                </label>
+              )}
             </div>
           </div>
 
@@ -1192,24 +1274,38 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                 )}
               </label>
               <div className="flex gap-2 items-center">
+                {formData.photoUrl && (
+                  <img
+                    src={formData.photoUrl}
+                    alt={formData.name || 'Employee Photo'}
+                    className="w-9 h-9 rounded-lg object-cover border border-slate-200 shrink-0"
+                  />
+                )}
                 <input
                   type="text"
                   value={formData.photoUrl}
                   onChange={e => setFormData({ ...formData, photoUrl: e.target.value })}
                   placeholder="https://... or choose file"
-                  className="flex-1 text-xs border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  className="flex-1 text-xs border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500 min-w-0"
                 />
-                <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 transition-colors shadow-2xs shrink-0">
+                <label className={`cursor-pointer inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 transition-colors shadow-2xs shrink-0 ${isPhotoUploading ? 'opacity-60 pointer-events-none' : ''}`}>
                   <Upload className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Upload</span>
+                  <span>{isPhotoUploading ? 'Uploading...' : 'Upload'}</span>
                   <input
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
                     className="hidden"
+                    disabled={isPhotoUploading}
                     onChange={handlePhotoUpload}
                   />
                 </label>
               </div>
+              {photoUploadError && (
+                <p className="text-[11px] text-rose-600 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <span>{photoUploadError}</span>
+                </p>
+              )}
             </div>
           </div>
 

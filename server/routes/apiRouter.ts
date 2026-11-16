@@ -1189,13 +1189,13 @@ apiRouter.get('/employees/:id/documents', async (req: Request, res: Response) =>
 });
 
 // Employee Documents: Upload single or multiple documents persistently
-apiRouter.post('/employees/:id/documents/upload', async (req: Request, res: Response) => {
+apiRouter.post('/employees/:id/documents/upload', requireRole(['Admin', 'Super Admin', 'HR Manager']), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { name, category, fileName, mimeType, fileData, notes, uploadedBy } = req.body || {};
 
-    if (!fileName || !fileData) {
-      return res.status(400).json({ success: false, error: 'File name and fileData (base64) are required.' });
+    if (!fileName || !fileData || typeof fileData !== 'string') {
+      return res.status(400).json({ success: false, error: 'File name and fileData (base64) are required.', message: 'File name and fileData (base64) are required.' });
     }
 
     const safeEmpId = path.basename(id).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1212,8 +1212,11 @@ apiRouter.post('/employees/:id/documents/upload', async (req: Request, res: Resp
     const base64Data = fileData.includes(',') ? fileData.split(',')[1] : fileData;
     const fileBuffer = Buffer.from(base64Data, 'base64');
 
+    if (fileBuffer.length === 0) {
+      return res.status(400).json({ success: false, error: 'Invalid or empty document payload.', message: 'Invalid or empty document payload.' });
+    }
     if (fileBuffer.length > 20 * 1024 * 1024) {
-      return res.status(400).json({ success: false, error: 'Document file size exceeds 20 MB limit.' });
+      return res.status(400).json({ success: false, error: 'Document file size exceeds 20 MB limit.', message: 'Document file size exceeds 20 MB limit.' });
     }
 
     const filePath = path.join(empDocsDir, diskFileName);
@@ -1232,7 +1235,7 @@ apiRouter.post('/employees/:id/documents/upload', async (req: Request, res: Resp
       fileUrl,
       mimeType: mimeType || 'application/octet-stream',
       fileSize: fileBuffer.length,
-      uploadedBy: uploadedBy || 'HR Administrator',
+      uploadedBy: uploadedBy || (req as any).user?.name || 'HR Administrator',
       notes: notes || undefined
     });
 
@@ -1247,7 +1250,7 @@ apiRouter.post('/employees/:id/documents/upload', async (req: Request, res: Resp
 });
 
 // Employee Documents: Delete document persistently
-apiRouter.delete('/employees/:id/documents/:docId', async (req: Request, res: Response) => {
+apiRouter.delete('/employees/:id/documents/:docId', requireRole(['Admin', 'Super Admin', 'HR Manager']), async (req: Request, res: Response) => {
   try {
     const { id, docId } = req.params;
     await dbManager.deleteEmployeeDocument(id, docId);
@@ -1258,13 +1261,13 @@ apiRouter.delete('/employees/:id/documents/:docId', async (req: Request, res: Re
 });
 
 // Employee Profile Photo Upload
-apiRouter.post('/employees/:id/photo/upload', async (req: Request, res: Response) => {
+apiRouter.post('/employees/:id/photo/upload', requireRole(['Admin', 'Super Admin', 'HR Manager']), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { photoData, fileName } = req.body || {};
 
-    if (!photoData) {
-      return res.status(400).json({ success: false, error: 'Photo data (base64) is required.' });
+    if (!photoData || typeof photoData !== 'string') {
+      return res.status(400).json({ success: false, error: 'Photo data (base64) is required.', message: 'Photo data (base64) is required.' });
     }
 
     const safeEmpId = path.basename(id).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1282,8 +1285,11 @@ apiRouter.post('/employees/:id/photo/upload', async (req: Request, res: Response
     const base64Data = photoData.includes(',') ? photoData.split(',')[1] : photoData;
     const fileBuffer = Buffer.from(base64Data, 'base64');
 
+    if (fileBuffer.length === 0) {
+      return res.status(400).json({ success: false, error: 'Invalid or empty image payload.', message: 'Invalid or empty image payload.' });
+    }
     if (fileBuffer.length > 5 * 1024 * 1024) {
-      return res.status(400).json({ success: false, error: 'Profile photo exceeds 5 MB limit.' });
+      return res.status(400).json({ success: false, error: 'Profile photo exceeds 5 MB limit.', message: 'Profile photo exceeds 5 MB limit.' });
     }
 
     const filePath = path.join(empProfileDir, diskFileName);
