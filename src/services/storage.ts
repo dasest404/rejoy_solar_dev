@@ -1647,11 +1647,13 @@ class StorageService {
     return this.get<ServiceTicket[]>(STORAGE_KEYS.SERVICE_TICKETS, initialServiceTickets);
   }
 
-  setServiceTicketsFromBackend(tickets: ServiceTicket[]): void {
+  setServiceTicketsFromBackend(tickets: ServiceTicket[], notify: boolean = true): void {
     const cleaned = Array.isArray(tickets) ? tickets.filter(Boolean) : [];
     this.memStore.set(STORAGE_KEYS.SERVICE_TICKETS, cleaned);
     this.lastSyncError = null;
-    this.notifyStorageUpdated();
+    if (notify) {
+      this.notifyStorageUpdated();
+    }
   }
 
   upsertServiceTicketInMemory(ticket: ServiceTicket): void {

@@ -79,7 +79,7 @@ export const TicketDetailsModal: React.FC<TicketDetailsModalProps> = ({
   technicians,
   onTicketUpdated
 }) => {
-  const { showToast, triggerRefresh } = useApp();
+  const { showToast } = useApp();
   const [detailedTicket, setDetailedTicket] = useState<ServiceTicket | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -199,7 +199,6 @@ export const TicketDetailsModal: React.FC<TicketDetailsModalProps> = ({
       setDetailedTicket(updated);
       syncFormFromTicket(updated);
       onTicketUpdated(updated);
-      triggerRefresh();
       showToast(`Ticket ${updated.ticketId} updated in MySQL`, 'success');
     } catch (err: any) {
       const msg = err?.message || 'Failed to save ticket updates to MySQL.';

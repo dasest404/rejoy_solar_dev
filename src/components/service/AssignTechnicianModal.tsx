@@ -31,7 +31,7 @@ export const AssignTechnicianModal: React.FC<AssignTechnicianModalProps> = ({
   isLoadingTechnicians = false,
   onAssigned
 }) => {
-  const { showToast, triggerRefresh } = useApp();
+  const { showToast } = useApp();
   const [selectedTechId, setSelectedTechId] = useState<string>('');
   const [scheduledDate, setScheduledDate] = useState<string>('');
   const [remarks, setRemarks] = useState<string>('');
@@ -45,7 +45,7 @@ export const AssignTechnicianModal: React.FC<AssignTechnicianModalProps> = ({
       setRemarks('');
       setErrorMsg(null);
     }
-  }, [isOpen, ticket]);
+  }, [isOpen, ticket?.id]);
 
   if (!isOpen || !ticket) return null;
 
@@ -74,7 +74,6 @@ export const AssignTechnicianModal: React.FC<AssignTechnicianModalProps> = ({
         'success'
       );
       onAssigned(updated);
-      triggerRefresh();
       onClose();
     } catch (err: any) {
       const msg = err?.message || 'Failed to update technician assignment in MySQL.';
@@ -96,7 +95,6 @@ export const AssignTechnicianModal: React.FC<AssignTechnicianModalProps> = ({
       });
       showToast(`Technician unassigned from ${ticket.ticketId}`, 'success');
       onAssigned(updated);
-      triggerRefresh();
       onClose();
     } catch (err: any) {
       const msg = err?.message || 'Failed to unassign technician in MySQL.';

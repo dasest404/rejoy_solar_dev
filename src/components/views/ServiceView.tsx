@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
@@ -21,7 +21,9 @@ import {
   Eye,
   UserPlus,
   Loader2,
-  Building2
+  Building2,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 
 type TicketFilter =
@@ -35,7 +37,7 @@ type TicketFilter =
   | 'CLOSED';
 
 export const ServiceView: React.FC = () => {
-  const { openWhatsAppModal, openEmailModal, openImportExportModal, showToast, triggerRefresh, refreshTrigger } = useApp();
+  const { openWhatsAppModal, openEmailModal, openImportExportModal, showToast, refreshTrigger } = useApp();
   const { currentUser, isCustomer, isAdmin } = useAuth();
 
   const isAdminUser =
@@ -61,6 +63,8 @@ export const ServiceView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<TicketFilter>('ALL');
   const [isLoadingTickets, setIsLoadingTickets] = useState(false);
+  const [ticketLoadError, setTicketLoadError] = useState<string | null>(null);
+  const [localVersion, setLocalVersion] = useState(0);
 
   const [eligibleTechnicians, setEligibleTechnicians] = useState<EligibleServiceTechnician[]>([]);
   const [isLoadingTechnicians, setIsLoadingTechnicians] = useState(false);
@@ -81,53 +85,49 @@ export const ServiceView: React.FC = () => {
     scheduledDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   });
 
-  // Sync live service tickets from MySQL
-  useEffect(() => {
-    let cancelled = false;
-    const loadTickets = async () => {
-      setIsLoadingTickets(true);
-      try {
-        const rows = await apiClient.getServiceTickets();
-        if (!cancelled && Array.isArray(rows)) {
-          storageService.setServiceTicketsFromBackend(rows);
-        }
-      } catch (err) {
-        console.error('[ServiceView] Failed to fetch tickets from MySQL:', err);
-      } finally {
-        if (!cancelled) setIsLoadingTickets(false);
+  // Fetch live service tickets from MySQL without triggering global refreshTrigger loops
+  const loadTickets = useCallback(async () => {
+    setIsLoadingTickets(true);
+    setTicketLoadError(null);
+    try {
+      const rows = await apiClient.getServiceTickets();
+      if (Array.isArray(rows)) {
+        storageService.setServiceTicketsFromBackend(rows, false);
+        setLocalVersion(v => v + 1);
       }
-    };
-    loadTickets();
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshTrigger]);
+    } catch (err: any) {
+      console.error('[ServiceView] Failed to fetch tickets from MySQL:', err);
+      setTicketLoadError(err?.message || 'Unable to load service tickets from MySQL.');
+    } finally {
+      setIsLoadingTickets(false);
+    }
+  }, []);
 
-  // Load active Field Workers/Technicians for Admin
-  useEffect(() => {
+  const loadTechnicians = useCallback(async () => {
     if (!isAdminUser) {
       setEligibleTechnicians([]);
       return;
     }
-    let cancelled = false;
-    const loadTechnicians = async () => {
-      setIsLoadingTechnicians(true);
-      try {
-        const list = await apiClient.getEligibleServiceTechnicians();
-        if (!cancelled) {
-          setEligibleTechnicians(Array.isArray(list) ? list : []);
-        }
-      } catch (err) {
-        console.error('[ServiceView] Failed to fetch eligible technicians:', err);
-      } finally {
-        if (!cancelled) setIsLoadingTechnicians(false);
-      }
-    };
+    setIsLoadingTechnicians(true);
+    try {
+      const list = await apiClient.getEligibleServiceTechnicians();
+      setEligibleTechnicians(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.error('[ServiceView] Failed to fetch eligible technicians:', err);
+    } finally {
+      setIsLoadingTechnicians(false);
+    }
+  }, [isAdminUser]);
+
+  // Initial mount fetch only (never depends on refreshTrigger)
+  useEffect(() => {
+    loadTickets();
+  }, [loadTickets]);
+
+  // Load active Field Workers/Technicians once for Admin (never depends on refreshTrigger)
+  useEffect(() => {
     loadTechnicians();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAdminUser, refreshTrigger]);
+  }, [loadTechnicians]);
 
   const tickets = useMemo(() => {
     const all = storageService.getServiceTickets();
@@ -139,7 +139,7 @@ export const ServiceView: React.FC = () => {
       );
     }
     return all;
-  }, [isCustomer, currentCustomer, refreshTrigger]);
+  }, [isCustomer, currentCustomer, refreshTrigger, localVersion]);
 
   const getTicketTechDisplay = (t: ServiceTicket) => {
     const cleanName =
@@ -206,7 +206,7 @@ export const ServiceView: React.FC = () => {
     const activeCustName =
       isCustomer && currentCustomer
         ? currentCustomer.name
-        : (matchedCustomer?.name || ticketForm.customerName.trim());
+        : (matchedCustomer?.name || ticketForm.customerName.trim() || (isCustomer ? currentUser?.name || '' : ''));
     const activeCustId =
       isCustomer && currentCustomer
         ? currentCustomer.id
@@ -249,7 +249,6 @@ export const ServiceView: React.FC = () => {
         scheduledDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
       });
       showToast(`Service ticket ${saved?.ticketId || newTicketPayload.ticketId} saved to MySQL`, 'success');
-      triggerRefresh();
     } catch (err: any) {
       showToast(err?.message || 'Failed to log service ticket in MySQL.', 'error');
     } finally {
@@ -267,7 +266,6 @@ export const ServiceView: React.FC = () => {
           ticket.resolutionDetails || 'Ticket resolved and verified by Admin.'
       });
       showToast(`Ticket ${ticket.ticketId} marked as RESOLVED in MySQL`, 'success');
-      triggerRefresh();
     } catch (err: any) {
       showToast(err?.message || 'Failed to resolve ticket in MySQL.', 'error');
     } finally {
@@ -282,6 +280,10 @@ export const ServiceView: React.FC = () => {
     if (assignTicket?.id === updated.id) {
       setAssignTicket(updated);
     }
+  };
+
+  const handleManualRefresh = async () => {
+    await Promise.all([loadTickets(), loadTechnicians()]);
   };
 
   const unassignedCount = useMemo(
@@ -308,6 +310,7 @@ export const ServiceView: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
             onClick={() => setIsNewTicketOpen(true)}
             className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-xl transition-all shadow-2xs"
           >
@@ -316,6 +319,7 @@ export const ServiceView: React.FC = () => {
           </button>
 
           <button
+            type="button"
             onClick={() => openImportExportModal('Service')}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl shadow-2xs transition-colors"
           >
@@ -324,6 +328,23 @@ export const ServiceView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {ticketLoadError && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-900 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{ticketLoadError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTickets ? 'animate-spin' : ''}`} />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
 
       {/* Search and Filters */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
@@ -351,6 +372,17 @@ export const ServiceView: React.FC = () => {
             <option value="RESOLVED">RESOLVED</option>
             <option value="CLOSED">CLOSED</option>
           </select>
+
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={isLoadingTickets}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors disabled:opacity-50"
+            title="Refresh tickets from MySQL"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTickets ? 'animate-spin text-amber-600' : ''}`} />
+            <span>Refresh</span>
+          </button>
         </div>
 
         <div className="relative w-full lg:w-72">
