@@ -100,6 +100,11 @@ export const InvoiceCreator: React.FC = () => {
       setCustomItemDesc(prod.name);
       setItemHsn(prod.hsnCode || '85414011');
       setItemUnitPrice(prod.sellingPrice || prod.unitPrice || 0);
+      const prodGst =
+        prod.gstRate !== undefined && prod.gstRate !== null && Number.isFinite(Number(prod.gstRate))
+          ? Number(prod.gstRate)
+          : 12;
+      setItemTaxRate(prodGst);
     }
   };
 
@@ -114,8 +119,8 @@ export const InvoiceCreator: React.FC = () => {
     }
 
     const baseAmount = itemQty * itemUnitPrice;
-    const taxAmt = (baseAmount * itemTaxRate) / 100;
-    const totalAmt = baseAmount + taxAmt;
+    const taxAmt = Number(((baseAmount * itemTaxRate) / 100).toFixed(2));
+    const totalAmt = Number((baseAmount + taxAmt).toFixed(2));
 
     const prod = products.find(p => p.id === selectedProductId);
 
@@ -136,6 +141,7 @@ export const InvoiceCreator: React.FC = () => {
     setCustomItemDesc('');
     setItemQty(1);
     setItemUnitPrice(0);
+    setItemTaxRate(12);
   };
 
   const handleRemoveLineItem = (index: number) => {
@@ -670,11 +676,18 @@ export const InvoiceCreator: React.FC = () => {
                       onChange={e => setItemTaxRate(Number(e.target.value))}
                       className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                     >
-                      <option value={0}>0%</option>
-                      <option value={5}>5%</option>
-                      <option value={12}>12% (Solar Modules)</option>
-                      <option value={18}>18% (Inverters / Services)</option>
-                      <option value={28}>28%</option>
+                      {Array.from(new Set([0, 5, 12, 18, 28, itemTaxRate]))
+                        .filter(r => Number.isFinite(r) && r >= 0 && r <= 100)
+                        .sort((a, b) => a - b)
+                        .map(rate => (
+                          <option key={rate} value={rate}>
+                            {rate === 12
+                              ? '12% (Solar Modules)'
+                              : rate === 18
+                              ? '18% (Inverters / Services)'
+                              : `${rate}%`}
+                          </option>
+                        ))}
                     </select>
                   </div>
                 </div>

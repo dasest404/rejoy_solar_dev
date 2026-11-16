@@ -249,12 +249,21 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
     }
 
     const taxableValue = it.totalCost || (it.estimatedUnitCost || 0) * it.requiredQty;
+    const hasCatalogGst =
+      prod &&
+      prod.gstRate !== undefined &&
+      prod.gstRate !== null &&
+      Number.isFinite(Number(prod.gstRate)) &&
+      Number(prod.gstRate) >= 0;
+    if (hasCatalogGst) {
+      gstRate = Number(prod.gstRate);
+    }
     const cgstRate = gstRate / 2;
     const sgstRate = gstRate / 2;
     const cgstAmount = Number(((taxableValue * cgstRate) / 100).toFixed(2));
     const sgstAmount = Number(((taxableValue * sgstRate) / 100).toFixed(2));
     const lineTotal = taxableValue + cgstAmount + sgstAmount;
-    const rateInclTax = Number((taxableValue * (1 + gstRate / 100) / it.requiredQty).toFixed(2));
+    const rateInclTax = it.requiredQty > 0 ? Number((taxableValue * (1 + gstRate / 100) / it.requiredQty).toFixed(2)) : 0;
 
     return {
       ...it,

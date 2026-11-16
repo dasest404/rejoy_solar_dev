@@ -232,6 +232,7 @@ class MySqlDatabaseManager {
       // Auto-migrate extended columns on Sales & Purchase ERP tables
       const salesPurchaseMigrations: Record<string, Record<string, string>> = {
         solar_products: {
+          gst_rate: "DECIMAL(5,2) DEFAULT 18.00",
           selling_price: "DECIMAL(12,2) DEFAULT 0.00",
           location: "VARCHAR(255) DEFAULT ''",
           warehouse_name: "VARCHAR(255) DEFAULT ''",
@@ -2469,8 +2470,15 @@ class MySqlDatabaseManager {
       const currentStock = parseFloat(rawStock) || 0;
       const rawReorder = String(raw.minStockThreshold ?? raw.reorderLevel ?? raw.minStockLevel ?? raw.reorder_level ?? '').replace(/[^0-9.]/g, '');
       const reorderLevel = rawReorder !== '' ? (parseFloat(rawReorder) ?? 10) : 10;
-      const rawGst = String(raw.gstRate ?? raw.gst_rate ?? '').replace(/[^0-9.]/g, '');
-      const gstRate = rawGst !== '' ? (parseFloat(rawGst) || 0) : 18;
+      const rawGstInput = String(raw.gstRate ?? raw.gst_rate ?? '').trim();
+      const rawGst = rawGstInput.replace(/[^0-9.-]/g, '');
+      const parsedImportGst = rawGst !== '' ? parseFloat(rawGst) : 18;
+      if (rawGst !== '' && (!Number.isFinite(parsedImportGst) || parsedImportGst < 0 || parsedImportGst > 100)) {
+        failedRecords.push({ row: rowNum, reason: `Invalid GST rate "${rawGstInput}". Must be between 0 and 100.` });
+        errors.push(`Row ${rowNum}: Invalid GST rate "${rawGstInput}". Must be between 0 and 100.`);
+        continue;
+      }
+      const gstRate = Math.round(parsedImportGst * 100) / 100;
       const warehouseId = String(raw.warehouseId || raw.warehouse_id || '').trim();
       const warehouseName = String(raw.warehouseName || raw.warehouse_name || '').trim();
       const location = String(raw.location || warehouseName || '').trim();
@@ -4277,8 +4285,19 @@ class MySqlDatabaseManager {
     const specifications = item.specification ?? item.specifications ?? existing?.specifications ?? '';
     const unit = item.unit ?? existing?.unit ?? 'Nos';
     const hsnCode = item.hsnCode ?? item.hsn_code ?? existing?.hsn_code ?? '';
-    const rawGst = item.gstRate ?? item.taxRate ?? item.gst_rate ?? item.tax_rate ?? existing?.gst_rate;
-    const gstRate = rawGst != null ? Number(rawGst) : 18;
+    const providedGst = item.gstRate ?? item.taxRate ?? item.gst_rate ?? item.tax_rate;
+    let gstRate: number;
+    if (providedGst !== undefined && providedGst !== null && String(providedGst).trim() !== '') {
+      const parsedGst = Number(providedGst);
+      if (!Number.isFinite(parsedGst) || parsedGst < 0 || parsedGst > 100) {
+        const err: any = new Error('GST Rate (%) must be a valid non-negative percentage between 0 and 100.');
+        err.statusCode = 400;
+        throw err;
+      }
+      gstRate = Math.round(parsedGst * 100) / 100;
+    } else {
+      gstRate = existing?.gst_rate != null ? Number(existing.gst_rate) : 18;
+    }
     const rawUnitPrice = item.unitPrice ?? item.unit_price ?? existing?.unit_price;
     const unitPrice = rawUnitPrice != null ? Number(rawUnitPrice) : 0;
     const rawSellingPrice = item.sellingPrice ?? item.selling_price ?? existing?.selling_price;

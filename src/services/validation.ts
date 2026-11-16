@@ -258,6 +258,18 @@ export function validateProduct(
     }
   }
 
+  // 3. GST Rate validation (when provided)
+  if (candidate.gstRate !== undefined && candidate.gstRate !== null) {
+    const gst = Number(candidate.gstRate);
+    if (!Number.isFinite(gst) || gst < 0 || gst > 100) {
+      return {
+        valid: false,
+        field: 'gstRate',
+        message: 'GST Rate (%) must be a valid non-negative percentage between 0 and 100.'
+      };
+    }
+  }
+
   return { valid: true };
 }
 

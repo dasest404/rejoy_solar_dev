@@ -83,6 +83,11 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     const prod = products.find(p => p.id === prodId);
     if (prod) {
       setNewItemUnitPrice(prod.unitPrice);
+      const prodGst =
+        prod.gstRate !== undefined && prod.gstRate !== null && Number.isFinite(Number(prod.gstRate))
+          ? Number(prod.gstRate)
+          : 12;
+      setNewItemTaxPercent(prodGst);
     }
   };
 
@@ -117,8 +122,8 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     }
 
     const baseAmount = newItemQty * newItemUnitPrice;
-    const taxAmt = Math.round((baseAmount * newItemTaxPercent) / 100);
-    const totalAmt = baseAmount + taxAmt;
+    const taxAmt = Number(((baseAmount * newItemTaxPercent) / 100).toFixed(2));
+    const totalAmt = Number((baseAmount + taxAmt).toFixed(2));
 
     const newLineItem: PurchaseLineItem = {
       id: `poi-${Date.now()}-${items.length}`,
@@ -144,6 +149,7 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     setSelectedProductId('');
     setNewItemQty(10);
     setNewItemUnitPrice(0);
+    setNewItemTaxPercent(12);
     setLineItemError('');
   };
 
@@ -155,10 +161,10 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
       if (field === 'orderedQuantity' || field === 'unitPrice' || field === 'taxPercent') {
         const orderedQty = Math.max(0, Number(item.orderedQuantity || 0));
         const unitPrice = Math.max(0, Number(item.unitPrice || 0));
-        const taxPercent = Math.max(0, Number(item.taxPercent || 0));
+        const taxPercent = Math.min(100, Math.max(0, Number(item.taxPercent || 0)));
         const base = orderedQty * unitPrice;
-        const taxAmt = Math.round((base * taxPercent) / 100);
-        const total = base + taxAmt;
+        const taxAmt = Number(((base * taxPercent) / 100).toFixed(2));
+        const total = Number((base + taxAmt).toFixed(2));
 
         item.orderedQuantity = orderedQty;
         item.unitPrice = unitPrice;
@@ -532,11 +538,14 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
                             onChange={e => handleUpdateItem(idx, 'taxPercent', Number(e.target.value))}
                             className="px-1.5 py-1 text-xs bg-white border border-slate-300 rounded-lg"
                           >
-                            <option value={0}>0%</option>
-                            <option value={5}>5%</option>
-                            <option value={12}>12%</option>
-                            <option value={18}>18%</option>
-                            <option value={28}>28%</option>
+                            {Array.from(new Set([0, 5, 12, 18, 28, it.taxPercent]))
+                              .filter(r => Number.isFinite(r) && r >= 0 && r <= 100)
+                              .sort((a, b) => a - b)
+                              .map(rate => (
+                                <option key={rate} value={rate}>
+                                  {rate}%
+                                </option>
+                              ))}
                           </select>
                         </td>
 
@@ -592,7 +601,7 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
                 Add Product to Purchase Order
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
-                <div className="sm:col-span-5">
+                <div className="sm:col-span-4">
                   <select
                     value={selectedProductId}
                     onChange={e => handleProductSelect(e.target.value)}
@@ -628,7 +637,7 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
                   />
                 </div>
 
-                <div className="sm:col-span-3">
+                <div className="sm:col-span-2">
                   <input
                     type="number"
                     min="0"
@@ -637,6 +646,24 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
                     onChange={e => setNewItemUnitPrice(Number(e.target.value))}
                     className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                   />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <select
+                    value={newItemTaxPercent}
+                    onChange={e => setNewItemTaxPercent(Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                    title="GST Rate (%)"
+                  >
+                    {Array.from(new Set([0, 5, 12, 18, 28, newItemTaxPercent]))
+                      .filter(r => Number.isFinite(r) && r >= 0 && r <= 100)
+                      .sort((a, b) => a - b)
+                      .map(rate => (
+                        <option key={rate} value={rate}>
+                          GST {rate}%
+                        </option>
+                      ))}
+                  </select>
                 </div>
 
                 <div className="sm:col-span-2">

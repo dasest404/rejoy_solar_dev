@@ -132,6 +132,11 @@ export const PurchaseOrderEntry: React.FC = () => {
     const prod = products.find(p => p.id === prodId);
     if (prod) {
       setItemUnitPrice(prod.unitPrice);
+      const prodGst =
+        prod.gstRate !== undefined && prod.gstRate !== null && Number.isFinite(Number(prod.gstRate))
+          ? Number(prod.gstRate)
+          : 12;
+      setItemTaxRate(prodGst);
       if (prod.preferredVendorId && !formVendorId) {
         setFormVendorId(prod.preferredVendorId);
       }
@@ -168,9 +173,15 @@ export const PurchaseOrderEntry: React.FC = () => {
       return;
     }
 
+    if (!Number.isFinite(itemTaxRate) || itemTaxRate < 0 || itemTaxRate > 100) {
+      setLineItemError('GST Rate (%) must be between 0 and 100.');
+      showToast('GST Rate (%) must be between 0 and 100', 'warning');
+      return;
+    }
+
     const baseAmount = itemQty * itemUnitPrice;
-    const taxAmt = Math.round((baseAmount * itemTaxRate) / 100);
-    const totalAmt = baseAmount + taxAmt;
+    const taxAmt = Number(((baseAmount * itemTaxRate) / 100).toFixed(2));
+    const totalAmt = Number((baseAmount + taxAmt).toFixed(2));
 
     const newItem: PurchaseLineItem = {
       id: `poi-${Date.now()}-${lineItems.length}`,
@@ -196,6 +207,7 @@ export const PurchaseOrderEntry: React.FC = () => {
     setSelectedProductId('');
     setItemQty(10);
     setItemUnitPrice(0);
+    setItemTaxRate(12);
     setLineItemError('');
   };
 
@@ -758,7 +770,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                 </h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
-                  <div className="sm:col-span-5">
+                  <div className="sm:col-span-4">
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1">
                       Product Catalog Item *
                     </label>
@@ -801,9 +813,9 @@ export const PurchaseOrderEntry: React.FC = () => {
                     />
                   </div>
 
-                  <div className="sm:col-span-3">
+                  <div className="sm:col-span-2">
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                      Unit Purchase Cost (₹)
+                      Unit Cost (₹)
                     </label>
                     <input
                       type="number"
@@ -812,6 +824,26 @@ export const PurchaseOrderEntry: React.FC = () => {
                       onChange={e => setItemUnitPrice(Number(e.target.value))}
                       className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                     />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      GST Rate (%)
+                    </label>
+                    <select
+                      value={itemTaxRate}
+                      onChange={e => setItemTaxRate(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      {Array.from(new Set([0, 5, 12, 18, 28, itemTaxRate]))
+                        .filter(r => Number.isFinite(r) && r >= 0 && r <= 100)
+                        .sort((a, b) => a - b)
+                        .map(rate => (
+                          <option key={rate} value={rate}>
+                            {rate}%
+                          </option>
+                        ))}
+                    </select>
                   </div>
 
                   <div className="sm:col-span-2">
@@ -842,7 +874,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                         <th className="p-2.5">Item</th>
                         <th className="p-2.5 text-center">Qty</th>
                         <th className="p-2.5 text-right">Unit Price</th>
-                        <th className="p-2.5 text-right">GST (12/18%)</th>
+                        <th className="p-2.5 text-right">GST</th>
                         <th className="p-2.5 text-right">Total</th>
                         <th className="p-2.5 text-center">Remove</th>
                       </tr>
@@ -861,7 +893,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                             ₹{it.unitPrice.toLocaleString('en-IN')}
                           </td>
                           <td className="p-2.5 text-right font-mono text-purple-700">
-                            ₹{it.taxAmount.toLocaleString('en-IN')}
+                            ₹{it.taxAmount.toLocaleString('en-IN')} ({it.taxPercent}%)
                           </td>
                           <td className="p-2.5 text-right font-mono font-bold text-slate-800">
                             ₹{it.totalAmount.toLocaleString('en-IN')}
@@ -893,6 +925,15 @@ export const PurchaseOrderEntry: React.FC = () => {
                           </td>
                           <td className="p-2 text-right font-mono">
                             ₹{formSubtotal.toLocaleString('en-IN')}
+                          </td>
+                          <td></td>
+                        </tr>
+                        <tr>
+                          <td colSpan={4} className="p-2 text-right text-slate-600">
+                            Total GST Tax:
+                          </td>
+                          <td className="p-2 text-right font-mono text-purple-700">
+                            ₹{formTaxTotal.toLocaleString('en-IN')}
                           </td>
                           <td></td>
                         </tr>

@@ -46,6 +46,8 @@ export const ProductCatalog: React.FC = () => {
   const [useCustomUnit, setUseCustomUnit] = useState(false);
   const [customUnit, setCustomUnit] = useState('');
   const [formHsn, setFormHsn] = useState('85414011');
+  const [formGstOption, setFormGstOption] = useState<string>('18');
+  const [customGstRate, setCustomGstRate] = useState<string>('');
   const [formUnitPrice, setFormUnitPrice] = useState<number>(0);
   const [formSellingPrice, setFormSellingPrice] = useState<number>(0);
   const [formStock, setFormStock] = useState<number>(0);
@@ -120,6 +122,8 @@ export const ProductCatalog: React.FC = () => {
     setUseCustomUnit(false);
     setCustomUnit('');
     setFormHsn('85414011');
+    setFormGstOption('18');
+    setCustomGstRate('');
     setFormUnitPrice(0);
     setFormSellingPrice(0);
     setFormStock(50);
@@ -145,6 +149,17 @@ export const ProductCatalog: React.FC = () => {
     setUseCustomUnit(false);
     setCustomUnit('');
     setFormHsn(p.hsnCode);
+    const savedGst =
+      p.gstRate !== undefined && p.gstRate !== null && Number.isFinite(Number(p.gstRate))
+        ? Number(p.gstRate)
+        : 18;
+    if (savedGst === 5 || savedGst === 12 || savedGst === 18) {
+      setFormGstOption(String(savedGst));
+      setCustomGstRate('');
+    } else {
+      setFormGstOption('__OTHERS__');
+      setCustomGstRate(String(savedGst));
+    }
     setFormUnitPrice(p.unitPrice);
     setFormSellingPrice(p.sellingPrice);
     setFormStock(p.currentStock);
@@ -169,9 +184,31 @@ export const ProductCatalog: React.FC = () => {
     if (!resolvedCategory) errs.category = 'Category is required';
     if (!resolvedUnit) errs.unit = 'Unit of measure is required';
 
+    let resolvedGstRate = 18;
+    if (formGstOption === '__OTHERS__') {
+      const trimmedGst = customGstRate.trim();
+      if (!trimmedGst) {
+        errs.gstRate = 'Please enter a custom GST percentage';
+      } else {
+        const parsedGst = Number(trimmedGst);
+        if (!Number.isFinite(parsedGst) || parsedGst < 0 || parsedGst > 100) {
+          errs.gstRate = 'GST Rate (%) must be between 0 and 100';
+        } else {
+          resolvedGstRate = Math.round(parsedGst * 100) / 100;
+        }
+      }
+    } else {
+      const presetGst = Number(formGstOption);
+      if (!Number.isFinite(presetGst) || presetGst < 0 || presetGst > 100) {
+        errs.gstRate = 'Please select a valid GST Rate (%)';
+      } else {
+        resolvedGstRate = presetGst;
+      }
+    }
+
     if (Object.keys(errs).length > 0) {
       setFormErrors(errs);
-      showToast('Please complete all required fields', 'warning');
+      showToast(errs.gstRate || 'Please complete all required fields', 'warning');
       return;
     }
 
@@ -195,6 +232,7 @@ export const ProductCatalog: React.FC = () => {
       specification: formSpec.trim(),
       unit: resolvedUnit as ProductItem['unit'],
       hsnCode: formHsn.trim(),
+      gstRate: resolvedGstRate,
       unitPrice: Number(formUnitPrice) || 0,
       sellingPrice: Number(formSellingPrice) || 0,
       currentStock: Math.max(0, Number(formStock) || 0),
@@ -414,8 +452,8 @@ export const ProductCatalog: React.FC = () => {
 
               {/* Actions */}
               <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-                <span className="text-[11px] text-slate-400 font-mono">
-                  HSN: {product.hsnCode}
+                <span className="text-[11px] text-slate-500 font-mono">
+                  HSN: {product.hsnCode || 'N/A'} • GST: {Number.isFinite(Number(product.gstRate)) ? Number(product.gstRate) : 18}%
                 </span>
 
                 {canManageProducts && (
@@ -646,7 +684,7 @@ export const ProductCatalog: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     HSN / SAC Code
@@ -658,6 +696,52 @@ export const ProductCatalog: React.FC = () => {
                     placeholder="85414011"
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl font-mono"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    GST Rate (%) *
+                  </label>
+                  <select
+                    value={formGstOption}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setFormGstOption(val);
+                      if (val !== '__OTHERS__') {
+                        setCustomGstRate('');
+                      }
+                      if (formErrors.gstRate) setFormErrors(prev => ({ ...prev, gstRate: '' }));
+                    }}
+                    className={`w-full px-3 py-2 text-xs bg-white border rounded-xl ${
+                      formErrors.gstRate ? 'border-red-400 bg-red-50/30' : 'border-slate-300'
+                    }`}
+                  >
+                    <option value="5">5%</option>
+                    <option value="12">12%</option>
+                    <option value="18">18%</option>
+                    <option value="__OTHERS__">Others</option>
+                  </select>
+                  {formGstOption === '__OTHERS__' && (
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      required
+                      value={customGstRate}
+                      onChange={e => {
+                        setCustomGstRate(e.target.value);
+                        if (formErrors.gstRate) setFormErrors(prev => ({ ...prev, gstRate: '' }));
+                      }}
+                      placeholder="Enter custom GST %"
+                      className={`mt-1.5 w-full px-3 py-1.5 text-xs bg-white border rounded-xl ${
+                        formErrors.gstRate ? 'border-red-400 bg-red-50/30' : 'border-amber-400'
+                      }`}
+                    />
+                  )}
+                  {formErrors.gstRate && (
+                    <p className="text-[11px] text-red-600 font-medium mt-1">{formErrors.gstRate}</p>
+                  )}
                 </div>
 
                 <div>
@@ -685,7 +769,9 @@ export const ProductCatalog: React.FC = () => {
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   />
                 </div>
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Initial Stock Qty
@@ -698,9 +784,7 @@ export const ProductCatalog: React.FC = () => {
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Min Stock Reorder Alert
@@ -733,7 +817,9 @@ export const ProductCatalog: React.FC = () => {
                     ))}
                   </select>
                 </div>
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Warehouse Bin / Rack

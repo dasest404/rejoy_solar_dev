@@ -421,9 +421,10 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
     };
     console.error(`[MySQL Write Error] Write failure in collection "${collection}":`, safeDiagnostics);
     const isUnavailable = err?.code === 'DB_UNAVAILABLE' || err?.statusCode === 503;
-    res.status(isUnavailable ? 503 : 500).json({
+    const statusCode = err?.statusCode === 400 ? 400 : (isUnavailable ? 503 : 500);
+    res.status(statusCode).json({
       success: false,
-      code: err?.code || (isUnavailable ? 'DB_UNAVAILABLE' : 'SERVER_ERROR'),
+      code: err?.code || (statusCode === 400 ? 'VALIDATION_ERROR' : isUnavailable ? 'DB_UNAVAILABLE' : 'SERVER_ERROR'),
       error: err?.message || 'Sync error',
       diagnostics: safeDiagnostics
     });

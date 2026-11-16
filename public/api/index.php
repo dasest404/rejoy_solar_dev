@@ -198,6 +198,7 @@ function ensureRequiredTables($pdo) {
     // Auto-migrate extended columns on Sales & Purchase ERP tables
     $spMigrations = [
         'solar_products' => [
+            'gst_rate' => 'DECIMAL(5,2) DEFAULT 18.00',
             'selling_price' => 'DECIMAL(12,2) DEFAULT 0.00',
             'location' => "VARCHAR(255) DEFAULT ''",
             'warehouse_name' => "VARCHAR(255) DEFAULT ''",
@@ -1466,8 +1467,19 @@ function saveProductToDb($pdo, $item) {
     $specs = $item['specification'] ?? $item['specifications'] ?? ($ex['specifications'] ?? '');
     $unit = $item['unit'] ?? ($ex['unit'] ?? 'Nos');
     $hsnCode = $item['hsnCode'] ?? $item['hsn_code'] ?? ($ex['hsn_code'] ?? '');
-    $rawGst = $item['gstRate'] ?? $item['taxRate'] ?? $item['gst_rate'] ?? $item['tax_rate'] ?? ($ex['gst_rate'] ?? null);
-    $gstRate = $rawGst !== null ? floatval($rawGst) : 18.0;
+    $providedGst = $item['gstRate'] ?? $item['taxRate'] ?? $item['gst_rate'] ?? $item['tax_rate'] ?? null;
+    if ($providedGst !== null && trim((string)$providedGst) !== '') {
+        if (!is_numeric($providedGst)) {
+            throw new Exception('Invalid GST rate: must be a valid percentage between 0 and 100.');
+        }
+        $parsedGst = floatval($providedGst);
+        if ($parsedGst < 0 || $parsedGst > 100) {
+            throw new Exception('Invalid GST rate: must be a non-negative percentage between 0 and 100.');
+        }
+        $gstRate = round($parsedGst, 2);
+    } else {
+        $gstRate = isset($ex['gst_rate']) && $ex['gst_rate'] !== null ? floatval($ex['gst_rate']) : 18.0;
+    }
     $rawPrice = $item['unitPrice'] ?? $item['unit_price'] ?? ($ex['unit_price'] ?? null);
     $unitPrice = $rawPrice !== null ? floatval($rawPrice) : 0.0;
     $rawSelling = $item['sellingPrice'] ?? $item['selling_price'] ?? ($ex['selling_price'] ?? null);
@@ -5581,7 +5593,13 @@ if ($method === 'POST' && in_array($cleanPath, ['/products/import', '/products/i
             $unit = trim($raw['unit'] ?? 'Nos');
             $hsn = trim($raw['hsnCode'] ?? ($raw['hsn_code'] ?? '85414011'));
             $rawGst = $raw['gstRate'] ?? ($raw['gst_rate'] ?? null);
-            $gstRate = $rawGst !== null && $rawGst !== '' ? floatval(preg_replace('/[^0-9.]/', '', (string)$rawGst)) : 18.0;
+            $rawGstClean = $rawGst !== null ? preg_replace('/[^0-9.-]/', '', (string)$rawGst) : '';
+            if ($rawGstClean !== '' && (!is_numeric($rawGstClean) || floatval($rawGstClean) < 0 || floatval($rawGstClean) > 100)) {
+                $failed[] = ['row' => $rowNum, 'reason' => "Invalid GST rate '$rawGst'. Must be between 0 and 100."];
+                $errors[] = "Row $rowNum: Invalid GST rate '$rawGst'. Must be between 0 and 100.";
+                continue;
+            }
+            $gstRate = $rawGstClean !== '' ? round(floatval($rawGstClean), 2) : 18.0;
             $price = floatval(preg_replace('/[^0-9.]/', '', (string)($raw['unitPrice'] ?? ($raw['unit_price'] ?? ($raw['price'] ?? 0)))));
             $rawSelling = $raw['sellingPrice'] ?? ($raw['selling_price'] ?? null);
             $sellingPrice = ($rawSelling !== null && $rawSelling !== '') ? floatval(preg_replace('/[^0-9.]/', '', (string)$rawSelling)) : round($price * 1.15);
@@ -6428,7 +6446,7 @@ if ($method === 'POST' && in_array($cleanPath, ['/sync/push', '/sync/push/'])) {
             $pdo->rollBack();
         }
         $msg = $e->getMessage();
-        $code = str_contains($msg, 'Primary/Default warehouse') ? 400 : 500;
+        $code = (str_contains($msg, 'Primary/Default warehouse') || str_contains($msg, 'Invalid GST rate')) ? 400 : 500;
         error_log("Error in /sync/push ($collection): " . $msg);
         http_response_code($code);
         echo json_encode([

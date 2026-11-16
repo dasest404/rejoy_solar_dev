@@ -662,8 +662,12 @@ export function parseAndValidateCSV(text: string, module: ExportModule): ImportV
       const model = (prodModelIdx >= 0 ? cols[prodModelIdx] : '')?.trim() || '';
       const unit = ((prodUnitIdx >= 0 ? cols[prodUnitIdx] : '')?.trim() || 'NOS') as ProductItem['unit'];
       const hsnCode = (prodHsnIdx >= 0 ? cols[prodHsnIdx] : '')?.trim() || '85414011';
-      const rawGst = (prodGstIdx >= 0 ? cols[prodGstIdx] : '')?.replace(/[^0-9.]/g, '');
-      const gstRate = parseFloat(rawGst) || 18;
+      const rawGstCol = prodGstIdx >= 0 ? String(cols[prodGstIdx] ?? '').trim() : '';
+      const rawGst = rawGstCol.replace(/[^0-9.-]/g, '');
+      const parsedGst = rawGst !== '' ? parseFloat(rawGst) : 18;
+      const gstRate = Number.isFinite(parsedGst) && parsedGst >= 0 && parsedGst <= 100
+        ? Math.round(parsedGst * 100) / 100
+        : 18;
       const rawPrice = (prodPriceIdx >= 0 ? cols[prodPriceIdx] : '')?.replace(/[^0-9.]/g, '');
       const unitPrice = parseFloat(rawPrice) || 0;
       const rawStock = (prodStockIdx >= 0 ? cols[prodStockIdx] : '')?.replace(/[^0-9.]/g, '');
