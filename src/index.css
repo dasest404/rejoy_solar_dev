@@ -1,1 +1,55 @@
 @import "tailwindcss";
+
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+
+@media print {
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.has-erp-print-portal > #root {
+    display: none !important;
+  }
+
+  body.has-erp-print-portal > #erp-print-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  #erp-print-portal table {
+    page-break-inside: auto;
+  }
+
+  #erp-print-portal thead {
+    display: table-header-group;
+  }
+
+  #erp-print-portal tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .erp-page-break {
+    page-break-after: always;
+    break-after: page;
+  }
+}

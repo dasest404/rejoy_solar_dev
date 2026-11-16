@@ -3,6 +3,8 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
 import { SalesInvoice, InvoiceLineItem, ProductItem, Customer, SolarProject } from '../../types/solar';
+import { PrintPortal, triggerSafeWindowPrint } from '../common/PrintPortal';
+import { numberToIndianWords } from '../../utils/indianNumberWords';
 import {
   FileText,
   Plus,
@@ -61,6 +63,7 @@ export const InvoiceCreator: React.FC = () => {
   const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger]);
   const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
   const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
+  const settings = useMemo(() => storageService.getSettings(), [refreshTrigger, viewingInvoiceId]);
   const viewingInvoice = useMemo(
     () => (viewingInvoiceId ? invoices.find(inv => inv.id === viewingInvoiceId) || null : null),
     [viewingInvoiceId, invoices]
@@ -911,13 +914,15 @@ export const InvoiceCreator: React.FC = () => {
                   Email Invoice
                 </button>
                 <button
-                  onClick={() => window.print()}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                  type="button"
+                  onClick={() => triggerSafeWindowPrint(settings.logoUrl ? [settings.logoUrl] : [])}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
                 >
                   <Printer className="w-3.5 h-3.5" />
                   Print
                 </button>
                 <button
+                  type="button"
                   onClick={() => setViewingInvoiceId(null)}
                   className="p-1.5 text-slate-400 hover:text-slate-600"
                 >
@@ -932,7 +937,7 @@ export const InvoiceCreator: React.FC = () => {
                 <span className="font-bold text-slate-900 text-sm block mt-0.5">
                   {viewingInvoice.customerName}
                 </span>
-                <span className="text-slate-600 block mt-1">GSTIN: {viewingInvoice.customerGst}</span>
+                <span className="text-slate-600 block mt-1">GSTIN: {viewingInvoice.customerGst || 'Unregistered'}</span>
                 {viewingInvoice.customerAddress && (
                   <span className="text-slate-500 block mt-0.5">{viewingInvoice.customerAddress}</span>
                 )}
@@ -980,7 +985,7 @@ export const InvoiceCreator: React.FC = () => {
                         ₹{item.unitPrice.toLocaleString('en-IN')}
                       </td>
                       <td className="p-2.5 text-right font-mono text-purple-700">
-                        ₹{item.taxAmount.toLocaleString('en-IN')}
+                        ₹{item.taxAmount.toLocaleString('en-IN')} ({item.taxRatePercent}%)
                       </td>
                       <td className="p-2.5 text-right font-mono font-bold text-slate-800">
                         ₹{item.totalAmount.toLocaleString('en-IN')}
@@ -1012,6 +1017,7 @@ export const InvoiceCreator: React.FC = () => {
 
             <div className="flex justify-end">
               <button
+                type="button"
                 onClick={() => setViewingInvoiceId(null)}
                 className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900"
               >
@@ -1021,6 +1027,202 @@ export const InvoiceCreator: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Dedicated Body-Level Print Portal for Tax Invoice */}
+      <PrintPortal active={Boolean(viewingInvoice)}>
+        {viewingInvoice && (
+          <div className="bg-white p-4 border border-black w-full max-w-none mx-0 text-black text-[11px] leading-tight font-sans">
+            <h2 className="text-center font-bold text-base uppercase tracking-wider mb-2">
+              {viewingInvoice.invoiceType === 'PROFORMA'
+                ? 'Proforma Invoice'
+                : viewingInvoice.invoiceType === 'MILESTONE_INVOICE'
+                ? 'Milestone Tax Invoice'
+                : 'Tax Invoice'}
+            </h2>
+
+            <div className="border border-black grid grid-cols-2">
+              <div className="p-2.5 border-r border-black space-y-0.5">
+                <div className="font-bold text-sm">
+                  {settings.companyName || 'REJOY SOLAR POWER PVT. LTD'}
+                </div>
+                <div>
+                  {settings.companyAddress || 'PLOT NO- 14, STREET NO- 14B, PRAGATI NAGAR, RISALI BHILAI, Chhattisgarh 490006'}
+                </div>
+                <div>
+                  <strong>GSTIN/UIN:</strong> {settings.companyGst || '22AAOCR0748K1Z5'}
+                </div>
+                {settings.companyPhone && (
+                  <div>
+                    <strong>Phone:</strong> {settings.companyPhone}
+                  </div>
+                )}
+                {settings.companyEmail && (
+                  <div>
+                    <strong>E-Mail:</strong> {settings.companyEmail}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 text-[11px] divide-y divide-black">
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Invoice No.</span>
+                  <span className="font-bold font-mono">{viewingInvoice.invoiceNumber}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Invoice Date</span>
+                  <span className="font-bold">{viewingInvoice.invoiceDate}</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Due Date</span>
+                  <span className="font-bold">{viewingInvoice.dueDate}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Payment Terms</span>
+                  <span>{viewingInvoice.paymentTerms || '15 Days Net'}</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Status</span>
+                  <span className="font-bold">{viewingInvoice.status}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Project Reference</span>
+                  <span>{viewingInvoice.projectTitle || 'Direct Supply'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-x border-b border-black p-2.5 space-y-0.5">
+              <span className="text-[10px] font-bold text-slate-600 uppercase block">Buyer (Bill To)</span>
+              <div className="font-bold text-xs">{viewingInvoice.customerName}</div>
+              <div>
+                <strong>GSTIN/UIN:</strong> {viewingInvoice.customerGst || 'Unregistered'}
+              </div>
+              {viewingInvoice.customerAddress && <div>{viewingInvoice.customerAddress}</div>}
+            </div>
+
+            <div className="border-x border-b border-black">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-black bg-slate-50 font-bold text-[10px]">
+                    <th className="p-1.5 border-r border-black text-center w-8">Sl No.</th>
+                    <th className="p-1.5 border-r border-black">Description of Goods / Services</th>
+                    <th className="p-1.5 border-r border-black text-center w-20">HSN/SAC</th>
+                    <th className="p-1.5 border-r border-black text-center w-16">Qty</th>
+                    <th className="p-1.5 border-r border-black text-right w-20">Rate (₹)</th>
+                    <th className="p-1.5 border-r border-black text-right w-20">Taxable (₹)</th>
+                    <th className="p-1.5 border-r border-black text-center w-14">GST %</th>
+                    <th className="p-1.5 border-r border-black text-right w-20">CGST (₹)</th>
+                    <th className="p-1.5 border-r border-black text-right w-20">SGST (₹)</th>
+                    <th className="p-1.5 text-right w-24">Total (₹)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewingInvoice.items.map((item, idx) => {
+                    const taxable = Number(((item.quantity || 0) * (item.unitPrice || 0)).toFixed(2));
+                    const halfTax = Number(((item.taxAmount || 0) / 2).toFixed(2));
+                    return (
+                      <tr key={item.id || idx} className="border-b border-slate-200 align-top">
+                        <td className="p-1.5 border-r border-black text-center">{idx + 1}</td>
+                        <td className="p-1.5 border-r border-black font-semibold">{item.description}</td>
+                        <td className="p-1.5 border-r border-black text-center font-mono">{item.hsnCode || '-'}</td>
+                        <td className="p-1.5 border-r border-black text-center font-bold">
+                          {item.quantity} {item.unit}
+                        </td>
+                        <td className="p-1.5 border-r border-black text-right font-mono">
+                          {Number(item.unitPrice || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-1.5 border-r border-black text-right font-mono">
+                          {taxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-1.5 border-r border-black text-center font-mono">
+                          {Number(item.taxRatePercent || 0)}%
+                        </td>
+                        <td className="p-1.5 border-r border-black text-right font-mono">
+                          {halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-1.5 border-r border-black text-right font-mono">
+                          {halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-1.5 text-right font-mono font-bold">
+                          {Number(item.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  <tr className="border-t border-black font-semibold">
+                    <td colSpan={9} className="p-1.5 text-right border-r border-black">
+                      Subtotal (Excl. Tax)
+                    </td>
+                    <td className="p-1.5 text-right font-mono">
+                      ₹ {Number(viewingInvoice.subtotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={9} className="p-1 text-right border-r border-black">
+                      CGST Total
+                    </td>
+                    <td className="p-1 text-right font-mono">
+                      ₹ {Number((viewingInvoice.taxAmount || 0) / 2).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={9} className="p-1 text-right border-r border-black">
+                      SGST Total
+                    </td>
+                    <td className="p-1 text-right font-mono">
+                      ₹ {Number((viewingInvoice.taxAmount || 0) / 2).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={9} className="p-1 text-right border-r border-black font-semibold">
+                      Total GST Tax
+                    </td>
+                    <td className="p-1 text-right font-mono font-semibold">
+                      ₹ {Number(viewingInvoice.taxAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                  <tr className="border-t border-black font-bold bg-slate-50 text-xs">
+                    <td colSpan={9} className="p-1.5 text-right border-r border-black">
+                      Grand Invoice Total
+                    </td>
+                    <td className="p-1.5 text-right font-mono">
+                      ₹ {Number(viewingInvoice.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="border-x border-b border-black p-2 flex items-center justify-between text-[11px]">
+              <div>
+                <span className="font-bold">Amount Chargeable (in words): </span>
+                <span className="font-bold">INR {numberToIndianWords(Math.round(viewingInvoice.totalAmount || 0))}</span>
+              </div>
+              <span className="font-bold italic">E. &amp; O.E</span>
+            </div>
+
+            <div className="border-x border-b border-black grid grid-cols-2 p-2.5 text-[11px]">
+              <div className="pr-3 space-y-1">
+                <strong>Declaration &amp; Notes</strong>
+                <p className="text-[10px] text-slate-600 leading-normal">
+                  {viewingInvoice.notes || 'We declare that this invoice shows the actual price of the goods/services described and that all particulars are true and correct.'}
+                </p>
+              </div>
+              <div className="pl-3 border-l border-black text-right flex flex-col justify-between">
+                <div className="font-bold text-[10px]">
+                  for {settings.companyName || 'REJOY SOLAR POWER PVT. LTD'}
+                </div>
+                <div className="pt-8 text-[10px] font-bold">Authorised Signatory</div>
+              </div>
+            </div>
+
+            <div className="text-center text-[10px] text-slate-500 py-1">
+              This is a Computer Generated Invoice
+            </div>
+          </div>
+        )}
+      </PrintPortal>
     </div>
   );
 };

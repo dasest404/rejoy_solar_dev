@@ -4,6 +4,7 @@ import { BillOfMaterials, Warehouse } from '../../types/solar';
 import { storageService } from '../../services/storage';
 import { useApp } from '../../context/AppContext';
 import { numberToIndianWords } from '../../utils/indianNumberWords';
+import { PrintPortal, triggerSafeWindowPrint } from '../common/PrintPortal';
 import {
   X,
   Printer,
@@ -143,6 +144,13 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
   const [distanceKm, setDistanceKm] = useState('24');
   const [cewbNo, setCewbNo] = useState('');
 
+  // Reset visible preview tab only when opening modal or switching BOM
+  useEffect(() => {
+    if (isOpen && bom?.id) {
+      setActiveTab('eway');
+    }
+  }, [isOpen, bom?.id]);
+
   // Initialize or reset EWB details when BOM changes or modal opens
   useEffect(() => {
     if (!bom) return;
@@ -165,11 +173,19 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
     const generatedNum = existingNum || (bom.projectCode === 'RSP/199' ? '871743958765' : `8717${Math.floor(10000000 + Math.random() * 90000000)}`);
 
     setEwbNumber(generatedNum);
-    setDocNumber(bom.projectCode && bom.projectCode.includes('/') ? bom.projectCode : (linkedInvoice?.invoiceNumber || 'RSP/199'));
-    setDocDate(linkedInvoice?.invoiceDate || '2026-09-23');
-    setVehicleNumber(bom.projectCode === 'RSP/199' ? 'CG04QR4154' : 'CG04QR4154');
+    setDocNumber(
+      bom.projectCode && bom.projectCode.includes('/')
+        ? bom.projectCode
+        : (linkedInvoice?.invoiceNumber || bom.projectCode || bom.bomNumber || 'RSP/199')
+    );
+    setDocDate(
+      linkedInvoice?.invoiceDate ||
+      (bom.ewayBillDate ? bom.ewayBillDate.slice(0, 10) : '') ||
+      (bom.createdAt ? bom.createdAt.slice(0, 10) : '') ||
+      new Date().toISOString().slice(0, 10)
+    );
+    setVehicleNumber('CG04QR4154');
     setDistanceKm('24');
-    setActiveTab('eway');
   }, [bom, linkedInvoice, warehouses]);
 
   // Selected Warehouse object
@@ -276,7 +292,7 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
       sgstAmount,
       taxableValue,
       rateInclTax,
-      rate: it.estimatedUnitCost || taxableValue / it.requiredQty,
+      rate: it.estimatedUnitCost || (it.requiredQty > 0 ? taxableValue / it.requiredQty : 0),
       lineTotal
     };
   });
@@ -311,9 +327,12 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
   });
   const hsnSummaryList = Array.from(hsnSummaryMap.values());
 
-  const formattedDocDate = formatEwbDate(docDate);
+  const parsedDocTime = docDate ? new Date(docDate).getTime() : NaN;
+  const safeDocTime = Number.isFinite(parsedDocTime) ? parsedDocTime : Date.now();
+  const safeDocIso = new Date(safeDocTime).toISOString();
+  const formattedDocDate = formatEwbDate(docDate || safeDocIso);
   const validUntilDateFormatted = formatEwbDate(
-    new Date(new Date(docDate).getTime() + 24 * 60 * 60 * 1000).toISOString()
+    new Date(safeDocTime + 24 * 60 * 60 * 1000).toISOString()
   );
 
   const customerName = linkedCustomer?.name || bom.customerName || 'Manohar Gyan Chandani';
@@ -327,6 +346,10 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
   const fromState = selectedWarehouse.state || 'Chhattisgarh';
   const fromStateCode = getStateCode(fromState);
 
+  const companyName = settings.companyName || 'REJOY SOLAR POWER PVT. LTD';
+  const companyGstin = settings.companyGst || '22AAOCR0748K1Z5';
+  const companyEmail = selectedWarehouse.email || settings.companyEmail || 'rejoysolarpower@gmail.com';
+
   const handleCopyEwb = () => {
     navigator.clipboard.writeText(ewbNumber.replace(/\s+/g, ''));
     setCopied(true);
@@ -334,8 +357,26 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    if (activeTab === 'edit') {
+      setActiveTab('eway');
+    }
+
+    let resolvedQr = qrCodeDataUrl;
+    if (!resolvedQr && ewbNumber) {
+      try {
+        const cleanEwb = ewbNumber.replace(/\s+/g, '');
+        const qrData = `https://ewaybillgst.gov.in/verify?ewb=${cleanEwb}&gstin=${companyGstin}&doc=${docNumber}&dt=${docDate}&val=${bom?.totalCost || 0}`;
+        resolvedQr = await QRCode.toDataURL(qrData, {
+          width: 160,
+          margin: 1,
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+        setQrCodeDataUrl(resolvedQr);
+      } catch {}
+    }
+
+    await triggerSafeWindowPrint(resolvedQr ? [resolvedQr] : []);
   };
 
   const handleSaveEWayBill = async () => {
@@ -420,37 +461,569 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
     showToast('GST Portal E-Way Bill JSON downloaded', 'info');
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static">
-      {/* Inject print-only styling */}
-      <style>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
-          #print-document-root, #print-document-root * {
-            visibility: visible;
-          }
-          #print-document-root {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            margin: 0;
-            padding: 0;
-            background: white !important;
-          }
-          .page-break {
-            page-break-after: always;
-            break-after: page;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
+  const renderPrintableDocument = (mode: 'eway' | 'invoice' | 'both', isPrintLayout = false) => {
+    const pageCardClass = isPrintLayout
+      ? 'bg-white p-4 border border-black w-full max-w-none mx-0 text-black text-[11px] leading-tight'
+      : 'bg-white p-6 sm:p-8 border border-black shadow-md max-w-[850px] mx-auto text-black text-[12px] leading-tight';
 
-      <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[96vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 my-auto print:max-w-none print:max-h-none print:shadow-none print:rounded-none">
+    return (
+      <div className="space-y-6 font-sans">
+        {/* PAGE 1: TAX INVOICE (Rendered if 'invoice' or 'both' active) */}
+        {(mode === 'invoice' || mode === 'both') && (
+          <div className={`${pageCardClass} ${mode === 'both' ? 'erp-page-break' : ''}`}>
+            <h2 className="text-center font-bold text-base uppercase tracking-wider mb-2">
+              Tax Invoice
+            </h2>
+
+            {/* Header 2-column box */}
+            <div className="border border-black grid grid-cols-2">
+              {/* Left: Supplier with Selected Warehouse Address */}
+              <div className="p-2 border-r border-black space-y-0.5">
+                <div className="font-bold text-sm">{companyName}</div>
+                <div className="uppercase">{selectedWarehouse.address}</div>
+                <div className="uppercase">{selectedWarehouse.city}</div>
+                <div>
+                  <strong>GSTIN/UIN:</strong> {companyGstin}
+                </div>
+                <div>
+                  <strong>State Name :</strong> {selectedWarehouse.state}, Code : {fromStateCode}
+                </div>
+                <div>
+                  <strong>E-Mail :</strong> {companyEmail}
+                </div>
+              </div>
+
+              {/* Right: Invoice & E-Way Bill Meta Grid */}
+              <div className="grid grid-cols-2 text-[11px] divide-y divide-black">
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Invoice No.</span>
+                  <span className="font-bold">{docNumber}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">e-Way Bill No.</span>
+                  <span className="font-bold">{ewbNumber}</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Dated</span>
+                  <span className="font-bold">{formattedDocDate}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Mode/Terms of Payment</span>
+                  <span>Road</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Reference No. & Date.</span>
+                  <span>BOM: {bom.bomNumber}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Other References</span>
+                  <span>{bom.projectCode}</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Buyer's Order No.</span>
+                  <span>PO-{bom.projectCode}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Dated</span>
+                  <span>{formattedDocDate}</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Dispatch Doc No.</span>
+                  <span>{transportDocNo || 'DC-' + bom.bomNumber}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Delivery Note Date</span>
+                  <span>{formattedDocDate}</span>
+                </div>
+                <div className="p-1.5 border-r border-black">
+                  <span className="text-[10px] text-slate-600 block">Dispatched through</span>
+                  <span>{transporterName || 'By Road'}</span>
+                </div>
+                <div className="p-1.5">
+                  <span className="text-[10px] text-slate-600 block">Destination</span>
+                  <span>{customerCity}</span>
+                </div>
+                <div className="p-1.5 col-span-2">
+                  <span className="text-[10px] text-slate-600 block">Terms of Delivery</span>
+                  <span>Door delivery with solar transit insurance</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Consignee & Buyer Row */}
+            <div className="border-x border-b border-black grid grid-cols-2">
+              <div className="p-2 border-r border-black space-y-0.5">
+                <span className="text-[10px] font-bold text-slate-600 block">Consignee (Ship to)</span>
+                <div className="font-bold">{customerName}</div>
+                <div>{customerAddress}</div>
+                <div>
+                  <strong>GSTIN/UIN :</strong> {customerGstin || 'URP'}
+                </div>
+                <div>
+                  State Name : {customerState}, Code : {customerStateCode}
+                </div>
+              </div>
+              <div className="p-2 space-y-0.5">
+                <span className="text-[10px] font-bold text-slate-600 block">Buyer (Bill to)</span>
+                <div className="font-bold">{customerName}</div>
+                <div>{customerAddress}</div>
+                <div>
+                  <strong>GSTIN/UIN :</strong> {customerGstin || 'URP'}
+                </div>
+                <div>
+                  State Name : {customerState}, Code : {customerStateCode}
+                </div>
+              </div>
+            </div>
+
+            {/* Main Line Items Table */}
+            <div className="border-x border-b border-black">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-black text-[11px] font-bold bg-slate-50">
+                    <th className="p-1.5 border-r border-black text-center w-8">Sl No.</th>
+                    <th className="p-1.5 border-r border-black">Description of Goods</th>
+                    <th className="p-1.5 border-r border-black text-center w-20">HSN/SAC</th>
+                    <th className="p-1.5 border-r border-black text-center w-16">Quantity</th>
+                    <th className="p-1.5 border-r border-black text-right w-24">Rate (Incl. of Tax)</th>
+                    <th className="p-1.5 border-r border-black text-right w-20">Rate</th>
+                    <th className="p-1.5 border-r border-black text-center w-12">per</th>
+                    <th className="p-1.5 text-right w-24">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {enrichedItems.map((it, idx) => (
+                    <tr key={it.id} className="align-top border-b border-slate-200">
+                      <td className="p-1.5 border-r border-black text-center font-medium">{idx + 1}</td>
+                      <td className="p-1.5 border-r border-black">
+                        <span className="font-bold block">{it.productName}</span>
+                        <span className="text-[10px] text-slate-600 block">{it.standardDesc}</span>
+                      </td>
+                      <td className="p-1.5 border-r border-black text-center font-mono">{it.hsnCode}</td>
+                      <td className="p-1.5 border-r border-black text-center font-bold">
+                        {it.requiredQty} {it.unit}
+                      </td>
+                      <td className="p-1.5 border-r border-black text-right font-mono">
+                        {it.rateInclTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-1.5 border-r border-black text-right font-mono">
+                        {it.rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-1.5 border-r border-black text-center">{it.unit}</td>
+                      <td className="p-1.5 text-right font-bold font-mono">
+                        {it.taxableValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))}
+
+                  {/* Tax Breakdowns Rows */}
+                  <tr className="border-t border-black">
+                    <td colSpan={7} className="p-1.5 text-right font-semibold border-r border-black">
+                      Sub Total
+                    </td>
+                    <td className="p-1.5 text-right font-bold font-mono">
+                      {totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+
+                  {hsnSummaryList.map((s, sIdx) => (
+                    <React.Fragment key={sIdx}>
+                      <tr>
+                        <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
+                          CGST @ {s.cgstRate}%
+                        </td>
+                        <td className="p-1 text-right font-mono text-[11px]">
+                          {s.cgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
+                          SGST @ {s.sgstRate}%
+                        </td>
+                        <td className="p-1 text-right font-mono text-[11px]">
+                          {s.sgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    </React.Fragment>
+                  ))}
+
+                  {roundOff !== 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
+                        Less : Round Off
+                      </td>
+                      <td className="p-1 text-right font-mono text-[11px]">
+                        {roundOff < 0 ? `(-)${Math.abs(roundOff).toFixed(2)}` : `(+) ${roundOff.toFixed(2)}`}
+                      </td>
+                    </tr>
+                  )}
+
+                  <tr className="border-t border-black font-bold bg-slate-50">
+                    <td colSpan={3} className="p-1.5 text-right border-r border-black">
+                      Total
+                    </td>
+                    <td className="p-1.5 text-center border-r border-black">
+                      {totalQty} NOS
+                    </td>
+                    <td colSpan={3} className="p-1.5 border-r border-black" />
+                    <td className="p-1.5 text-right font-mono text-sm">
+                      ₹ {grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Amount Chargeable in Words */}
+            <div className="border-x border-b border-black p-2 flex items-center justify-between text-[11px]">
+              <div>
+                <span className="font-bold">Amount Chargeable (in words) :</span>
+                <div className="font-bold mt-0.5">INR {numberToIndianWords(grandTotal)}</div>
+              </div>
+              <span className="font-bold italic">E. & O.E</span>
+            </div>
+
+            {/* HSN/SAC Tax Breakdown Table */}
+            <div className="border-x border-b border-black">
+              <table className="w-full text-[10px] text-center border-collapse">
+                <thead>
+                  <tr className="border-b border-black bg-slate-50 font-bold">
+                    <th rowSpan={2} className="p-1 border-r border-black">HSN/SAC</th>
+                    <th rowSpan={2} className="p-1 border-r border-black">Taxable Value</th>
+                    <th colSpan={2} className="p-1 border-r border-black">CGST</th>
+                    <th colSpan={2} className="p-1 border-r border-black">SGST/UTGST</th>
+                    <th rowSpan={2} className="p-1">Total Tax Amount</th>
+                  </tr>
+                  <tr className="border-b border-black bg-slate-50 font-bold">
+                    <th className="p-0.5 border-r border-black">Rate</th>
+                    <th className="p-0.5 border-r border-black">Amount</th>
+                    <th className="p-0.5 border-r border-black">Rate</th>
+                    <th className="p-0.5 border-r border-black">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hsnSummaryList.map((h, idx) => (
+                    <tr key={idx} className="border-b border-slate-200">
+                      <td className="p-1 border-r border-black font-mono">{h.hsn}</td>
+                      <td className="p-1 border-r border-black font-mono text-right">
+                        {h.taxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-1 border-r border-black">{h.cgstRate}%</td>
+                      <td className="p-1 border-r border-black font-mono text-right">
+                        {h.cgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-1 border-r border-black">{h.sgstRate}%</td>
+                      <td className="p-1 border-r border-black font-mono text-right">
+                        {h.sgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-1 font-mono text-right font-bold">
+                        {h.totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="font-bold border-t border-black bg-slate-50">
+                    <td className="p-1 border-r border-black">Total</td>
+                    <td className="p-1 border-r border-black font-mono text-right">
+                      {totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="p-1 border-r border-black" />
+                    <td className="p-1 border-r border-black font-mono text-right">
+                      {totalCGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="p-1 border-r border-black" />
+                    <td className="p-1 border-r border-black font-mono text-right">
+                      {totalSGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="p-1 font-mono text-right">
+                      {totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="border-x border-b border-black p-2 text-[11px]">
+              <strong>Tax Amount (in words) :</strong> INR {numberToIndianWords(totalTax)}
+            </div>
+
+            {/* Declaration and Bank Details Footer */}
+            <div className="border-x border-b border-black grid grid-cols-2 p-2.5 text-[11px]">
+              <div className="pr-3 space-y-2">
+                <div>
+                  <strong>Declaration</strong>
+                  <p className="text-[10px] text-slate-600 mt-1 leading-normal">
+                    We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
+                  </p>
+                </div>
+              </div>
+              <div className="pl-3 border-l border-black space-y-1">
+                <div className="font-bold">Company's Bank Details</div>
+                <div className="grid grid-cols-2 text-[10px]">
+                  <span className="text-slate-600">Bank Name :</span>
+                  <span className="font-bold">KOTAK BANK CURRENT A/C</span>
+                  <span className="text-slate-600">A/c No. :</span>
+                  <span className="font-mono font-bold">3650607339</span>
+                  <span className="text-slate-600">Branch & IFS Code :</span>
+                  <span className="font-mono font-bold">Nehru Nagar Bhilai & KKBK0006429</span>
+                </div>
+                <div className="pt-6 text-right">
+                  <div className="font-bold text-[10px]">for {companyName}</div>
+                  <div className="pt-8 text-[10px] font-bold">Authorised Signatory</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-center text-[10px] text-slate-500 py-1">
+              This is a Computer Generated Invoice
+            </div>
+          </div>
+        )}
+
+        {/* PAGE 2: OFFICIAL E-WAY BILL (Rendered if 'eway' or 'both' active) */}
+        {(mode === 'eway' || mode === 'both') && (
+          <div className={pageCardClass}>
+            {/* Top Header */}
+            <div className="flex items-start justify-between pb-2 border-b border-black">
+              <div>
+                <div className="font-bold">
+                  Doc No. : Tax Invoice - {docNumber}
+                </div>
+                <div className="font-bold mt-0.5">
+                  Date : {formattedDocDate}
+                </div>
+              </div>
+
+              <div className="text-center">
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
+                  e-Way Bill
+                </h2>
+              </div>
+
+              <div className="text-right flex flex-col items-end">
+                <span className="font-bold text-xs block mb-1">e-Way Bill</span>
+                {qrCodeDataUrl ? (
+                  <img
+                    src={qrCodeDataUrl}
+                    alt="Official GST Verification QR Code"
+                    className="w-20 h-20 border border-slate-300"
+                  />
+                ) : (
+                  <div className="w-20 h-20 border border-slate-300 flex items-center justify-center bg-slate-50">
+                    <QrCode className="w-12 h-12 text-slate-800" />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 1. e-Way Bill Details */}
+            <div className="py-2.5 border-b border-black">
+              <h3 className="font-bold text-xs mb-2">1. e-Way Bill Details</h3>
+              <div className={`grid ${isPrintLayout ? 'grid-cols-3' : 'grid-cols-1 sm:grid-cols-3'} gap-y-1.5 gap-x-4 text-[11px]`}>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">e-Way Bill No. :</span>
+                  <strong className="font-mono">{ewbNumber}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Mode :</span>
+                  <strong className="font-mono">{transportMode}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Generated Date :</span>
+                  <strong>{formattedDocDate} 9:54 AM</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Generated By :</span>
+                  <strong className="font-mono">{companyGstin}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Approx Distance :</span>
+                  <strong>{distanceKm} KM</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Valid Upto :</span>
+                  <strong>{validUntilDateFormatted} 11:59 PM</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Supply Type :</span>
+                  <strong>{supplyType}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Transaction Type :</span>
+                  <strong>{transactionType}</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Address Details */}
+            <div className="py-2.5 border-b border-black">
+              <h3 className="font-bold text-xs mb-2">2. Address Details</h3>
+              <div className={`grid ${isPrintLayout ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-2'} gap-4 text-[11px]`}>
+                {/* From */}
+                <div>
+                  <div className="font-bold mb-1">From</div>
+                  <div className="font-bold">{companyName}</div>
+                  <div>GSTIN : {companyGstin}</div>
+                  <div>{fromState}</div>
+                </div>
+
+                {/* To */}
+                <div>
+                  <div className="font-bold mb-1">To</div>
+                  <div className="font-bold">{customerName}</div>
+                  <div>GSTIN : {customerGstin || 'URP'}</div>
+                  <div>{customerState}</div>
+                </div>
+
+                {/* Dispatch From: Takes selected warehouse address */}
+                <div className="pt-2 border-t border-slate-200">
+                  <div className="font-bold mb-1">Dispatch From</div>
+                  <div className="uppercase font-semibold text-slate-900">{selectedWarehouse.address}</div>
+                  <div className="uppercase">
+                    {selectedWarehouse.city} {selectedWarehouse.state} {selectedWarehouse.pincode}
+                  </div>
+                </div>
+
+                {/* Ship To */}
+                <div className="pt-2 border-t border-slate-200">
+                  <div className="font-bold mb-1">Ship To</div>
+                  <div className="font-semibold text-slate-900">{customerAddress}</div>
+                  <div>
+                    {customerCity} {customerState} {customerPincode}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Goods Details */}
+            <div className="py-2.5 border-b border-black">
+              <h3 className="font-bold text-xs mb-2">3. Goods Details</h3>
+              <div className={isPrintLayout ? '' : 'overflow-x-auto'}>
+                <table className="w-full text-left text-[11px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-black bg-slate-50">
+                      <th className="p-1.5 font-bold">HSN Code</th>
+                      <th className="p-1.5 font-bold">Product Name & Desc</th>
+                      <th className="p-1.5 font-bold text-center">Quantity</th>
+                      <th className="p-1.5 font-bold text-right">Taxable Amt</th>
+                      <th className="p-1.5 font-bold text-right">Tax Rate (C+S)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {enrichedItems.map(it => (
+                      <tr key={it.id} className="align-top">
+                        <td className="p-1.5 font-mono font-medium">{it.hsnCode}</td>
+                        <td className="p-1.5">
+                          <span className="font-bold block">{it.productName}</span>
+                          <span className="text-[10px] text-slate-600 block leading-tight">
+                            & {it.standardDesc}
+                          </span>
+                        </td>
+                        <td className="p-1.5 text-center font-bold">
+                          {it.requiredQty} {it.unit}
+                        </td>
+                        <td className="p-1.5 text-right font-mono font-bold">
+                          {it.taxableValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-1.5 text-right font-mono">
+                          {it.cgstRate.toFixed(2)}+{it.sgstRate.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Goods Summary Totals */}
+              <div className="pt-3 mt-2 border-t border-black space-y-1 text-[11px]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-slate-600">Tot.Taxable Amt :</span>{' '}
+                    <strong className="font-mono">
+                      {totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-600">Other Amt :</span>{' '}
+                    <strong className="font-mono">
+                      {roundOff < 0 ? `(-)${Math.abs(roundOff).toFixed(2)}` : roundOff > 0 ? `(+)${roundOff.toFixed(2)}` : '0.00'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-600">Total Inv Amt :</span>{' '}
+                    <strong className="font-mono text-sm">
+                      {grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-8 pt-1 text-[11px]">
+                  <div>
+                    <span className="text-slate-600">CGST Amt :</span>{' '}
+                    <strong className="font-mono">
+                      {totalCGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-600">SGST Amt :</span>{' '}
+                    <strong className="font-mono">
+                      {totalSGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 4. Transportation Details */}
+            <div className="py-2.5 border-b border-black">
+              <h3 className="font-bold text-xs mb-1.5">4. Transportation Details</h3>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px]">
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Transporter ID :</span>
+                  <span className="font-mono">{transporterId}</span>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Doc No. :</span>
+                  <span className="font-mono">{transportDocNo}</span>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Name :</span>
+                  <span>{transporterName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-28">Date :</span>
+                  <span>{transportDocDate || formattedDocDate}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 5. Vehicle Details */}
+            <div className="pt-2.5">
+              <h3 className="font-bold text-xs mb-1.5">5. Vehicle Details</h3>
+              <div className={`grid ${isPrintLayout ? 'grid-cols-3' : 'grid-cols-1 sm:grid-cols-3'} gap-y-1 text-[11px]`}>
+                <div>
+                  <span className="text-slate-600 inline-block w-24">Vehicle No. :</span>
+                  <strong className="font-mono">{vehicleNumber}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-16">From :</span>
+                  <strong className="uppercase">{selectedWarehouse.city}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-600 inline-block w-20">CEWB No.:</span>
+                  <span className="font-mono">{cewbNo}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:hidden">
+        <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[96vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 my-auto">
         {/* Top Header Controls Bar (Hidden during print) */}
         <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50 shrink-0 no-print">
           <div className="flex items-center gap-2.5">
@@ -727,549 +1300,8 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
             </div>
           ) : (
             /* Printable Document Layout matching user-provided exact format */
-            <div id="print-document-root" className="space-y-8 font-sans">
-              {/* PAGE 1: TAX INVOICE (Rendered if 'invoice' or 'both' active) */}
-              {(activeTab === 'invoice' || activeTab === 'both') && (
-                <div className="bg-white p-6 sm:p-8 border border-black shadow-md print:shadow-none print:border-black max-w-[850px] mx-auto text-black text-[12px] leading-tight page-break">
-                  <h2 className="text-center font-bold text-base uppercase tracking-wider mb-2">
-                    Tax Invoice
-                  </h2>
-
-                  {/* Header 2-column box */}
-                  <div className="border border-black grid grid-cols-2">
-                    {/* Left: Supplier with Selected Warehouse Address */}
-                    <div className="p-2 border-r border-black space-y-0.5">
-                      <div className="font-bold text-sm">REJOY SOLAR POWER PVT. LTD</div>
-                      <div className="uppercase">{selectedWarehouse.address}</div>
-                      <div className="uppercase">{selectedWarehouse.city}</div>
-                      <div>
-                        <strong>GSTIN/UIN:</strong> 22AAOCR0748K1Z5
-                      </div>
-                      <div>
-                        <strong>State Name :</strong> {selectedWarehouse.state}, Code : {fromStateCode}
-                      </div>
-                      <div>
-                        <strong>E-Mail :</strong> {selectedWarehouse.email || 'rejoysolarpower@gmail.com'}
-                      </div>
-                    </div>
-
-                    {/* Right: Invoice & E-Way Bill Meta Grid */}
-                    <div className="grid grid-cols-2 text-[11px] divide-y divide-black">
-                      <div className="p-1.5 border-r border-black">
-                        <span className="text-[10px] text-slate-600 block">Invoice No.</span>
-                        <span className="font-bold">{docNumber}</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="text-[10px] text-slate-600 block">e-Way Bill No.</span>
-                        <span className="font-bold">{ewbNumber}</span>
-                      </div>
-                      <div className="p-1.5 border-r border-black">
-                        <span className="text-[10px] text-slate-600 block">Dated</span>
-                        <span className="font-bold">{formattedDocDate}</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="text-[10px] text-slate-600 block">Mode/Terms of Payment</span>
-                        <span>Road</span>
-                      </div>
-                      <div className="p-1.5 border-r border-black">
-                        <span className="text-[10px] text-slate-600 block">Reference No. & Date.</span>
-                        <span>BOM: {bom.bomNumber}</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="text-[10px] text-slate-600 block">Other References</span>
-                        <span>{bom.projectCode}</span>
-                      </div>
-                      <div className="p-1.5 border-r border-black">
-                        <span className="text-[10px] text-slate-600 block">Buyer's Order No.</span>
-                        <span>PO-{bom.projectCode}</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="text-[10px] text-slate-600 block">Dated</span>
-                        <span>{formattedDocDate}</span>
-                      </div>
-                      <div className="p-1.5 border-r border-black">
-                        <span className="text-[10px] text-slate-600 block">Dispatch Doc No.</span>
-                        <span>{transportDocNo || 'DC-' + bom.bomNumber}</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="text-[10px] text-slate-600 block">Delivery Note Date</span>
-                        <span>{formattedDocDate}</span>
-                      </div>
-                      <div className="p-1.5 border-r border-black">
-                        <span className="text-[10px] text-slate-600 block">Dispatched through</span>
-                        <span>{transporterName || 'By Road'}</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="text-[10px] text-slate-600 block">Destination</span>
-                        <span>{customerCity}</span>
-                      </div>
-                      <div className="p-1.5 col-span-2">
-                        <span className="text-[10px] text-slate-600 block">Terms of Delivery</span>
-                        <span>Door delivery with solar transit insurance</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Consignee & Buyer Row */}
-                  <div className="border-x border-b border-black grid grid-cols-2">
-                    <div className="p-2 border-r border-black space-y-0.5">
-                      <span className="text-[10px] font-bold text-slate-600 block">Consignee (Ship to)</span>
-                      <div className="font-bold">{customerName}</div>
-                      <div>{customerAddress}</div>
-                      <div>
-                        State Name : {customerState}, Code : {customerStateCode}
-                      </div>
-                    </div>
-                    <div className="p-2 space-y-0.5">
-                      <span className="text-[10px] font-bold text-slate-600 block">Buyer (Bill to)</span>
-                      <div className="font-bold">{customerName}</div>
-                      <div>{customerAddress}</div>
-                      <div>
-                        State Name : {customerState}, Code : {customerStateCode}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Main Line Items Table */}
-                  <div className="border-x border-b border-black">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-black text-[11px] font-bold bg-slate-50">
-                          <th className="p-1.5 border-r border-black text-center w-8">Sl No.</th>
-                          <th className="p-1.5 border-r border-black">Description of Goods</th>
-                          <th className="p-1.5 border-r border-black text-center w-20">HSN/SAC</th>
-                          <th className="p-1.5 border-r border-black text-center w-16">Quantity</th>
-                          <th className="p-1.5 border-r border-black text-right w-24">Rate (Incl. of Tax)</th>
-                          <th className="p-1.5 border-r border-black text-right w-20">Rate</th>
-                          <th className="p-1.5 border-r border-black text-center w-12">per</th>
-                          <th className="p-1.5 text-right w-24">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {enrichedItems.map((it, idx) => (
-                          <tr key={it.id} className="align-top border-b border-slate-200">
-                            <td className="p-1.5 border-r border-black text-center font-medium">{idx + 1}</td>
-                            <td className="p-1.5 border-r border-black">
-                              <span className="font-bold block">{it.productName}</span>
-                              <span className="text-[10px] text-slate-600 block">{it.standardDesc}</span>
-                            </td>
-                            <td className="p-1.5 border-r border-black text-center font-mono">{it.hsnCode}</td>
-                            <td className="p-1.5 border-r border-black text-center font-bold">
-                              {it.requiredQty} {it.unit}
-                            </td>
-                            <td className="p-1.5 border-r border-black text-right font-mono">
-                              {it.rateInclTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                            <td className="p-1.5 border-r border-black text-right font-mono">
-                              {it.rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                            <td className="p-1.5 border-r border-black text-center">{it.unit}</td>
-                            <td className="p-1.5 text-right font-bold font-mono">
-                              {it.taxableValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                          </tr>
-                        ))}
-
-                        {/* Tax Breakdowns Rows */}
-                        <tr className="border-t border-black">
-                          <td colSpan={7} className="p-1.5 text-right font-semibold border-r border-black">
-                            Sub Total
-                          </td>
-                          <td className="p-1.5 text-right font-bold font-mono">
-                            {totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                        </tr>
-
-                        {hsnSummaryList.map((s, sIdx) => (
-                          <React.Fragment key={sIdx}>
-                            <tr>
-                              <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
-                                CGST @ {s.cgstRate}%
-                              </td>
-                              <td className="p-1 text-right font-mono text-[11px]">
-                                {s.cgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </td>
-                            </tr>
-                            <tr>
-                              <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
-                                SGST @ {s.sgstRate}%
-                              </td>
-                              <td className="p-1 text-right font-mono text-[11px]">
-                                {s.sgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </td>
-                            </tr>
-                          </React.Fragment>
-                        ))}
-
-                        {roundOff !== 0 && (
-                          <tr>
-                            <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
-                              Less : Round Off
-                            </td>
-                            <td className="p-1 text-right font-mono text-[11px]">
-                              {roundOff < 0 ? `(-)${Math.abs(roundOff).toFixed(2)}` : `(+) ${roundOff.toFixed(2)}`}
-                            </td>
-                          </tr>
-                        )}
-
-                        <tr className="border-t border-black font-bold bg-slate-50">
-                          <td colSpan={3} className="p-1.5 text-right border-r border-black">
-                            Total
-                          </td>
-                          <td className="p-1.5 text-center border-r border-black">
-                            {totalQty} NOS
-                          </td>
-                          <td colSpan={3} className="p-1.5 border-r border-black" />
-                          <td className="p-1.5 text-right font-mono text-sm">
-                            ₹ {grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Amount Chargeable in Words */}
-                  <div className="border-x border-b border-black p-2 flex items-center justify-between text-[11px]">
-                    <div>
-                      <span className="font-bold">Amount Chargeable (in words) :</span>
-                      <div className="font-bold mt-0.5">INR {numberToIndianWords(grandTotal)}</div>
-                    </div>
-                    <span className="font-bold italic">E. & O.E</span>
-                  </div>
-
-                  {/* HSN/SAC Tax Breakdown Table */}
-                  <div className="border-x border-b border-black">
-                    <table className="w-full text-[10px] text-center border-collapse">
-                      <thead>
-                        <tr className="border-b border-black bg-slate-50 font-bold">
-                          <th rowSpan={2} className="p-1 border-r border-black">HSN/SAC</th>
-                          <th rowSpan={2} className="p-1 border-r border-black">Taxable Value</th>
-                          <th colSpan={2} className="p-1 border-r border-black">CGST</th>
-                          <th colSpan={2} className="p-1 border-r border-black">SGST/UTGST</th>
-                          <th rowSpan={2} className="p-1">Total Tax Amount</th>
-                        </tr>
-                        <tr className="border-b border-black bg-slate-50 font-bold">
-                          <th className="p-0.5 border-r border-black">Rate</th>
-                          <th className="p-0.5 border-r border-black">Amount</th>
-                          <th className="p-0.5 border-r border-black">Rate</th>
-                          <th className="p-0.5 border-r border-black">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {hsnSummaryList.map((h, idx) => (
-                          <tr key={idx} className="border-b border-slate-200">
-                            <td className="p-1 border-r border-black font-mono">{h.hsn}</td>
-                            <td className="p-1 border-r border-black font-mono text-right">
-                              {h.taxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                            <td className="p-1 border-r border-black">{h.cgstRate}%</td>
-                            <td className="p-1 border-r border-black font-mono text-right">
-                              {h.cgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                            <td className="p-1 border-r border-black">{h.sgstRate}%</td>
-                            <td className="p-1 border-r border-black font-mono text-right">
-                              {h.sgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                            <td className="p-1 font-mono text-right font-bold">
-                              {h.totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </td>
-                          </tr>
-                        ))}
-                        <tr className="font-bold border-t border-black bg-slate-50">
-                          <td className="p-1 border-r border-black">Total</td>
-                          <td className="p-1 border-r border-black font-mono text-right">
-                            {totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="p-1 border-r border-black" />
-                          <td className="p-1 border-r border-black font-mono text-right">
-                            {totalCGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="p-1 border-r border-black" />
-                          <td className="p-1 border-r border-black font-mono text-right">
-                            {totalSGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="p-1 font-mono text-right">
-                            {totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="border-x border-b border-black p-2 text-[11px]">
-                    <strong>Tax Amount (in words) :</strong> INR {numberToIndianWords(totalTax)}
-                  </div>
-
-                  {/* Declaration and Bank Details Footer */}
-                  <div className="border-x border-b border-black grid grid-cols-2 p-2.5 text-[11px]">
-                    <div className="pr-3 space-y-2">
-                      <div>
-                        <strong>Declaration</strong>
-                        <p className="text-[10px] text-slate-600 mt-1 leading-normal">
-                          We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="pl-3 border-l border-black space-y-1">
-                      <div className="font-bold">Company's Bank Details</div>
-                      <div className="grid grid-cols-2 text-[10px]">
-                        <span className="text-slate-600">Bank Name :</span>
-                        <span className="font-bold">KOTAK BANK CURRENT A/C</span>
-                        <span className="text-slate-600">A/c No. :</span>
-                        <span className="font-mono font-bold">3650607339</span>
-                        <span className="text-slate-600">Branch & IFS Code :</span>
-                        <span className="font-mono font-bold">Nehru Nagar Bhilai & KKBK0006429</span>
-                      </div>
-                      <div className="pt-6 text-right">
-                        <div className="font-bold text-[10px]">for REJOY SOLAR POWER PVT. LTD</div>
-                        <div className="pt-8 text-[10px] font-bold">Authorised Signatory</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-center text-[10px] text-slate-500 py-1">
-                    This is a Computer Generated Invoice
-                  </div>
-                </div>
-              )}
-
-              {/* PAGE 2: OFFICIAL E-WAY BILL (Rendered if 'eway' or 'both' active) */}
-              {(activeTab === 'eway' || activeTab === 'both') && (
-                <div className="bg-white p-6 sm:p-8 border border-black shadow-md print:shadow-none print:border-black max-w-[850px] mx-auto text-black text-[12px] leading-tight">
-                  {/* Top Header */}
-                  <div className="flex items-start justify-between pb-2 border-b border-black">
-                    <div>
-                      <div className="font-bold">
-                        Doc No. : Tax Invoice - {docNumber}
-                      </div>
-                      <div className="font-bold mt-0.5">
-                        Date : {formattedDocDate}
-                      </div>
-                    </div>
-
-                    <div className="text-center">
-                      <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
-                        e-Way Bill
-                      </h2>
-                    </div>
-
-                    <div className="text-right flex flex-col items-end">
-                      <span className="font-bold text-xs block mb-1">e-Way Bill</span>
-                      {qrCodeDataUrl ? (
-                        <img
-                          src={qrCodeDataUrl}
-                          alt="Official GST Verification QR Code"
-                          className="w-20 h-20 border border-slate-300"
-                        />
-                      ) : (
-                        <div className="w-20 h-20 border border-slate-300 flex items-center justify-center bg-slate-50">
-                          <QrCode className="w-12 h-12 text-slate-800" />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 1. e-Way Bill Details */}
-                  <div className="py-2.5 border-b border-black">
-                    <h3 className="font-bold text-xs mb-2">1. e-Way Bill Details</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-y-1.5 gap-x-4 text-[11px]">
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">e-Way Bill No. :</span>
-                        <strong className="font-mono">{ewbNumber}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Mode :</span>
-                        <strong className="font-mono">{transportMode}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Generated Date :</span>
-                        <strong>{formattedDocDate} 9:54 AM</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Generated By :</span>
-                        <strong className="font-mono">22AAOCR0748K1Z5</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Approx Distance :</span>
-                        <strong>{distanceKm} KM</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Valid Upto :</span>
-                        <strong>{validUntilDateFormatted} 11:59 PM</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Supply Type :</span>
-                        <strong>{supplyType}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Transaction Type :</span>
-                        <strong>{transactionType}</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 2. Address Details */}
-                  <div className="py-2.5 border-b border-black">
-                    <h3 className="font-bold text-xs mb-2">2. Address Details</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[11px]">
-                      {/* From */}
-                      <div>
-                        <div className="font-bold mb-1">From</div>
-                        <div className="font-bold">REJOY SOLAR POWER PVT. LTD</div>
-                        <div>GSTIN : 22AAOCR0748K1Z5</div>
-                        <div>{fromState}</div>
-                      </div>
-
-                      {/* To */}
-                      <div>
-                        <div className="font-bold mb-1">To</div>
-                        <div className="font-bold">{customerName}</div>
-                        <div>GSTIN : {customerGstin || ''}</div>
-                        <div>{customerState}</div>
-                      </div>
-
-                      {/* Dispatch From: Takes selected warehouse address */}
-                      <div className="pt-2 border-t border-slate-200">
-                        <div className="font-bold mb-1">Dispatch From</div>
-                        <div className="uppercase font-semibold text-slate-900">{selectedWarehouse.address}</div>
-                        <div className="uppercase">
-                          {selectedWarehouse.city} {selectedWarehouse.state} {selectedWarehouse.pincode}
-                        </div>
-                      </div>
-
-                      {/* Ship To */}
-                      <div className="pt-2 border-t border-slate-200">
-                        <div className="font-bold mb-1">Ship To</div>
-                        <div className="font-semibold text-slate-900">{customerAddress}</div>
-                        <div>
-                          {customerCity} {customerState} {customerPincode}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 3. Goods Details */}
-                  <div className="py-2.5 border-b border-black">
-                    <h3 className="font-bold text-xs mb-2">3. Goods Details</h3>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-[11px] border-collapse">
-                        <thead>
-                          <tr className="border-b border-black bg-slate-50">
-                            <th className="p-1.5 font-bold">HSN Code</th>
-                            <th className="p-1.5 font-bold">Product Name & Desc</th>
-                            <th className="p-1.5 font-bold text-center">Quantity</th>
-                            <th className="p-1.5 font-bold text-right">Taxable Amt</th>
-                            <th className="p-1.5 font-bold text-right">Tax Rate (C+S)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {enrichedItems.map(it => (
-                            <tr key={it.id} className="align-top">
-                              <td className="p-1.5 font-mono font-medium">{it.hsnCode}</td>
-                              <td className="p-1.5">
-                                <span className="font-bold block">{it.productName}</span>
-                                <span className="text-[10px] text-slate-600 block leading-tight">
-                                  & {it.standardDesc}
-                                </span>
-                              </td>
-                              <td className="p-1.5 text-center font-bold">
-                                {it.requiredQty} {it.unit}
-                              </td>
-                              <td className="p-1.5 text-right font-mono font-bold">
-                                {it.taxableValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="p-1.5 text-right font-mono">
-                                {it.cgstRate.toFixed(2)}+{it.sgstRate.toFixed(2)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Goods Summary Totals */}
-                    <div className="pt-3 mt-2 border-t border-black space-y-1 text-[11px]">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <span className="text-slate-600">Tot.Taxable Amt :</span>{' '}
-                          <strong className="font-mono">
-                            {totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-600">Other Amt :</span>{' '}
-                          <strong className="font-mono">
-                            {roundOff < 0 ? `(-)${Math.abs(roundOff).toFixed(2)}` : roundOff > 0 ? `(+)${roundOff.toFixed(2)}` : '(-)0.02'}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-600">Total Inv Amt :</span>{' '}
-                          <strong className="font-mono text-sm">
-                            {grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </strong>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-8 pt-1 text-[11px]">
-                        <div>
-                          <span className="text-slate-600">CGST Amt :</span>{' '}
-                          <strong className="font-mono">
-                            {totalCGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-600">SGST Amt :</span>{' '}
-                          <strong className="font-mono">
-                            {totalSGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </strong>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 4. Transportation Details */}
-                  <div className="py-2.5 border-b border-black">
-                    <h3 className="font-bold text-xs mb-1.5">4. Transportation Details</h3>
-                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px]">
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Transporter ID :</span>
-                        <span className="font-mono">{transporterId}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Doc No. :</span>
-                        <span className="font-mono">{transportDocNo}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Name :</span>
-                        <span>{transporterName}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-28">Date :</span>
-                        <span>{transportDocDate || formattedDocDate}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 5. Vehicle Details */}
-                  <div className="pt-2.5">
-                    <h3 className="font-bold text-xs mb-1.5">5. Vehicle Details</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-y-1 text-[11px]">
-                      <div>
-                        <span className="text-slate-600 inline-block w-24">Vehicle No. :</span>
-                        <strong className="font-mono">{vehicleNumber}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-16">From :</span>
-                        <strong className="uppercase">{selectedWarehouse.city}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 inline-block w-20">CEWB No.:</span>
-                        <span className="font-mono">{cewbNo}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+            <div id="print-document-root">
+              {renderPrintableDocument(activeTab, false)}
             </div>
           )}
         </div>
@@ -1341,6 +1373,12 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+      </div>
+
+      {/* Dedicated Body-Level Print Portal (isolated from SPA overflow/fixed wrappers) */}
+      <PrintPortal active={isOpen && Boolean(bom)}>
+        {renderPrintableDocument(activeTab === 'edit' ? 'eway' : activeTab, true)}
+      </PrintPortal>
+    </>
   );
 };
