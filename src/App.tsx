@@ -116,6 +116,7 @@ const MainLayout: React.FC = () => {
       case 'sales_purchase':
       case 'sales_bom':
       case 'sales_invoices':
+      case 'vendor_sales_invoices':
       case 'purchase_vendors':
       case 'purchase_orders':
       case 'inventory_products':

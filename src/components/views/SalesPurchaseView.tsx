@@ -8,6 +8,7 @@ import { PurchaseOrderEntry } from '../sales_purchase/PurchaseOrderEntry';
 import { ProductCatalog } from '../sales_purchase/ProductCatalog';
 import { InventoryStockManager } from '../sales_purchase/InventoryStockManager';
 import { WarehouseManager } from '../sales_purchase/WarehouseManager';
+import { VendorSalesInvoiceManager } from '../sales_purchase/VendorSalesInvoiceManager';
 import {
   Layers,
   FileText,
@@ -30,13 +31,14 @@ export const SalesPurchaseView: React.FC = () => {
 
   const canBom = canAccessModule('sales_bom');
   const canInvoices = canAccessModule('sales_invoices');
+  const canVendorSalesInvoices = canAccessModule('vendor_sales_invoices');
   const canPo = canAccessModule('purchase_orders');
   const canVendors = canAccessModule('purchase_vendors');
   const canStock = canAccessModule('inventory_stock');
   const canProducts = canAccessModule('inventory_products');
   const canWarehouse = canAccessModule('warehouse_management');
 
-  const canSales = canBom || canInvoices;
+  const canSales = canBom || canInvoices || canVendorSalesInvoices;
   const canPurchase = canPo || canVendors;
   const canInventory = canStock || canProducts;
 
@@ -46,7 +48,9 @@ export const SalesPurchaseView: React.FC = () => {
     if (canInventory) return 'INVENTORY';
     return 'WAREHOUSE';
   });
-  const [salesSubTab, setSalesSubTab] = useState<'BOM' | 'INVOICE'>(() => (canBom ? 'BOM' : 'INVOICE'));
+  const [salesSubTab, setSalesSubTab] = useState<'BOM' | 'INVOICE' | 'VENDOR_INVOICE'>(() =>
+    canBom ? 'BOM' : canInvoices ? 'INVOICE' : 'VENDOR_INVOICE'
+  );
   const [purchaseSubTab, setPurchaseSubTab] = useState<'VENDORS' | 'PO_ENTRY'>(() => (canPo ? 'PO_ENTRY' : 'VENDORS'));
   const [inventorySubTab, setInventorySubTab] = useState<'PRODUCTS' | 'STOCK'>(() => (canStock ? 'STOCK' : 'PRODUCTS'));
 
@@ -58,6 +62,9 @@ export const SalesPurchaseView: React.FC = () => {
     } else if (activeView === 'sales_invoices' && canInvoices) {
       setActiveSection('SALES');
       setSalesSubTab('INVOICE');
+    } else if (activeView === 'vendor_sales_invoices' && canVendorSalesInvoices) {
+      setActiveSection('SALES');
+      setSalesSubTab('VENDOR_INVOICE');
     } else if (activeView === 'purchase_vendors' && canVendors) {
       setActiveSection('PURCHASE');
       setPurchaseSubTab('VENDORS');
@@ -75,7 +82,7 @@ export const SalesPurchaseView: React.FC = () => {
     } else {
       if (canSales) {
         setActiveSection('SALES');
-        setSalesSubTab(canBom ? 'BOM' : 'INVOICE');
+        setSalesSubTab(canBom ? 'BOM' : canInvoices ? 'INVOICE' : 'VENDOR_INVOICE');
       } else if (canPurchase) {
         setActiveSection('PURCHASE');
         setPurchaseSubTab(canPo ? 'PO_ENTRY' : 'VENDORS');
@@ -86,7 +93,7 @@ export const SalesPurchaseView: React.FC = () => {
         setActiveSection('WAREHOUSE');
       }
     }
-  }, [activeView, canBom, canInvoices, canPo, canVendors, canStock, canProducts, canWarehouse, canSales, canPurchase, canInventory]);
+  }, [activeView, canBom, canInvoices, canVendorSalesInvoices, canPo, canVendors, canStock, canProducts, canWarehouse, canSales, canPurchase, canInventory]);
 
   return (
     <div className="space-y-6 pb-12">
@@ -121,7 +128,9 @@ export const SalesPurchaseView: React.FC = () => {
               id="tab-sales-section"
               onClick={() => {
                 setActiveSection('SALES');
-                setActiveView(canBom ? 'sales_bom' : 'sales_invoices');
+                setActiveView(
+                  canBom ? 'sales_bom' : canInvoices ? 'sales_invoices' : 'vendor_sales_invoices'
+                );
               }}
               className={`flex items-center justify-center gap-2.5 p-3.5 rounded-xl font-bold text-sm transition-all ${
                 activeSection === 'SALES'
@@ -226,9 +235,31 @@ export const SalesPurchaseView: React.FC = () => {
                 Invoice Creation & Tax Billing
               </button>
             )}
+            {canVendorSalesInvoices && (
+              <button
+                onClick={() => {
+                  setSalesSubTab('VENDOR_INVOICE');
+                  setActiveView('vendor_sales_invoices');
+                }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                  salesSubTab === 'VENDOR_INVOICE'
+                    ? 'bg-slate-800 text-white shadow-xs'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <Building2 className="w-4 h-4" />
+                Vendor Sales Invoices
+              </button>
+            )}
           </div>
 
-          {salesSubTab === 'BOM' && canBom ? <BOMManager /> : canInvoices ? <InvoiceCreator /> : null}
+          {salesSubTab === 'BOM' && canBom ? (
+            <BOMManager />
+          ) : salesSubTab === 'INVOICE' && canInvoices ? (
+            <InvoiceCreator />
+          ) : canVendorSalesInvoices ? (
+            <VendorSalesInvoiceManager />
+          ) : null}
         </div>
       )}
 

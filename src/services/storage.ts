@@ -32,6 +32,7 @@ import {
   BOMItem,
   SalesInvoice,
   InvoiceLineItem,
+  VendorSalesInvoice,
   StockMovement,
   Warehouse,
   StockAuditRecord,
@@ -89,6 +90,7 @@ const STORAGE_KEYS = {
   PURCHASE_ORDERS: 'solar_erp_purchase_orders_v3',
   BOMS: 'solar_erp_boms_v3',
   SALES_INVOICES: 'solar_erp_sales_invoices_v3',
+  VENDOR_SALES_INVOICES: 'solar_erp_vendor_sales_invoices_v3',
   STOCK_MOVEMENTS: 'solar_erp_stock_movements_v3',
   ACL_CONFIG: 'solar_erp_acl_config_v3',
   ACL_AUDIT_LOGS: 'solar_erp_acl_audit_logs_v3',
@@ -119,6 +121,7 @@ const initialVendors: Vendor[] = [];
 const initialPurchaseOrders: PurchaseOrder[] = [];
 const initialBOMs: BillOfMaterials[] = [];
 const initialSalesInvoices: SalesInvoice[] = [];
+const initialVendorSalesInvoices: VendorSalesInvoice[] = [];
 const initialStockMovements: StockMovement[] = [];
 
 const initialSettings: SystemSettings = {
@@ -158,6 +161,7 @@ const KEY_TO_COLLECTION: Record<string, string> = {
   [STORAGE_KEYS.PURCHASE_ORDERS]: 'purchase_orders',
   [STORAGE_KEYS.BOMS]: 'boms',
   [STORAGE_KEYS.SALES_INVOICES]: 'sales_invoices',
+  [STORAGE_KEYS.VENDOR_SALES_INVOICES]: 'vendor_sales_invoices',
   [STORAGE_KEYS.STOCK_MOVEMENTS]: 'stock_movements',
   [STORAGE_KEYS.ACL_CONFIG]: 'acl_config',
   [STORAGE_KEYS.ACL_AUDIT_LOGS]: 'acl_audit_logs',
@@ -3121,6 +3125,66 @@ class StorageService {
     const invoices = this.getSalesInvoices().filter(i => i.id !== id);
     this.memStore.set(STORAGE_KEYS.SALES_INVOICES, invoices);
     this.deleteSync('sales_invoices', id);
+  }
+
+  // ==========================================
+  // Vendor Sales Invoices (Admin-Only MySQL)
+  // ==========================================
+  getVendorSalesInvoices(): VendorSalesInvoice[] {
+    return this.get<VendorSalesInvoice[]>(STORAGE_KEYS.VENDOR_SALES_INVOICES, initialVendorSalesInvoices);
+  }
+
+  async fetchVendorSalesInvoicesAsync(): Promise<VendorSalesInvoice[]> {
+    const list = await apiClient.getVendorSalesInvoices();
+    const cleaned = Array.isArray(list) ? list : [];
+    this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, cleaned);
+    this.notifyStorageUpdated();
+    return cleaned;
+  }
+
+  async getNextVendorSalesInvoiceNumberAsync(): Promise<string> {
+    return await apiClient.getNextVendorSalesInvoiceNumber();
+  }
+
+  async saveVendorSalesInvoiceAsync(
+    invoice: Partial<VendorSalesInvoice>,
+    isEdit: boolean = false
+  ): Promise<VendorSalesInvoice> {
+    const saved = await apiClient.saveVendorSalesInvoice(invoice, isEdit);
+    const nextList = [...this.getVendorSalesInvoices()];
+    const idx = nextList.findIndex(i => i.id === saved.id);
+    if (idx >= 0) {
+      nextList[idx] = saved;
+    } else {
+      nextList.unshift(saved);
+    }
+    this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, nextList);
+    this.notifyStorageUpdated();
+    return saved;
+  }
+
+  async recordVendorSalesPaymentAsync(
+    invoiceId: string,
+    payment: { amount: number; paymentDate?: string; paymentMode?: string; referenceNo?: string; notes?: string }
+  ): Promise<VendorSalesInvoice> {
+    const updated = await apiClient.recordVendorSalesPayment(invoiceId, payment);
+    const nextList = [...this.getVendorSalesInvoices()];
+    const idx = nextList.findIndex(i => i.id === updated.id);
+    if (idx >= 0) {
+      nextList[idx] = updated;
+    } else {
+      nextList.unshift(updated);
+    }
+    this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, nextList);
+    this.notifyStorageUpdated();
+    return updated;
+  }
+
+  async deleteVendorSalesInvoiceAsync(id: string): Promise<void> {
+    await apiClient.deleteVendorSalesInvoice(id);
+    const nextList = this.getVendorSalesInvoices().filter(i => i.id !== id);
+    this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, nextList);
+    this.notifyStorageUpdated();
   }
 
   // ==========================================

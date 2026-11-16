@@ -179,6 +179,24 @@ function requireAdminOnly(req: Request, res: Response, next: () => void) {
   next();
 }
 
+function requireVendorSalesInvoiceAdmin(req: Request, res: Response, next: () => void) {
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required. Please log in as an Administrator.'
+    });
+  }
+  const role = String(user.role || '').trim().toUpperCase();
+  if (role !== 'ADMIN' && role !== 'SUPER ADMIN') {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied: Only Administrators can view, create, edit, or manage Vendor Sales Invoices.'
+    });
+  }
+  next();
+}
+
 function sendApiError(res: Response, err: any, fallbackMessage: string, extra?: Record<string, any>) {
   const isUnavailable = err?.code === 'DB_UNAVAILABLE' || err?.statusCode === 503 || err?.name === 'DbConnectionError';
   const statusCode = isUnavailable ? 503 : (typeof err?.statusCode === 'number' ? err.statusCode : 500);
@@ -211,7 +229,7 @@ apiRouter.get('/db/status', (_req: Request, res: Response) => {
         'solar_payments', 'solar_expenses', 'solar_employees', 'solar_attendance',
         'solar_payslips', 'solar_holidays', 'solar_service_tickets', 'solar_amc_contracts',
         'solar_notifications', 'solar_products', 'solar_vendors', 'solar_purchase_orders',
-        'solar_boms', 'solar_sales_invoices', 'solar_warehouses', 'solar_stock_movements',
+        'solar_boms', 'solar_sales_invoices', 'solar_vendor_sales_invoices', 'solar_vendor_sales_invoice_items', 'solar_vendor_sales_payments', 'solar_warehouses', 'solar_stock_movements',
         'solar_stock_audits', 'solar_acl_config', 'solar_acl_audit_logs',
         'solar_system_settings', 'solar_workforce_locations'
       ]
@@ -284,9 +302,14 @@ apiRouter.get(['/db/dump.sql', '/db/export-sql'], checkAdminAuth, (_req: Request
 // 2. MASTER BOOTSTRAP API (ONE ROUND-TRIP HYDRATION FROM MYSQL)
 // ==========================================================
 
-apiRouter.get('/bootstrap', async (_req: Request, res: Response) => {
+apiRouter.get('/bootstrap', async (req: Request, res: Response) => {
   try {
     const data = await dbManager.getAllData();
+    const user = (req as any).user;
+    const role = String(user?.role || '').trim().toUpperCase();
+    if (role !== 'ADMIN' && role !== 'SUPER ADMIN') {
+      data.vendor_sales_invoices = [];
+    }
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -318,7 +341,18 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
     }
 
     const normalizedCollection = String(collection).toLowerCase();
-    const adminOnlyCollections = ['users', 'solar_users', 'acl_config', 'solar_acl_config', 'settings', 'solar_system_settings', 'warehouses', 'solar_warehouses'];
+    const adminOnlyCollections = [
+      'users',
+      'solar_users',
+      'acl_config',
+      'solar_acl_config',
+      'settings',
+      'solar_system_settings',
+      'warehouses',
+      'solar_warehouses',
+      'vendor_sales_invoices',
+      'solar_vendor_sales_invoices'
+    ];
     const hrCollections = ['employees', 'employee', 'solar_employees', 'solar_employee'];
 
     if (isCustomerUser(user)) {
@@ -330,10 +364,11 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
         });
       }
     } else if (adminOnlyCollections.includes(normalizedCollection)) {
-      if (user.role !== 'Admin' && user.role !== 'Super Admin') {
+      const roleUpper = String(user.role || '').trim().toUpperCase();
+      if (roleUpper !== 'ADMIN' && roleUpper !== 'SUPER ADMIN') {
         return res.status(403).json({
           success: false,
-          error: 'Forbidden: Only Administrators can modify users, permissions, or system settings.'
+          error: 'Forbidden: Only Administrators can modify users, permissions, settings, warehouses, or vendor sales invoices.'
         });
       }
     } else if (hrCollections.includes(normalizedCollection)) {
@@ -387,9 +422,12 @@ apiRouter.post('/sync/push', async (req: Request, res: Response) => {
 
     // Handle single item save
     if (effectiveItem) {
-      const saved = (normalizedCollection === 'service_tickets' || normalizedCollection === 'solar_service_tickets')
-        ? await dbManager.saveServiceTicket(effectiveItem, user)
-        : await dbManager.saveItem(collection, effectiveItem);
+      const saved =
+        normalizedCollection === 'service_tickets' || normalizedCollection === 'solar_service_tickets'
+          ? await dbManager.saveServiceTicket(effectiveItem, user)
+          : normalizedCollection === 'vendor_sales_invoices' || normalizedCollection === 'solar_vendor_sales_invoices'
+          ? await dbManager.saveVendorSalesInvoice(effectiveItem, user)
+          : await dbManager.saveItem(collection, effectiveItem);
       console.log(`[MySQL Write Success] Committed record "${effectiveItem.id || 'singleton'}" to collection "${collection}"`);
       res.json({ success: true, data: saved, message: `Saved to ${collection}` });
       return;
@@ -1774,6 +1812,77 @@ apiRouter.delete('/sales-invoices/:id', async (req: Request, res: Response) => {
     res.json({ success: true, message: 'Sales invoice deleted from MySQL.' });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to delete sales invoice');
+  }
+});
+
+// Vendor Sales Invoices (Strict Admin-Only APIs)
+apiRouter.get('/vendor-sales-invoices', requireVendorSalesInvoiceAdmin, async (_req: Request, res: Response) => {
+  try {
+    const items = await dbManager.getVendorSalesInvoices();
+    res.json({ success: true, count: items.length, data: items });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch vendor sales invoices');
+  }
+});
+
+apiRouter.get('/vendor-sales-invoices/next-number', requireVendorSalesInvoiceAdmin, async (_req: Request, res: Response) => {
+  try {
+    const nextNumber = await dbManager.getNextVendorSalesInvoiceNumber();
+    res.json({ success: true, data: { invoiceNumber: nextNumber } });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to generate next vendor sales invoice number');
+  }
+});
+
+apiRouter.get('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+  try {
+    const invoice = await dbManager.getVendorSalesInvoiceById(req.params.id);
+    if (!invoice) {
+      return res.status(404).json({ success: false, message: 'Vendor sales invoice not found.' });
+    }
+    res.json({ success: true, data: invoice });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch vendor sales invoice details');
+  }
+});
+
+apiRouter.post('/vendor-sales-invoices', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const payload = { ...(req.body || {}), id: req.body?.id || `vsi-${Date.now()}` };
+    const saved = await dbManager.saveVendorSalesInvoice(payload, actor);
+    res.status(201).json({ success: true, data: saved });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to create vendor sales invoice');
+  }
+});
+
+apiRouter.put('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const saved = await dbManager.saveVendorSalesInvoice({ ...(req.body || {}), id: req.params.id }, actor);
+    res.json({ success: true, data: saved });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to update vendor sales invoice');
+  }
+});
+
+apiRouter.post('/vendor-sales-invoices/:id/payments', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    const updated = await dbManager.recordVendorSalesPayment(req.params.id, req.body || {}, actor);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to record payment on vendor sales invoice');
+  }
+});
+
+apiRouter.delete('/vendor-sales-invoices/:id', requireVendorSalesInvoiceAdmin, async (req: Request, res: Response) => {
+  try {
+    await dbManager.deleteVendorSalesInvoice(req.params.id);
+    res.json({ success: true, message: 'Vendor sales invoice deleted from MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete vendor sales invoice');
   }
 });
 

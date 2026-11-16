@@ -1049,6 +1049,84 @@ export interface SalesInvoice {
   updatedAt: string;
 }
 
+export type VendorSalesInvoiceStatus = 'DRAFT' | 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE';
+export type VendorSalesSupplyType = 'INTRA_STATE' | 'INTER_STATE';
+export type VendorSalesDiscountType = 'PERCENT' | 'FLAT';
+
+export interface VendorSalesLineItem {
+  id: string;
+  productId?: string;
+  description: string;
+  hsnCode: string;
+  quantity: number;
+  unit: string;
+  rate: number;
+  discountType: VendorSalesDiscountType;
+  discountValue: number;
+  discountAmount: number;
+  taxableAmount: number;
+  gstRate: number;
+  cgstRate: number;
+  cgstAmount: number;
+  sgstRate: number;
+  sgstAmount: number;
+  igstRate: number;
+  igstAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+}
+
+export interface VendorSalesPaymentEntry {
+  id: string;
+  invoiceId: string;
+  vendorId: string;
+  paymentDate: string;
+  amount: number;
+  paymentMode: string;
+  referenceNo?: string;
+  notes?: string;
+  recordedBy?: string;
+  createdAt: string;
+}
+
+export interface VendorSalesInvoice {
+  id: string;
+  invoiceNumber: string;
+  vendorId: string;
+  vendorCode?: string;
+  vendorName: string;
+  vendorGst?: string;
+  vendorAddress: string;
+  vendorCity?: string;
+  vendorState: string;
+  vendorContactPerson?: string;
+  vendorPhone?: string;
+  vendorEmail?: string;
+  companyState?: string;
+  supplyType: VendorSalesSupplyType;
+  invoiceDate: string;
+  dueDate: string;
+  paymentTerms: string;
+  notes?: string;
+  items: VendorSalesLineItem[];
+  grossAmount: number;
+  discountAmount: number;
+  subtotal: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  paidAmount: number;
+  balanceAmount: number;
+  status: VendorSalesInvoiceStatus;
+  payments: VendorSalesPaymentEntry[];
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type StockMovementType =
   | 'PURCHASE_RECEIPT'
   | 'BOM_ALLOCATION'

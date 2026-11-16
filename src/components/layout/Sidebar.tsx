@@ -248,6 +248,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                         (canAccessModule('sales_purchase_hub') && 'sales_purchase') ||
                         (canAccessModule('sales_bom') && 'sales_bom') ||
                         (canAccessModule('sales_invoices') && 'sales_invoices') ||
+                        (canAccessModule('vendor_sales_invoices') && 'vendor_sales_invoices') ||
                         (canAccessModule('purchase_vendors') && 'purchase_vendors') ||
                         (canAccessModule('purchase_orders') && 'purchase_orders') ||
                         (canAccessModule('inventory_products') && 'inventory_products') ||
@@ -261,6 +262,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                       [
                         'sales_bom',
                         'sales_invoices',
+                        'vendor_sales_invoices',
                         'purchase_vendors',
                         'purchase_orders',
                         'inventory_products',
@@ -311,6 +313,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                           className={subNavItemClass(activeView === 'sales_invoices')}
                         >
                           <span>Invoice Creation</span>
+                        </button>
+                      )}
+                      {canAccessModule('vendor_sales_invoices') && (
+                        <button
+                          onClick={() => navigateTo('vendor_sales_invoices')}
+                          className={subNavItemClass(activeView === 'vendor_sales_invoices')}
+                        >
+                          <span>Vendor Sales Invoices</span>
                         </button>
                       )}
                       {canAccessModule('purchase_vendors') && (

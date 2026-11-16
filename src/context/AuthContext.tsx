@@ -579,6 +579,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return hasPermission('inventory.bom_edit') || hasPermission('inventory.bom_manage');
       case 'sales_invoices':
         return hasPermission('finance.invoices') || hasPermission('finance.view');
+      case 'vendor_sales_invoices':
+        return isAdmin || String(currentUser?.role || '').trim().toUpperCase() === 'SUPER ADMIN';
       case 'purchase_vendors':
       case 'vendors':
         return hasPermission('inventory.vendors_view') || hasPermission('inventory.vendors_manage');
@@ -604,7 +606,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           hasPermission('inventory.products_manage') ||
           hasPermission('inventory.view') ||
           hasPermission('inventory.manage') ||
-          hasPermission('inventory.warehouses_manage')
+          hasPermission('inventory.warehouses_manage') ||
+          isAdmin
         );
       case 'projects_all':
         return hasPermission('projects.view');

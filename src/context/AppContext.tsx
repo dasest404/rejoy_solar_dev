@@ -28,6 +28,7 @@ export type AppView =
   | 'sales_purchase'
   | 'sales_bom'
   | 'sales_invoices'
+  | 'vendor_sales_invoices'
   | 'purchase_vendors'
   | 'purchase_orders'
   | 'inventory_products'
@@ -229,6 +230,9 @@ const getInitialViewFromPath = (): { view: AppView; filterKey: string | null; se
   if (path === '/invoices' || path.endsWith('/invoices')) {
     return { view: 'sales_invoices', filterKey: null };
   }
+  if (path === '/vendor-sales-invoices' || path.endsWith('/vendor-sales-invoices')) {
+    return { view: 'vendor_sales_invoices', filterKey: null };
+  }
   if (path === '/vendors' || path.endsWith('/vendors')) {
     return { view: 'purchase_vendors', filterKey: null };
   }
@@ -314,6 +318,9 @@ const getPathForView = (view: AppView, filterKey?: string | null, settingsTab?: 
       break;
     case 'sales_invoices':
       route = '/invoices';
+      break;
+    case 'vendor_sales_invoices':
+      route = '/vendor-sales-invoices';
       break;
     case 'purchase_vendors':
       route = '/vendors';

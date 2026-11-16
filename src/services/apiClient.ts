@@ -768,6 +768,65 @@ class ApiClient {
     return true;
   }
 
+  // --- Vendor Sales Invoices (Admin-Only) ---
+  async getVendorSalesInvoices(): Promise<any[]> {
+    const res = await this.request(`${this.baseUrl}/vendor-sales-invoices`, {
+      headers: this.getAuthHeaders()
+    });
+    return (await this.handleResponse(res)) || [];
+  }
+
+  async getNextVendorSalesInvoiceNumber(): Promise<string> {
+    const res = await this.request(`${this.baseUrl}/vendor-sales-invoices/next-number`, {
+      headers: this.getAuthHeaders()
+    });
+    const data = await this.handleResponse<{ invoiceNumber: string }>(res);
+    return data?.invoiceNumber || `VSI-${new Date().getFullYear()}-001`;
+  }
+
+  async getVendorSalesInvoiceById(id: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/vendor-sales-invoices/${encodeURIComponent(id)}`, {
+      headers: this.getAuthHeaders()
+    });
+    return await this.handleResponse(res);
+  }
+
+  async saveVendorSalesInvoice(item: any, isEdit: boolean = false): Promise<any> {
+    const url = isEdit && item?.id
+      ? `${this.baseUrl}/vendor-sales-invoices/${encodeURIComponent(item.id)}`
+      : `${this.baseUrl}/vendor-sales-invoices`;
+    const res = await this.request(url, {
+      method: isEdit && item?.id ? 'PUT' : 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(item)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async recordVendorSalesPayment(
+    invoiceId: string,
+    payment: { amount: number; paymentDate?: string; paymentMode?: string; referenceNo?: string; notes?: string }
+  ): Promise<any> {
+    const res = await this.request(
+      `${this.baseUrl}/vendor-sales-invoices/${encodeURIComponent(invoiceId)}/payments`,
+      {
+        method: 'POST',
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payment)
+      }
+    );
+    return await this.handleResponse(res);
+  }
+
+  async deleteVendorSalesInvoice(id: string): Promise<boolean> {
+    const res = await this.request(`${this.baseUrl}/vendor-sales-invoices/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
+    await this.handleResponse(res);
+    return true;
+  }
+
   // --- Warehouses ---
   async getWarehouses(): Promise<any[]> {
     const res = await this.request(`${this.baseUrl}/warehouses`);

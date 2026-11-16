@@ -13,6 +13,11 @@ import {
   SmtpSecurity,
   sanitizeEmailConfig
 } from './services/emailService';
+import {
+  computeVendorSalesInvoiceTotals,
+  determineVendorSupplyType,
+  roundCurrency
+} from '../src/utils/gstTaxUtils';
 
 export interface DbConfig {
   host: string;
@@ -527,6 +532,99 @@ class MySqlDatabaseManager {
         `);
       } catch (err: any) {
         console.warn('[MySQL Migration] Notice ensuring solar_service_tickets / history schema:', err.message);
+      }
+
+      // Ensure normalized Vendor Sales Invoices tables exist
+      try {
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_vendor_sales_invoices\` (
+            \`id\` VARCHAR(64) PRIMARY KEY,
+            \`invoice_number\` VARCHAR(64) NOT NULL UNIQUE,
+            \`vendor_id\` VARCHAR(64) NOT NULL,
+            \`vendor_code\` VARCHAR(64) DEFAULT '',
+            \`vendor_name\` VARCHAR(255) NOT NULL,
+            \`vendor_gst\` VARCHAR(64) DEFAULT '',
+            \`vendor_address\` TEXT,
+            \`vendor_city\` VARCHAR(128) DEFAULT '',
+            \`vendor_state\` VARCHAR(128) DEFAULT '',
+            \`vendor_contact_person\` VARCHAR(128) DEFAULT '',
+            \`vendor_phone\` VARCHAR(64) DEFAULT '',
+            \`vendor_email\` VARCHAR(191) DEFAULT '',
+            \`company_state\` VARCHAR(128) DEFAULT 'Chhattisgarh',
+            \`supply_type\` VARCHAR(32) NOT NULL DEFAULT 'INTRA_STATE',
+            \`invoice_date\` DATE NOT NULL,
+            \`due_date\` DATE DEFAULT NULL,
+            \`payment_terms\` VARCHAR(128) DEFAULT '30 Days',
+            \`notes\` TEXT,
+            \`gross_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`discount_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`subtotal\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`cgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`sgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`igst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`paid_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`balance_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`status\` VARCHAR(32) NOT NULL DEFAULT 'ISSUED',
+            \`created_by\` VARCHAR(255) DEFAULT '',
+            \`updated_by\` VARCHAR(255) DEFAULT '',
+            \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX \`idx_vsi_vendor\` (\`vendor_id\`),
+            INDEX \`idx_vsi_status\` (\`status\`),
+            INDEX \`idx_vsi_date\` (\`invoice_date\`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_vendor_sales_invoice_items\` (
+            \`id\` VARCHAR(64) PRIMARY KEY,
+            \`invoice_id\` VARCHAR(64) NOT NULL,
+            \`product_id\` VARCHAR(64) DEFAULT NULL,
+            \`line_order\` INT NOT NULL DEFAULT 0,
+            \`description\` VARCHAR(500) NOT NULL,
+            \`hsn_code\` VARCHAR(32) DEFAULT '',
+            \`quantity\` DECIMAL(12,3) NOT NULL DEFAULT 1.000,
+            \`unit\` VARCHAR(32) NOT NULL DEFAULT 'NOS',
+            \`rate\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`discount_type\` VARCHAR(16) NOT NULL DEFAULT 'PERCENT',
+            \`discount_value\` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+            \`discount_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`taxable_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`gst_rate\` DECIMAL(5,2) NOT NULL DEFAULT 18.00,
+            \`cgst_rate\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`cgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`sgst_rate\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`sgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`igst_rate\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`igst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX \`idx_vsii_invoice\` (\`invoice_id\`),
+            INDEX \`idx_vsii_product\` (\`product_id\`),
+            CONSTRAINT \`fk_vsii_invoice\` FOREIGN KEY (\`invoice_id\`) REFERENCES \`solar_vendor_sales_invoices\` (\`id\`) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_vendor_sales_payments\` (
+            \`id\` VARCHAR(64) PRIMARY KEY,
+            \`invoice_id\` VARCHAR(64) NOT NULL,
+            \`vendor_id\` VARCHAR(64) NOT NULL,
+            \`payment_date\` DATE NOT NULL,
+            \`amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`payment_mode\` VARCHAR(64) NOT NULL DEFAULT 'Bank NEFT/RTGS',
+            \`reference_no\` VARCHAR(128) DEFAULT '',
+            \`notes\` TEXT,
+            \`recorded_by\` VARCHAR(255) DEFAULT '',
+            \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX \`idx_vsip_invoice\` (\`invoice_id\`),
+            INDEX \`idx_vsip_vendor\` (\`vendor_id\`),
+            CONSTRAINT \`fk_vsip_invoice\` FOREIGN KEY (\`invoice_id\`) REFERENCES \`solar_vendor_sales_invoices\` (\`id\`) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+      } catch (err: any) {
+        console.warn('[MySQL Migration] Notice ensuring vendor sales invoice tables:', err.message);
       }
 
       await this.ensureHashedPasswords();
@@ -5001,6 +5099,617 @@ class MySqlDatabaseManager {
   }
 
   // ==========================================================
+  // CRUD: VENDOR SALES INVOICES (NORMALIZED HEADER + ITEMS + PAYMENTS)
+  // ==========================================================
+  private resolveEffectiveVendorInvoiceStatus(
+    rawStatus: string,
+    dueDate: string,
+    totalAmount: number,
+    paidAmount: number
+  ): string {
+    const status = String(rawStatus || 'ISSUED').toUpperCase();
+    const balance = roundCurrency(Math.max(0, totalAmount - paidAmount));
+    if (status === 'DRAFT' && paidAmount <= 0) {
+      return 'DRAFT';
+    }
+    if (totalAmount > 0 && balance <= 0.01) {
+      return 'PAID';
+    }
+    if (paidAmount > 0) {
+      return 'PARTIALLY_PAID';
+    }
+    if (dueDate) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (dueDate < today) {
+        return 'OVERDUE';
+      }
+    }
+    return status === 'OVERDUE' ? 'OVERDUE' : 'ISSUED';
+  }
+
+  private mapVendorSalesInvoiceRow(row: any, items: any[], payments: any[]): any {
+    const invoiceDate = this.toSqlDate(row.invoice_date) || '';
+    const dueDate = this.toSqlDate(row.due_date) || '';
+    const totalAmount = roundCurrency(Number(row.total_amount) || 0);
+    const paidAmount = roundCurrency(Number(row.paid_amount) || 0);
+    const balanceAmount = roundCurrency(Math.max(0, totalAmount - paidAmount));
+    const status = this.resolveEffectiveVendorInvoiceStatus(
+      row.status || 'ISSUED',
+      dueDate,
+      totalAmount,
+      paidAmount
+    );
+
+    return {
+      id: row.id,
+      invoiceNumber: row.invoice_number,
+      vendorId: row.vendor_id,
+      vendorCode: row.vendor_code || '',
+      vendorName: row.vendor_name,
+      vendorGst: row.vendor_gst || '',
+      vendorAddress: row.vendor_address || '',
+      vendorCity: row.vendor_city || '',
+      vendorState: row.vendor_state || '',
+      vendorContactPerson: row.vendor_contact_person || '',
+      vendorPhone: row.vendor_phone || '',
+      vendorEmail: row.vendor_email || '',
+      companyState: row.company_state || 'Chhattisgarh',
+      supplyType: row.supply_type === 'INTER_STATE' ? 'INTER_STATE' : 'INTRA_STATE',
+      invoiceDate,
+      dueDate,
+      paymentTerms: row.payment_terms || '30 Days',
+      notes: row.notes || '',
+      items,
+      grossAmount: roundCurrency(Number(row.gross_amount) || 0),
+      discountAmount: roundCurrency(Number(row.discount_amount) || 0),
+      subtotal: roundCurrency(Number(row.subtotal) || 0),
+      cgstAmount: roundCurrency(Number(row.cgst_amount) || 0),
+      sgstAmount: roundCurrency(Number(row.sgst_amount) || 0),
+      igstAmount: roundCurrency(Number(row.igst_amount) || 0),
+      taxAmount: roundCurrency(Number(row.tax_amount) || 0),
+      totalAmount,
+      paidAmount,
+      balanceAmount,
+      status,
+      payments,
+      createdBy: row.created_by || '',
+      updatedBy: row.updated_by || '',
+      createdAt: row.created_at,
+      updatedAt: row.updated_at || row.created_at
+    };
+  }
+
+  private mapVendorSalesItemRow(r: any): any {
+    return {
+      id: r.id,
+      productId: r.product_id || undefined,
+      description: r.description,
+      hsnCode: r.hsn_code || '',
+      quantity: Number(r.quantity) || 0,
+      unit: r.unit || 'NOS',
+      rate: roundCurrency(Number(r.rate) || 0),
+      discountType: r.discount_type === 'FLAT' ? 'FLAT' : 'PERCENT',
+      discountValue: roundCurrency(Number(r.discount_value) || 0),
+      discountAmount: roundCurrency(Number(r.discount_amount) || 0),
+      taxableAmount: roundCurrency(Number(r.taxable_amount) || 0),
+      gstRate: Number(r.gst_rate) || 0,
+      cgstRate: Number(r.cgst_rate) || 0,
+      cgstAmount: roundCurrency(Number(r.cgst_amount) || 0),
+      sgstRate: Number(r.sgst_rate) || 0,
+      sgstAmount: roundCurrency(Number(r.sgst_amount) || 0),
+      igstRate: Number(r.igst_rate) || 0,
+      igstAmount: roundCurrency(Number(r.igst_amount) || 0),
+      taxAmount: roundCurrency(Number(r.tax_amount) || 0),
+      totalAmount: roundCurrency(Number(r.total_amount) || 0)
+    };
+  }
+
+  private mapVendorSalesPaymentRow(r: any): any {
+    return {
+      id: r.id,
+      invoiceId: r.invoice_id,
+      vendorId: r.vendor_id,
+      paymentDate: this.toSqlDate(r.payment_date) || '',
+      amount: roundCurrency(Number(r.amount) || 0),
+      paymentMode: r.payment_mode || 'Bank NEFT/RTGS',
+      referenceNo: r.reference_no || '',
+      notes: r.notes || '',
+      recordedBy: r.recorded_by || '',
+      createdAt: r.created_at
+    };
+  }
+
+  public async getNextVendorSalesInvoiceNumber(conn?: mysql.PoolConnection): Promise<string> {
+    this.assertDbConnected();
+    const runner: any = conn || this.pool!;
+    const year = new Date().getFullYear();
+    const prefix = `VSI-${year}-`;
+    const [rows]: any = await runner.query(
+      'SELECT `invoice_number` FROM `solar_vendor_sales_invoices` WHERE `invoice_number` LIKE ?',
+      [`${prefix}%`]
+    );
+    let maxSeq = 0;
+    for (const r of (rows || []) as any[]) {
+      const numStr = String(r.invoice_number || '').slice(prefix.length);
+      const parsed = parseInt(numStr, 10);
+      if (Number.isFinite(parsed) && parsed > maxSeq) {
+        maxSeq = parsed;
+      }
+    }
+    return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`;
+  }
+
+  public async getVendorSalesInvoices(): Promise<any[]> {
+    if (!this.isConnected) return [];
+    this.assertDbConnected();
+
+    const [invoiceRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_vendor_sales_invoices` ORDER BY `invoice_date` DESC, `created_at` DESC'
+    );
+    if (!Array.isArray(invoiceRows) || invoiceRows.length === 0) return [];
+
+    const [itemRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_vendor_sales_invoice_items` ORDER BY `line_order` ASC, `created_at` ASC'
+    );
+    const [paymentRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_vendor_sales_payments` ORDER BY `payment_date` DESC, `created_at` DESC'
+    );
+
+    const itemsByInv = new Map<string, any[]>();
+    for (const r of (itemRows || []) as any[]) {
+      const list = itemsByInv.get(r.invoice_id) || [];
+      list.push(this.mapVendorSalesItemRow(r));
+      itemsByInv.set(r.invoice_id, list);
+    }
+
+    const paymentsByInv = new Map<string, any[]>();
+    for (const r of (paymentRows || []) as any[]) {
+      const list = paymentsByInv.get(r.invoice_id) || [];
+      list.push(this.mapVendorSalesPaymentRow(r));
+      paymentsByInv.set(r.invoice_id, list);
+    }
+
+    return invoiceRows.map((row: any) =>
+      this.mapVendorSalesInvoiceRow(
+        row,
+        itemsByInv.get(row.id) || [],
+        paymentsByInv.get(row.id) || []
+      )
+    );
+  }
+
+  public async getVendorSalesInvoiceById(id: string): Promise<any | null> {
+    this.assertDbConnected();
+    const [invoiceRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1',
+      [id]
+    );
+    if (!Array.isArray(invoiceRows) || invoiceRows.length === 0) return null;
+
+    const [itemRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ? ORDER BY `line_order` ASC, `created_at` ASC',
+      [id]
+    );
+    const [paymentRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ? ORDER BY `payment_date` DESC, `created_at` DESC',
+      [id]
+    );
+
+    return this.mapVendorSalesInvoiceRow(
+      invoiceRows[0],
+      (itemRows || []).map((r: any) => this.mapVendorSalesItemRow(r)),
+      (paymentRows || []).map((r: any) => this.mapVendorSalesPaymentRow(r))
+    );
+  }
+
+  public async saveVendorSalesInvoice(item: any, actor?: any): Promise<any> {
+    this.assertDbConnected();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const id = String(item?.id || '').trim() || `vsi-${Date.now()}`;
+      const [existingRows]: any = await conn.query(
+        'SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1',
+        [id]
+      );
+      const existing = Array.isArray(existingRows) && existingRows.length > 0 ? existingRows[0] : null;
+
+      const vendorId = String(item?.vendorId ?? item?.vendor_id ?? existing?.vendor_id ?? '').trim();
+      if (!vendorId) {
+        const err: any = new Error('Please select an existing vendor from MySQL records.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const [vendorRows]: any = await conn.query(
+        'SELECT * FROM `solar_vendors` WHERE `id` = ? LIMIT 1',
+        [vendorId]
+      );
+      if (!Array.isArray(vendorRows) || vendorRows.length === 0) {
+        const err: any = new Error(`Selected vendor (${vendorId}) does not exist in MySQL vendor records.`);
+        err.statusCode = 400;
+        throw err;
+      }
+      const vendorRow = vendorRows[0];
+
+      const rawItems = Array.isArray(item?.items) ? item.items : [];
+      if (rawItems.length === 0) {
+        const err: any = new Error('Invoice must include at least one line item.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      // Verify any referenced productIds exist in solar_products (strict relation check, no duplicates)
+      const productIds = Array.from(
+        new Set(
+          rawItems
+            .map((li: any) => String(li?.productId || '').trim())
+            .filter(Boolean)
+        )
+      );
+      if (productIds.length > 0) {
+        const placeholders = productIds.map(() => '?').join(',');
+        const [prodRows]: any = await conn.query(
+          `SELECT \`id\` FROM \`solar_products\` WHERE \`id\` IN (${placeholders})`,
+          productIds
+        );
+        const foundProdIds = new Set((prodRows || []).map((p: any) => String(p.id)));
+        const missingProd = productIds.find(pid => !foundProdIds.has(pid));
+        if (missingProd) {
+          const err: any = new Error(`Referenced product (${missingProd}) was not found in MySQL product catalog.`);
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+
+      for (let i = 0; i < rawItems.length; i++) {
+        const li = rawItems[i];
+        const desc = String(li?.description || '').trim();
+        const qty = Number(li?.quantity);
+        const rate = Number(li?.rate);
+        const gst = Number(li?.gstRate ?? li?.taxRatePercent ?? 0);
+        const disc = Number(li?.discountValue ?? 0);
+        if (!desc) {
+          const err: any = new Error(`Line item #${i + 1}: description is required.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (!Number.isFinite(qty) || qty <= 0) {
+          const err: any = new Error(`Line item #${i + 1}: quantity must be greater than 0.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (!Number.isFinite(rate) || rate < 0) {
+          const err: any = new Error(`Line item #${i + 1}: rate cannot be negative.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (!Number.isFinite(gst) || gst < 0 || gst > 100) {
+          const err: any = new Error(`Line item #${i + 1}: GST rate must be between 0% and 100%.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (!Number.isFinite(disc) || disc < 0) {
+          const err: any = new Error(`Line item #${i + 1}: discount cannot be negative.`);
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+
+      const settings = await this.getSettings().catch(() => ({} as any));
+
+      const vendorCode = vendorRow.vendor_code || item.vendorCode || '';
+      const vendorName = vendorRow.name || item.vendorName || 'Solar Vendor';
+      const vendorGst = String(item.vendorGst ?? vendorRow.gst_number ?? '').trim();
+      const vendorCity = String(item.vendorCity ?? vendorRow.city ?? '').trim();
+      const vendorState = String(item.vendorState ?? vendorRow.state ?? '').trim();
+      const formattedVendorAddress = [vendorRow.address, vendorCity, vendorState]
+        .map(s => String(s || '').trim())
+        .filter(Boolean)
+        .join(', ');
+      const vendorAddress = String(item.vendorAddress ?? formattedVendorAddress).trim();
+      const vendorContactPerson = String(item.vendorContactPerson ?? vendorRow.contact_person ?? '').trim();
+      const vendorPhone = String(item.vendorPhone ?? vendorRow.phone ?? '').trim();
+      const vendorEmail = String(item.vendorEmail ?? vendorRow.email ?? '').trim();
+
+      const jurisdiction = determineVendorSupplyType({
+        companyState: item.companyState || settings?.companyState,
+        companyGst: settings?.companyGst,
+        companyAddress: settings?.companyAddress,
+        vendorState,
+        vendorGst,
+        vendorAddress
+      });
+
+      const computed = computeVendorSalesInvoiceTotals(
+        rawItems.map((li: any) => ({
+          id: li.id,
+          productId: li.productId || undefined,
+          description: li.description,
+          hsnCode: li.hsnCode || '',
+          quantity: Number(li.quantity) || 0,
+          unit: li.unit || 'NOS',
+          rate: Number(li.rate) || 0,
+          discountType: li.discountType === 'FLAT' ? 'FLAT' : 'PERCENT',
+          discountValue: Number(li.discountValue ?? 0) || 0,
+          gstRate: Number(li.gstRate ?? li.taxRatePercent ?? 18) || 0
+        })),
+        jurisdiction.supplyType
+      );
+
+      let invoiceNumber = String(item?.invoiceNumber ?? existing?.invoice_number ?? '').trim();
+      if (!invoiceNumber) {
+        invoiceNumber = await this.getNextVendorSalesInvoiceNumber(conn);
+      }
+
+      // Check sequential invoiceNumber uniqueness
+      const [dupRows]: any = await conn.query(
+        'SELECT `id` FROM `solar_vendor_sales_invoices` WHERE `invoice_number` = ? AND `id` <> ? LIMIT 1',
+        [invoiceNumber, id]
+      );
+      if (Array.isArray(dupRows) && dupRows.length > 0) {
+        const err: any = new Error(`Invoice number "${invoiceNumber}" already exists.`);
+        err.statusCode = 409;
+        throw err;
+      }
+
+      const invoiceDate = this.toSqlDate(item.invoiceDate ?? existing?.invoice_date) || new Date().toISOString().slice(0, 10);
+      const dueDate = this.toSqlDate(item.dueDate ?? existing?.due_date) || invoiceDate;
+      const paymentTerms = String(item.paymentTerms ?? existing?.payment_terms ?? vendorRow.payment_terms ?? '30 Days').trim();
+      const notes = String(item.notes ?? existing?.notes ?? '').trim();
+
+      // Authoritative paid_amount comes from existing payment rows (never downgraded arbitrarily during edit)
+      const [paySumRows]: any = await conn.query(
+        'SELECT COALESCE(SUM(`amount`), 0) AS paidSum FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?',
+        [id]
+      );
+      const recordedPaymentsTotal = roundCurrency(Number(paySumRows?.[0]?.paidSum) || 0);
+      const paidAmount = existing ? recordedPaymentsTotal : Math.min(computed.totalAmount, roundCurrency(Number(item.paidAmount) || 0));
+      const balanceAmount = roundCurrency(Math.max(0, computed.totalAmount - paidAmount));
+
+      const requestedStatus = String(item.status || existing?.status || 'ISSUED').toUpperCase();
+      const status = this.resolveEffectiveVendorInvoiceStatus(
+        requestedStatus,
+        dueDate,
+        computed.totalAmount,
+        paidAmount
+      );
+
+      const actorName = String(actor?.name || actor?.email || item.updatedBy || item.createdBy || 'Admin');
+      const createdBy = existing?.created_by || String(item.createdBy || actorName);
+
+      await conn.query(
+        `INSERT INTO \`solar_vendor_sales_invoices\` (
+          \`id\`, \`invoice_number\`, \`vendor_id\`, \`vendor_code\`, \`vendor_name\`, \`vendor_gst\`,
+          \`vendor_address\`, \`vendor_city\`, \`vendor_state\`, \`vendor_contact_person\`, \`vendor_phone\`, \`vendor_email\`,
+          \`company_state\`, \`supply_type\`, \`invoice_date\`, \`due_date\`, \`payment_terms\`, \`notes\`,
+          \`gross_amount\`, \`discount_amount\`, \`subtotal\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`tax_amount\`,
+          \`total_amount\`, \`paid_amount\`, \`balance_amount\`, \`status\`, \`created_by\`, \`updated_by\`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          \`invoice_number\` = VALUES(\`invoice_number\`),
+          \`vendor_id\` = VALUES(\`vendor_id\`),
+          \`vendor_code\` = VALUES(\`vendor_code\`),
+          \`vendor_name\` = VALUES(\`vendor_name\`),
+          \`vendor_gst\` = VALUES(\`vendor_gst\`),
+          \`vendor_address\` = VALUES(\`vendor_address\`),
+          \`vendor_city\` = VALUES(\`vendor_city\`),
+          \`vendor_state\` = VALUES(\`vendor_state\`),
+          \`vendor_contact_person\` = VALUES(\`vendor_contact_person\`),
+          \`vendor_phone\` = VALUES(\`vendor_phone\`),
+          \`vendor_email\` = VALUES(\`vendor_email\`),
+          \`company_state\` = VALUES(\`company_state\`),
+          \`supply_type\` = VALUES(\`supply_type\`),
+          \`invoice_date\` = VALUES(\`invoice_date\`),
+          \`due_date\` = VALUES(\`due_date\`),
+          \`payment_terms\` = VALUES(\`payment_terms\`),
+          \`notes\` = VALUES(\`notes\`),
+          \`gross_amount\` = VALUES(\`gross_amount\`),
+          \`discount_amount\` = VALUES(\`discount_amount\`),
+          \`subtotal\` = VALUES(\`subtotal\`),
+          \`cgst_amount\` = VALUES(\`cgst_amount\`),
+          \`sgst_amount\` = VALUES(\`sgst_amount\`),
+          \`igst_amount\` = VALUES(\`igst_amount\`),
+          \`tax_amount\` = VALUES(\`tax_amount\`),
+          \`total_amount\` = VALUES(\`total_amount\`),
+          \`paid_amount\` = VALUES(\`paid_amount\`),
+          \`balance_amount\` = VALUES(\`balance_amount\`),
+          \`status\` = VALUES(\`status\`),
+          \`updated_by\` = VALUES(\`updated_by\`)`,
+        [
+          id,
+          invoiceNumber,
+          vendorId,
+          vendorCode,
+          vendorName,
+          vendorGst,
+          vendorAddress,
+          vendorCity,
+          jurisdiction.vendorStateName || vendorState,
+          vendorContactPerson,
+          vendorPhone,
+          vendorEmail,
+          jurisdiction.companyStateName,
+          jurisdiction.supplyType,
+          invoiceDate,
+          dueDate,
+          paymentTerms,
+          notes,
+          computed.grossAmount,
+          computed.discountAmount,
+          computed.subtotal,
+          computed.cgstAmount,
+          computed.sgstAmount,
+          computed.igstAmount,
+          computed.taxAmount,
+          computed.totalAmount,
+          paidAmount,
+          balanceAmount,
+          status,
+          createdBy,
+          actorName
+        ]
+      );
+
+      // Replace line items atomically
+      await conn.query('DELETE FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ?', [id]);
+      for (let idx = 0; idx < computed.items.length; idx++) {
+        const li = computed.items[idx];
+        const lineId = `vsii-${id}-${idx}-${Date.now().toString(36)}`;
+        await conn.query(
+          `INSERT INTO \`solar_vendor_sales_invoice_items\` (
+            \`id\`, \`invoice_id\`, \`product_id\`, \`line_order\`, \`description\`, \`hsn_code\`,
+            \`quantity\`, \`unit\`, \`rate\`, \`discount_type\`, \`discount_value\`, \`discount_amount\`,
+            \`taxable_amount\`, \`gst_rate\`, \`cgst_rate\`, \`cgst_amount\`, \`sgst_rate\`, \`sgst_amount\`,
+            \`igst_rate\`, \`igst_amount\`, \`tax_amount\`, \`total_amount\`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            lineId,
+            id,
+            li.productId || null,
+            idx,
+            li.description,
+            li.hsnCode || '',
+            li.quantity,
+            li.unit,
+            li.rate,
+            li.discountType,
+            li.discountValue,
+            li.discountAmount,
+            li.taxableAmount,
+            li.gstRate,
+            li.cgstRate,
+            li.cgstAmount,
+            li.sgstRate,
+            li.sgstAmount,
+            li.igstRate,
+            li.igstAmount,
+            li.taxAmount,
+            li.totalAmount
+          ]
+        );
+      }
+
+      // If creating a new invoice with an initial paid amount > 0, record initial payment row
+      if (!existing && paidAmount > 0) {
+        const payId = `vsip-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        await conn.query(
+          `INSERT INTO \`solar_vendor_sales_payments\` (
+            \`id\`, \`invoice_id\`, \`vendor_id\`, \`payment_date\`, \`amount\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`recorded_by\`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            payId,
+            id,
+            vendorId,
+            invoiceDate,
+            paidAmount,
+            'Bank NEFT/RTGS',
+            '',
+            'Initial payment recorded on invoice creation',
+            actorName
+          ]
+        );
+      }
+
+      await conn.commit();
+      conn.release();
+      return await this.getVendorSalesInvoiceById(id);
+    } catch (err) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+      throw err;
+    }
+  }
+
+  public async recordVendorSalesPayment(
+    invoiceId: string,
+    payment: {
+      amount: number;
+      paymentDate?: string;
+      paymentMode?: string;
+      referenceNo?: string;
+      notes?: string;
+    },
+    actor?: any
+  ): Promise<any> {
+    this.assertDbConnected();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [invRows]: any = await conn.query(
+        'SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE',
+        [invoiceId]
+      );
+      if (!Array.isArray(invRows) || invRows.length === 0) {
+        const err: any = new Error('Vendor sales invoice not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const inv = invRows[0];
+      const totalAmount = roundCurrency(Number(inv.total_amount) || 0);
+      const currentPaid = roundCurrency(Number(inv.paid_amount) || 0);
+      const remaining = roundCurrency(Math.max(0, totalAmount - currentPaid));
+      const amount = roundCurrency(Number(payment?.amount) || 0);
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        const err: any = new Error('Payment amount must be greater than zero.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (amount > remaining + 0.01) {
+        const err: any = new Error(`Payment amount (₹${amount}) exceeds remaining balance due (₹${remaining}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const paymentId = `vsip-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const paymentDate = this.toSqlDate(payment?.paymentDate) || new Date().toISOString().slice(0, 10);
+      const paymentMode = String(payment?.paymentMode || 'Bank NEFT/RTGS').trim();
+      const referenceNo = String(payment?.referenceNo || '').trim();
+      const notes = String(payment?.notes || '').trim();
+      const actorName = String(actor?.name || actor?.email || 'Admin');
+
+      await conn.query(
+        `INSERT INTO \`solar_vendor_sales_payments\` (
+          \`id\`, \`invoice_id\`, \`vendor_id\`, \`payment_date\`, \`amount\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`recorded_by\`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [paymentId, invoiceId, inv.vendor_id, paymentDate, amount, paymentMode, referenceNo, notes, actorName]
+      );
+
+      const newPaid = roundCurrency(currentPaid + amount);
+      const newBalance = roundCurrency(Math.max(0, totalAmount - newPaid));
+      const dueDate = this.toSqlDate(inv.due_date) || '';
+      const nextStatus = this.resolveEffectiveVendorInvoiceStatus(
+        'ISSUED',
+        dueDate,
+        totalAmount,
+        newPaid
+      );
+
+      await conn.query(
+        'UPDATE `solar_vendor_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ?, `updated_by` = ? WHERE `id` = ?',
+        [newPaid, newBalance, nextStatus, actorName, invoiceId]
+      );
+
+      await conn.commit();
+      conn.release();
+      return await this.getVendorSalesInvoiceById(invoiceId);
+    } catch (err) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+      throw err;
+    }
+  }
+
+  public async deleteVendorSalesInvoice(id: string): Promise<boolean> {
+    this.assertDbConnected();
+    await this.pool!.query('DELETE FROM `solar_vendor_sales_invoices` WHERE `id` = ?', [id]);
+    return true;
+  }
+
+  // ==========================================================
   // CRUD: WAREHOUSES & STOCK
   // ==========================================================
   public async getWarehouses(): Promise<any[]> {
@@ -7501,6 +8210,7 @@ class MySqlDatabaseManager {
       case 'vendors': return this.saveVendor(item);
       case 'purchase_orders': return this.savePurchaseOrder(item);
       case 'sales_invoices': return this.saveSalesInvoice(item);
+      case 'vendor_sales_invoices': return this.saveVendorSalesInvoice(item);
       case 'attendance': return this.saveAttendance(item);
       case 'payslips': return this.savePayslip(item);
       case 'holidays': return this.saveHoliday(item);
@@ -7539,6 +8249,7 @@ class MySqlDatabaseManager {
       case 'vendors': return this.deleteVendor(id);
       case 'purchase_orders': return this.deletePurchaseOrder(id);
       case 'sales_invoices': return this.deleteSalesInvoice(id);
+      case 'vendor_sales_invoices': return this.deleteVendorSalesInvoice(id);
       case 'attendance': return this.deleteAttendance(id);
       case 'payslips': return this.deletePayslip(id);
       case 'holidays': return this.deleteHoliday(id);
@@ -7901,6 +8612,9 @@ class MySqlDatabaseManager {
       'solar_customers',
       'solar_purchase_orders',
       'solar_boms',
+      'solar_vendor_sales_payments',
+      'solar_vendor_sales_invoice_items',
+      'solar_vendor_sales_invoices',
       'solar_sales_invoices',
       'solar_stock_movements',
       'solar_stock_audits',
@@ -8447,6 +9161,7 @@ class MySqlDatabaseManager {
       vendors,
       purchase_orders,
       sales_invoices,
+      vendor_sales_invoices,
       attendance,
       payslips,
       holidays,
@@ -8474,6 +9189,7 @@ class MySqlDatabaseManager {
       this.getVendors(),
       this.getPurchaseOrders(),
       this.getSalesInvoices(),
+      this.getVendorSalesInvoices(),
       this.getAttendance(),
       this.getPayslips(),
       this.getHolidays(),
@@ -8503,6 +9219,7 @@ class MySqlDatabaseManager {
       vendors,
       purchase_orders,
       sales_invoices,
+      vendor_sales_invoices,
       attendance,
       payslips,
       holidays,

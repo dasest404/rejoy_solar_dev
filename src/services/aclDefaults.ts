@@ -543,6 +543,15 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     actions: ['create', 'edit', 'delete'],
     riskLevel: 'HIGH'
   },
+  {
+    id: 'inventory.vendor_sales_invoices',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'Manage Vendor Sales Invoices (Admin)',
+    description: 'Create, edit, view, print, download PDF, and record payments on GST sales invoices issued to vendors',
+    actions: ['view', 'create', 'edit', 'delete'],
+    riskLevel: 'HIGH'
+  },
 
   // Finance & Accounting
   {
