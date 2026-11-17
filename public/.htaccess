@@ -17,6 +17,10 @@
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
 
+  # 2b. Route /uploads/employees/* requests not served directly from disk through PHP streamer
+  RewriteCond %{REQUEST_URI} ^/uploads/employees/.+$ [NC]
+  RewriteRule ^uploads/employees/(.*)$ api/index.php [QSA,L]
+
   # 3. Do not rewrite missing static asset extensions to index.html (return clean 404)
   RewriteCond %{REQUEST_URI} \.(css|js|map|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$ [NC]
   RewriteRule ^ - [R=404,L]

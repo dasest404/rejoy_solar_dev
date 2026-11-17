@@ -1267,6 +1267,11 @@ apiRouter.post('/employees/:id/documents/upload', requireRole(['Admin', 'Super A
 
     const safeEmpId = path.basename(id).replace(/[^a-zA-Z0-9_-]/g, '_');
     const safeFileName = path.basename(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const ext = path.extname(safeFileName).toLowerCase();
+    const allowedDocExts = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp'];
+    if (!allowedDocExts.includes(ext)) {
+      return res.status(400).json({ success: false, error: 'Unsupported file format. Only PDF, DOC, DOCX, JPG, PNG, and WebP files are allowed.', message: 'Unsupported file format. Only PDF, DOC, DOCX, JPG, PNG, and WebP files are allowed.' });
+    }
     const docId = `doc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const diskFileName = `${docId}_${safeFileName}`;
 

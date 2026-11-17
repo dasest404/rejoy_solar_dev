@@ -29,14 +29,13 @@ import {
   FileCheck
 } from 'lucide-react';
 import { validateEmployee, DuplicateRecordError } from '../../services/validation';
-import { provisionEmployeeAccount, updateEmployeeAccount } from '../../services/adminAuthService';
 import { useAuth } from '../../context/AuthContext';
 import { apiClient } from '../../services/apiClient';
 
 interface EmployeeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (employee: Employee) => void | Promise<void>;
+  onSave: (employee: Employee & { password?: string }) => void | Promise<void>;
   employeeToEdit?: Employee | null;
   existingEmployees: Employee[];
 }
@@ -480,10 +479,19 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     }
   };
 
-  const handleRemoveDocument = (id: string) => {
+  const handleRemoveDocument = async (id: string) => {
     const targetEmpId = employeeToEdit?.id || draftEmployeeId;
     if (targetEmpId) {
-      apiClient.deleteEmployeeDocument(targetEmpId, id).catch(() => {});
+      try {
+        const deleted = await apiClient.deleteEmployeeDocument(targetEmpId, id);
+        if (!deleted) {
+          setUploadErrors(prev => [...prev, 'Could not remove document from server storage. Please try again.']);
+          return;
+        }
+      } catch (err: any) {
+        setUploadErrors(prev => [...prev, err instanceof Error ? err.message : 'Failed to remove document from server.']);
+        return;
+      }
     }
     setDocuments(prev => prev.filter(d => d.id !== id));
   };
@@ -661,64 +669,34 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUploading || isPhotoUploading) {
+      setErrors(prev => ({ ...prev, general: 'Please wait for the active file upload to finish before saving.' }));
+      return;
+    }
     if (!validate()) return;
 
     setIsSubmitting(true);
-    const activeLoginEmail = (loginEmail || formData.email).trim();
+    const activeLoginEmail = (loginEmail || formData.email).trim().toLowerCase();
 
     try {
       const effectiveId = employeeToEdit ? employeeToEdit.id : draftEmployeeId;
-      let linkedAuthUid = employeeToEdit?.authUid;
+      const linkedAuthUid = employeeToEdit?.authUid || effectiveId;
+      const needsPassword = loginEnabled && (!isEditing || !employeeToEdit?.authUid || shouldResetPassword);
+      const pendingPassword = needsPassword && password.trim().length >= 6 ? password.trim() : undefined;
 
-      // Provision or update ERP credentials if login is enabled
-      if (loginEnabled) {
-        const isNewAuth = !employeeToEdit?.authUid || !isEditing;
-        if (isNewAuth) {
-          const provisionResult = await provisionEmployeeAccount({
-            id: effectiveId,
-            email: activeLoginEmail,
-            password: password,
-            displayName: formData.name.trim(),
-            systemRole: systemRole,
-            employeeCode: formData.employeeCode.trim(),
-            phone: formData.phone.trim(),
-            department: formData.department,
-            designation: formData.designation.trim(),
-            isFieldWorker: isFieldWorker
-          });
-          linkedAuthUid = provisionResult.uid;
-        } else if (shouldResetPassword && password) {
-          await updateEmployeeAccount({
-            uid: employeeToEdit.authUid,
-            password: password,
-            isFieldWorker: isFieldWorker
-          });
-        }
-
-        // User profile is managed directly via backend MySQL API
-      } else if (employeeToEdit?.authUid) {
-        // If login was disabled for an existing user, disable their account
-        await updateEmployeeAccount({
-          uid: employeeToEdit.authUid,
-          disabled: true,
-          isFieldWorker: isFieldWorker
-        });
-      }
-
-      // CRITICAL SECURITY REQUIREMENT:
       // Clear all password variables from component state immediately
       setPassword('');
       setConfirmPassword('');
 
-      // Build safe final employee model with NO PLAINTEXT PASSWORD
-      const finalEmployee: Employee = {
+      // Atomic employee + document + auth account payload committed in a single backend transaction
+      const finalEmployee: Employee & { password?: string } = {
         id: effectiveId,
         name: formData.name.trim(),
         employeeCode: formData.employeeCode.trim().toUpperCase(),
         department: formData.department,
         designation: formData.designation.trim(),
         phone: formData.phone.trim(),
-        email: formData.email.trim(),
+        email: activeLoginEmail || formData.email.trim().toLowerCase(),
         joiningDate: formData.joiningDate,
         salaryMonthly: Number(formData.salaryMonthly),
         status: formData.status,
@@ -727,7 +705,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
 
         // Safe account linkage & Field Worker fields
         loginEnabled: loginEnabled,
-        authUid: linkedAuthUid || effectiveId,
+        authUid: linkedAuthUid,
         systemRole: systemRole,
         assignedRole: systemRole,
         isFieldWorker: Boolean(isFieldWorker),
@@ -737,6 +715,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
 
         // HR Documents
         documents: documents,
+
+        ...(pendingPassword ? { password: pendingPassword } : {}),
 
         createdAt: employeeToEdit?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1504,14 +1484,16 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isUploading || isPhotoUploading}
               className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>
-                {isSubmitting
-                  ? (loginEnabled ? 'Configuring ERP Login...' : 'Saving Employee...')
-                  : (isEditing ? 'Update Employee' : 'Register Employee')}
+                {isUploading || isPhotoUploading
+                  ? 'Uploading File(s)...'
+                  : isSubmitting
+                    ? (loginEnabled ? 'Saving Profile & Access...' : 'Saving Employee...')
+                    : (isEditing ? 'Update Employee' : 'Register Employee')}
               </span>
             </button>
           </div>

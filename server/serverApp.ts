@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
@@ -87,7 +88,7 @@ function getPusherServer(): Pusher | null {
 // Trigger initial server check & log diagnostics on startup
 getPusherServer();
 
-async function createServerApp() {
+async function createServerApp(httpServer?: http.Server) {
   const app = express();
 
   // Trust reverse proxies (Google Cloud Run / load balancers) so req.secure and req.protocol accurately reflect HTTPS
@@ -992,7 +993,11 @@ async function createServerApp() {
   // Vite middleware for development vs static & SPA fallback for production
   if (!isProduction) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ...(httpServer ? { hmr: { server: httpServer } } : {}),
+        ...(process.env.DISABLE_HMR === 'true' ? { watch: null } : {})
+      },
       appType: 'custom'
     });
     app.use(vite.middlewares);
@@ -1090,10 +1095,12 @@ async function createServerApp() {
 }
 
 async function startServer() {
-  const app = await createServerApp();
+  const httpServer = http.createServer();
+  const app = await createServerApp(httpServer);
+  httpServer.on('request', app);
   const rawPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const PORT = rawPort === 8080 ? 3000 : (rawPort || 3000);
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }

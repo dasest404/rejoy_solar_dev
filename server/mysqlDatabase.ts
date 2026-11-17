@@ -352,14 +352,34 @@ class MySqlDatabaseManager {
         // Check if solar_employees is still a base table instead of a view
         const [tableTypeRows]: any = await this.pool.query("SHOW FULL TABLES LIKE 'solar_employees'");
         if (Array.isArray(tableTypeRows) && tableTypeRows.length > 0) {
-          const type = Object.values(tableTypeRows[0])[1];
+          const type = String(Object.values(tableTypeRows[0])[1] || '').toUpperCase();
           if (type === 'BASE TABLE') {
-            // Migrate any missing columns onto solar_employees too before copying if needed
-            await this.pool.query(`
-              INSERT IGNORE INTO \`solar_employee\`
-              SELECT * FROM \`solar_employees\`
-            `).catch(() => {});
-            await this.pool.query("DROP TABLE IF EXISTS `solar_employees`");
+            const [srcCols]: any = await this.pool.query("SHOW COLUMNS FROM `solar_employees`");
+            const [dstCols]: any = await this.pool.query("SHOW COLUMNS FROM `solar_employee`");
+            const srcSet = new Set<string>((srcCols as any[]).map(c => String(c.Field).toLowerCase()));
+            const commonCols = (dstCols as any[])
+              .map(c => String(c.Field))
+              .filter(c => srcSet.has(c.toLowerCase()));
+
+            let copySucceeded = false;
+            if (commonCols.length > 0) {
+              const targetCols = [...commonCols];
+              const selectExprs = commonCols.map(c => `\`${c}\``);
+              if (!srcSet.has('salary_monthly') && srcSet.has('salary')) {
+                targetCols.push('salary_monthly');
+                selectExprs.push('COALESCE(`salary`, 0.00)');
+              }
+              await this.pool.query(
+                `INSERT IGNORE INTO \`solar_employee\` (${targetCols.map(c => `\`${c}\``).join(', ')}) SELECT ${selectExprs.join(', ')} FROM \`solar_employees\``
+              );
+              copySucceeded = true;
+            } else {
+              const [srcCountRows]: any = await this.pool.query("SELECT COUNT(*) as cnt FROM `solar_employees`");
+              copySucceeded = Number(srcCountRows?.[0]?.cnt || 0) === 0;
+            }
+            if (copySucceeded) {
+              await this.pool.query("DROP TABLE IF EXISTS `solar_employees`");
+            }
           }
         }
 
@@ -375,10 +395,45 @@ class MySqlDatabaseManager {
           await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `documents_json` LONGTEXT DEFAULT NULL AFTER `photo_url`").catch(() => {});
         }
 
+        if (!existingEmpCols.has('department')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `department` VARCHAR(64) NOT NULL DEFAULT 'Operations'").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('designation')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `designation` VARCHAR(128) NOT NULL DEFAULT 'Solar Engineer'").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('phone')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `phone` VARCHAR(32) NOT NULL DEFAULT ''").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('email')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `email` VARCHAR(191) NOT NULL DEFAULT ''").catch(() => {});
+        }
+
         if (!existingEmpCols.has('joining_date')) {
           await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `joining_date` DATE DEFAULT NULL AFTER `email`").catch(() => {});
         } else {
           await this.pool.query("ALTER TABLE `solar_employee` MODIFY COLUMN `joining_date` DATE DEFAULT NULL").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('salary_monthly')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `salary_monthly` DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER `joining_date`").catch(() => {});
+          existingEmpCols.add('salary_monthly');
+        }
+
+        if (existingEmpCols.has('salary') && existingEmpCols.has('salary_monthly')) {
+          await this.pool.query(
+            "UPDATE `solar_employee` SET `salary_monthly` = COALESCE(`salary`, 0.00) WHERE (`salary_monthly` IS NULL OR `salary_monthly` = 0) AND `salary` IS NOT NULL AND `salary` > 0"
+          ).catch(() => {});
+        }
+
+        if (!existingEmpCols.has('status')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `status` VARCHAR(32) DEFAULT 'ACTIVE'").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('current_site_location')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `current_site_location` VARCHAR(255) DEFAULT ''").catch(() => {});
         }
 
         if (!existingEmpCols.has('login_enabled')) {
@@ -418,7 +473,8 @@ class MySqlDatabaseManager {
         }
 
         // Refresh backward-compatible updatable view AFTER all column migrations so view exposes every column
-        await this.pool.query("CREATE OR REPLACE VIEW `solar_employees` AS SELECT * FROM `solar_employee`");
+        await this.pool.query("CREATE OR REPLACE SQL SECURITY INVOKER VIEW `solar_employees` AS SELECT * FROM `solar_employee`")
+          .catch(() => this.pool!.query("CREATE OR REPLACE VIEW `solar_employees` AS SELECT * FROM `solar_employee`"));
       } catch (err: any) {
         console.warn('[MySQL Migration] Notice verifying solar_employee schema:', err.message);
       }
@@ -3672,6 +3728,8 @@ class MySqlDatabaseManager {
   public async saveEmployee(emp: any): Promise<any> {
     this.assertDbConnected();
     const item = { ...emp };
+    if (!item.id) item.id = `emp-${Date.now()}`;
+    const requestedId = String(item.id);
     if (!item.createdAt) item.createdAt = new Date().toISOString();
 
     let existing = await this.getExistingRow('solar_employee', item.id);
@@ -3685,7 +3743,7 @@ class MySqlDatabaseManager {
         item.id = existing.id;
       }
     }
-    const employeeCode = item.employeeCode ?? item.employee_code ?? existing?.employee_code ?? item.id;
+    const employeeCode = String(item.employeeCode ?? item.employee_code ?? existing?.employee_code ?? item.id).trim();
     const name = item.name ?? existing?.name ?? (item.firstName ? `${item.firstName} ${item.lastName || ''}`.trim() : 'Employee');
     const photoUrl = item.photoUrl ?? item.photo_url ?? existing?.photo_url ?? '';
     const hasExplicitDocs = Array.isArray(item.documents);
@@ -3695,10 +3753,10 @@ class MySqlDatabaseManager {
     const department = item.department ?? existing?.department ?? 'Operations';
     const designation = item.designation ?? existing?.designation ?? 'Solar Engineer';
     const phone = item.phone ?? existing?.phone ?? '+91 99999 00000';
-    const email = item.email ?? existing?.email ?? `${item.id}@example.com`;
+    const email = String(item.email ?? existing?.email ?? `${item.id}@example.com`).trim().toLowerCase();
     const rawJoin = item.joiningDate ?? item.joining_date ?? existing?.joining_date;
     const joiningDate = this.toSqlDate(rawJoin) ?? '2025-01-01';
-    const salaryMonthly = Number(item.salaryMonthly ?? item.salary_monthly ?? item.salary ?? existing?.salary_monthly) || 0;
+    const salaryMonthly = Number(item.salaryMonthly ?? item.salary_monthly ?? item.salary ?? existing?.salary_monthly ?? existing?.salary) || 0;
     const status = item.status ?? existing?.status ?? 'ACTIVE';
     const currentSiteLocation = item.currentSiteLocation ?? item.current_site_location ?? existing?.current_site_location ?? '';
     const loginEnabled = this.parseBoolFlag(
@@ -3715,6 +3773,31 @@ class MySqlDatabaseManager {
     const accountStatus = item.accountStatus ?? item.account_status ?? existing?.account_status ?? (loginEnabled ? 'ACTIVE' : 'DISABLED');
     const accountCreatedAt = item.accountCreatedAt ?? item.account_created_at ?? existing?.account_created_at ?? null;
     const accountCreatedBy = item.accountCreatedBy ?? item.account_created_by ?? existing?.account_created_by ?? null;
+
+    if (this.pool) {
+      if (employeeCode) {
+        const [dupCode]: any = await this.pool.query(
+          'SELECT id, name FROM `solar_employee` WHERE UPPER(`employee_code`) = UPPER(?) AND `id` != ? LIMIT 1',
+          [employeeCode, item.id]
+        );
+        if (Array.isArray(dupCode) && dupCode.length > 0) {
+          const err: any = new Error(`Employee code "${employeeCode}" is already assigned to ${dupCode[0].name}.`);
+          err.statusCode = 409;
+          throw err;
+        }
+      }
+      if (email) {
+        const [dupEmail]: any = await this.pool.query(
+          'SELECT id, name FROM `solar_employee` WHERE LOWER(`email`) = ? AND `email` != "" AND `id` != ? LIMIT 1',
+          [email, item.id]
+        );
+        if (Array.isArray(dupEmail) && dupEmail.length > 0) {
+          const err: any = new Error(`Email "${email}" is already assigned to employee ${dupEmail[0].name}.`);
+          err.statusCode = 409;
+          throw err;
+        }
+      }
+    }
 
     const sql = `
       INSERT INTO \`solar_employee\` (
@@ -3769,6 +3852,13 @@ class MySqlDatabaseManager {
       accountCreatedAt,
       accountCreatedBy
     ]);
+
+    if (this.pool && requestedId !== String(item.id)) {
+      await this.pool.query(
+        'UPDATE `solar_employee_documents` SET `employee_id` = ? WHERE `employee_id` = ?',
+        [item.id, requestedId]
+      ).catch(() => {});
+    }
 
     // Synchronize documents into solar_employee_documents audit table
     if (this.pool && hasExplicitDocs) {
@@ -3925,10 +4015,16 @@ class MySqlDatabaseManager {
       }
     }
 
-    const savedEmp = {
+    const savedEmp: any = {
       ...item,
+      authUid,
+      salaryMonthly,
+      isFieldWorker: Boolean(isFieldWorker),
+      photoUrl,
       documents
     };
+    delete savedEmp.password;
+    delete savedEmp.tempPassword;
 
     const items = this.getFallbackItems('employees');
     const idx = items.findIndex(e => e.id === item.id);
@@ -4049,7 +4145,10 @@ class MySqlDatabaseManager {
           uploadedBy: d.uploaded_by,
           notes: d.notes
         })));
-        await this.pool.query('UPDATE `solar_employee` SET `documents_json` = ? WHERE `id` = ?', [docsJson, doc.employeeId]);
+        await this.pool.query(
+          'UPDATE `solar_employee` SET `documents_json` = ? WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ?',
+          [docsJson, doc.employeeId, doc.employeeId, doc.employeeId]
+        );
       } catch {}
     }
 
@@ -4106,7 +4205,10 @@ class MySqlDatabaseManager {
           uploadedBy: d.uploaded_by,
           notes: d.notes
         })));
-        await this.pool.query('UPDATE `solar_employee` SET `documents_json` = ? WHERE `id` = ?', [docsJson, employeeId]);
+        await this.pool.query(
+          'UPDATE `solar_employee` SET `documents_json` = ? WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ?',
+          [docsJson, employeeId, employeeId, employeeId]
+        );
       } catch {}
     }
     return true;

@@ -259,12 +259,15 @@ export const HrmsView: React.FC = () => {
     setIsEmployeeModalOpen(true);
   };
 
-  const handleSaveEmployee = async (emp: Employee) => {
+  const handleSaveEmployee = async (emp: Employee & { password?: string }) => {
     const isEdit = Boolean(employeeToEdit);
     try {
       // 1. Persist directly to backend MySQL API before reporting success
       const saved = await apiClient.saveEmployee(emp);
-      const effectiveEmp = (saved && saved.id) ? { ...emp, ...saved } : emp;
+      const merged: any = (saved && saved.id) ? { ...emp, ...saved } : { ...emp };
+      delete merged.password;
+      delete merged.tempPassword;
+      const effectiveEmp = merged as Employee;
 
       // 2. Refresh local store from committed MySQL state
       await storageService.hydrateFromBackend();
