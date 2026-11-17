@@ -1460,7 +1460,9 @@ apiRouter.put('/attendance/:id', async (req: Request, res: Response) => {
 apiRouter.put('/attendance/:id/fuel-approval', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { approvalStatus, approvedBy, notes } = req.body || {};
+    const { approvalStatus, approvedBy, status, reviewedBy, notes } = req.body || {};
+    const resolvedStatus = approvalStatus || status || 'APPROVED';
+    const resolvedReviewer = approvedBy || reviewedBy || (req as any).user?.name || 'Administrator';
     const attendanceRecords = await dbManager.getAttendance();
     const existing = attendanceRecords.find((a: any) => a.id === id);
 
@@ -1471,11 +1473,11 @@ apiRouter.put('/attendance/:id/fuel-approval', async (req: Request, res: Respons
     const currentFuel = existing.fuelExpense || {};
     const updatedFuel = {
       ...currentFuel,
-      approvalStatus: approvalStatus || 'APPROVED',
-      approvedBy: approvedBy || (req as any).user?.name || 'Administrator',
+      approvalStatus: resolvedStatus,
+      approvedBy: resolvedReviewer,
       approvedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      approvalNotes: notes || currentFuel.approvalNotes
+      approvalNotes: notes ?? currentFuel.approvalNotes
     };
 
     const updatedRecord = {
@@ -1484,7 +1486,7 @@ apiRouter.put('/attendance/:id/fuel-approval', async (req: Request, res: Respons
     };
 
     const saved = await dbManager.saveAttendance(updatedRecord);
-    res.json({ success: true, data: saved, message: `Fuel log marked as ${approvalStatus || 'APPROVED'}.` });
+    res.json({ success: true, data: saved, message: `Fuel log marked as ${resolvedStatus}.` });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update fuel approval status');
   }

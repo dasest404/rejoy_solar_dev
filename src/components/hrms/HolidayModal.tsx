@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { HolidayRecord, HolidayType } from '../../types/solar';
 import { X, Calendar, Save, AlertCircle, Sparkles, Building2, Tag, FileText } from 'lucide-react';
 
 interface HolidayModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (holiday: HolidayRecord) => void;
+  onSave: (holiday: HolidayRecord) => void | Promise<void>;
   holidayToEdit?: HolidayRecord | null;
   currentUserName?: string;
 }
@@ -78,8 +78,19 @@ export const HolidayModal: React.FC<HolidayModalProps> = ({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const prevSessionRef = useRef<{ isOpen: boolean; holidayId?: string }>({ isOpen: false });
 
   useEffect(() => {
+    if (!isOpen) {
+      prevSessionRef.current = { isOpen: false };
+      return;
+    }
+    const prev = prevSessionRef.current;
+    if (prev.isOpen && prev.holidayId === holidayToEdit?.id) {
+      return;
+    }
+    prevSessionRef.current = { isOpen: true, holidayId: holidayToEdit?.id };
+
     if (holidayToEdit) {
       const depts = holidayToEdit.applicableDepartments || ['All Departments'];
       const isAll = depts.includes('All Departments') || depts.length === 0;
@@ -183,9 +194,9 @@ export const HolidayModal: React.FC<HolidayModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) return;
+    if (isSubmitting || !validate()) return;
 
     setIsSubmitting(true);
 
@@ -208,10 +219,11 @@ export const HolidayModal: React.FC<HolidayModalProps> = ({
         createdBy: holidayToEdit?.createdBy || currentUserName
       };
 
-      onSave(record);
+      await onSave(record);
       onClose();
-    } catch {
-      setErrors({ form: 'Failed to save holiday record. Please try again.' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save holiday record to MySQL.';
+      setErrors(prev => ({ ...prev, form: msg }));
     } finally {
       setIsSubmitting(false);
     }

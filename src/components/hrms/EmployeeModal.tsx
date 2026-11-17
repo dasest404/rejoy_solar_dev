@@ -276,7 +276,23 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const prevSessionRef = useRef<{ isOpen: boolean; employeeId?: string }>({ isOpen: false });
+
   useEffect(() => {
+    const prev = prevSessionRef.current;
+    const currentEmpId = employeeToEdit?.id;
+
+    if (!isOpen) {
+      prevSessionRef.current = { isOpen: false, employeeId: undefined };
+      return;
+    }
+
+    // Skip re-initialization if already open for the exact same employee/create session
+    if (prev.isOpen && prev.employeeId === currentEmpId) {
+      return;
+    }
+    prevSessionRef.current = { isOpen: true, employeeId: currentEmpId };
+
     if (employeeToEdit) {
       setFormData({
         name: employeeToEdit.name || '',
@@ -357,7 +373,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     setUploadErrors([]);
     setPhotoUploadError(null);
     setErrors({});
-  }, [employeeToEdit, isOpen, existingEmployees.length]);
+  }, [employeeToEdit, isOpen]);
 
   // Keep login email in sync with corporate email if login email hasn't been manually diverged
   const handleEmailChange = (newEmail: string) => {

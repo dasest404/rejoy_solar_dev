@@ -227,6 +227,18 @@ export const ProjectAssignmentModal: React.FC<ProjectAssignmentModalProps> = ({
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   useEffect(() => {
+    const syncEligibleEmployees = () => {
+      const rawEmployees = storageService.getEmployees();
+      setAllEligibleEmployees(rawEmployees.filter(emp => !isExcludedFromProjectSpecialists(emp)));
+    };
+    if (isOpen) {
+      syncEligibleEmployees();
+    }
+    window.addEventListener('solarpulse_storage_updated', syncEligibleEmployees);
+    return () => window.removeEventListener('solarpulse_storage_updated', syncEligibleEmployees);
+  }, [isOpen]);
+
+  useEffect(() => {
     if (isOpen) {
       // Filter out all excluded employees: Admin, Accountant, HR Manager, Customer
       const rawEmployees = storageService.getEmployees();
@@ -356,8 +368,10 @@ export const ProjectAssignmentModal: React.FC<ProjectAssignmentModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+
     if (!canManageProjectAssignments()) {
       showToast('Permission Denied: Only Admins can assign or edit project team members.', 'error');
       return;
@@ -401,7 +415,7 @@ export const ProjectAssignmentModal: React.FC<ProjectAssignmentModalProps> = ({
 
       if (existingAssignment) {
         // Updating existing assignment
-        const success = storageService.updateProjectUserAssignment(
+        const success = await storageService.updateProjectUserAssignmentAsync(
           projectId,
           existingAssignment.id,
           {
@@ -423,7 +437,7 @@ export const ProjectAssignmentModal: React.FC<ProjectAssignmentModalProps> = ({
         }
       } else {
         // Creating new assignment
-        storageService.assignUserToProject(
+        await storageService.assignUserToProjectAsync(
           projectId,
           {
             userId: emp.id,

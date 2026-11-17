@@ -563,21 +563,46 @@ class ApiClient {
 
   // --- Attendance ---
   async getAttendance(): Promise<any[]> {
-    const res = await this.request(`${this.baseUrl}/attendance`);
+    const res = await this.request(`${this.baseUrl}/attendance`, {
+      headers: this.getAuthHeaders()
+    });
     return (await this.handleResponse(res)) || [];
   }
 
   async saveAttendance(item: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/attendance`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(item)
     });
     return await this.handleResponse(res);
   }
 
+  async updateFuelApproval(
+    attendanceId: string,
+    approvalStatus: 'APPROVED' | 'REJECTED' | 'PENDING',
+    reviewedBy: string,
+    notes?: string
+  ): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/attendance/${encodeURIComponent(attendanceId)}/fuel-approval`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        approvalStatus,
+        approvedBy: reviewedBy,
+        status: approvalStatus,
+        reviewedBy,
+        notes
+      })
+    });
+    return await this.handleResponse(res);
+  }
+
   async deleteAttendance(id: string): Promise<boolean> {
-    const res = await this.request(`${this.baseUrl}/attendance/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await this.request(`${this.baseUrl}/attendance/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
     await this.handleResponse(res);
     return true;
   }
@@ -597,42 +622,52 @@ class ApiClient {
 
   // --- Payroll / Payslips ---
   async getPayslips(): Promise<any[]> {
-    const res = await this.request(`${this.baseUrl}/payslips`);
+    const res = await this.request(`${this.baseUrl}/payslips`, {
+      headers: this.getAuthHeaders()
+    });
     return (await this.handleResponse(res)) || [];
   }
 
   async savePayslip(item: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/payslips`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(item)
     });
     return await this.handleResponse(res);
   }
 
   async deletePayslip(id: string): Promise<boolean> {
-    const res = await this.request(`${this.baseUrl}/payslips/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await this.request(`${this.baseUrl}/payslips/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
     await this.handleResponse(res);
     return true;
   }
 
   // --- Holidays ---
   async getHolidays(): Promise<any[]> {
-    const res = await this.request(`${this.baseUrl}/holidays`);
+    const res = await this.request(`${this.baseUrl}/holidays`, {
+      headers: this.getAuthHeaders()
+    });
     return (await this.handleResponse(res)) || [];
   }
 
   async saveHoliday(item: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/holidays`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(item)
     });
     return await this.handleResponse(res);
   }
 
   async deleteHoliday(id: string): Promise<boolean> {
-    const res = await this.request(`${this.baseUrl}/holidays/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await this.request(`${this.baseUrl}/holidays/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
     await this.handleResponse(res);
     return true;
   }

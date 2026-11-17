@@ -518,6 +518,8 @@ export interface DailyFuelExpense {
   finalOdometerImageName?: string;
   approvalStatus?: 'APPROVED' | 'PENDING' | 'REJECTED';
   approvedBy?: string;
+  approvedAt?: string;
+  approvalNotes?: string;
   submittedAt?: string;
   updatedAt?: string;
 }

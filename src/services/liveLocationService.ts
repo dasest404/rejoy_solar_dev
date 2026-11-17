@@ -68,6 +68,12 @@ class LiveLocationService {
   private trackingEnabled: boolean = false;
   private isLocationSharing: boolean = false;
 
+  private handleStorageUpdated = () => {
+    if (this.trackingEnabled) {
+      this.initializeFieldWorkers();
+    }
+  };
+
   constructor() {
     // Purge any legacy persisted location caches from browser storage
     try {
@@ -84,6 +90,11 @@ class LiveLocationService {
     this.unsubscribePresencePusher = pusherService.onPresenceUpdate((payload) => {
       this.handleIncomingPresence(payload);
     });
+
+    // 3. Re-sync field worker roster whenever employees/users/projects change in storageService
+    if (typeof window !== 'undefined') {
+      window.addEventListener('solarpulse_storage_updated', this.handleStorageUpdated);
+    }
   }
 
   private setFetchError(error: string | null): void {
@@ -388,10 +399,26 @@ class LiveLocationService {
       if (emp.authUid) this.alternateIdMap.set(String(emp.authUid).toLowerCase(), emp.id);
     });
 
-    // Prune any unverified / deleted / non-field workers from memory
+    // Collect IDs explicitly disqualified (inactive/disabled/terminated or marked non-field-worker)
+    const disqualifiedIds = new Set<string>();
+    try {
+      storageService.getEmployees().forEach((emp: any) => {
+        if (emp?.id && !verifiedIds.has(emp.id)) disqualifiedIds.add(emp.id);
+      });
+      storageService.getUsers().forEach((u: any) => {
+        if (u?.id && !verifiedIds.has(u.id)) disqualifiedIds.add(u.id);
+      });
+    } catch {}
+
+    // Prune any disqualified, deleted, or unverified non-field workers from memory
     for (const key of Array.from(this.employeeLocations.keys())) {
-      if (!verifiedIds.has(key) && !this.serverVerifiedIds.has(key)) {
+      const shouldRemove =
+        disqualifiedIds.has(key) ||
+        (storageService.isHydrated && !verifiedIds.has(key)) ||
+        (!verifiedIds.has(key) && !this.serverVerifiedIds.has(key));
+      if (shouldRemove) {
         this.employeeLocations.delete(key);
+        this.serverVerifiedIds.delete(key);
       }
     }
 
@@ -880,6 +907,9 @@ class LiveLocationService {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('solarpulse_storage_updated', this.handleStorageUpdated);
     }
     this.trackingEnabled = false;
     this.listeners.clear();

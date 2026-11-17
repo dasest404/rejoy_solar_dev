@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
@@ -42,6 +42,9 @@ export const FinanceView: React.FC = () => {
 
   // New Payment Modal
   const [isNewPaymentOpen, setIsNewPaymentOpen] = useState(false);
+  const [isSavingPayment, setIsSavingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [localSyncCounter, setLocalSyncCounter] = useState(0);
   const [paymentForm, setPaymentForm] = useState({
     customerName: '',
     projectId: '',
@@ -53,8 +56,14 @@ export const FinanceView: React.FC = () => {
     transactionReference: ''
   });
 
-  const payments = useMemo(() => storageService.getPayments(), [refreshTrigger]);
-  const expenses = useMemo(() => storageService.getExpenses(), [refreshTrigger]);
+  useEffect(() => {
+    const handleStorageUpdate = () => setLocalSyncCounter(c => c + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
+
+  const payments = useMemo(() => storageService.getPayments(), [refreshTrigger, localSyncCounter]);
+  const expenses = useMemo(() => storageService.getExpenses(), [refreshTrigger, localSyncCounter]);
 
   const totalInflow = payments.filter(p => p.status === 'PAID').reduce((s, p) => s + p.amount, 0);
   const totalOutflow = expenses.reduce((s, e) => s + e.amount, 0);
@@ -77,29 +86,50 @@ export const FinanceView: React.FC = () => {
     }, 700);
   };
 
-  const handleSavePayment = (e: React.FormEvent) => {
+  const handleSavePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const proj = paymentForm.projectId ? storageService.getProjectById(paymentForm.projectId) : null;
-    const newPayment: PaymentRecord = {
-      id: `pay-${Date.now()}`,
-      projectId: paymentForm.projectId,
-      customerId: proj?.customerId || '',
-      customerName: paymentForm.customerName,
-      milestone: paymentForm.milestone as any,
-      amount: paymentForm.amount,
-      status: paymentForm.status,
-      dueDate: paymentForm.dueDate,
-      paidDate: paymentForm.status === 'PAID' ? new Date().toISOString().slice(0, 10) : undefined,
-      receiptNumber: `RCPT-2026-${Math.floor(100 + Math.random() * 900)}`,
-      paymentMode: paymentForm.paymentMode as any,
-      transactionReference: paymentForm.transactionReference,
-      tallySyncStatus: 'NOT SYNCED'
-    };
+    if (isSavingPayment) return;
+    setPaymentError(null);
+    setIsSavingPayment(true);
+    try {
+      const proj = paymentForm.projectId ? storageService.getProjectById(paymentForm.projectId) : null;
+      const newPayment: PaymentRecord = {
+        id: `pay-${Date.now()}`,
+        projectId: paymentForm.projectId,
+        customerId: proj?.customerId || '',
+        customerName: paymentForm.customerName,
+        milestone: paymentForm.milestone as any,
+        amount: paymentForm.amount,
+        status: paymentForm.status,
+        dueDate: paymentForm.dueDate,
+        paidDate: paymentForm.status === 'PAID' ? new Date().toISOString().slice(0, 10) : undefined,
+        receiptNumber: `RCPT-2026-${Math.floor(100 + Math.random() * 900)}`,
+        paymentMode: paymentForm.paymentMode as any,
+        transactionReference: paymentForm.transactionReference,
+        tallySyncStatus: 'NOT SYNCED'
+      };
 
-    storageService.savePayment(newPayment);
-    setIsNewPaymentOpen(false);
-    showToast(`Payment receipt ${newPayment.receiptNumber} recorded`, 'success');
-    triggerRefresh();
+      await storageService.savePaymentAsync(newPayment);
+      setIsNewPaymentOpen(false);
+      setPaymentForm({
+        customerName: '',
+        projectId: '',
+        milestone: 'Advance Booking',
+        amount: 0,
+        dueDate: new Date().toISOString().slice(0, 10),
+        paymentMode: 'Bank NEFT/RTGS',
+        status: 'PAID',
+        transactionReference: ''
+      });
+      showToast(`Payment receipt ${newPayment.receiptNumber} recorded`, 'success');
+      triggerRefresh();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save payment receipt to MySQL.';
+      setPaymentError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSavingPayment(false);
+    }
   };
 
   return (
@@ -399,6 +429,12 @@ export const FinanceView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSavePayment} className="p-5 space-y-4">
+              {paymentError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{paymentError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Customer Name</label>
                 <input
@@ -469,16 +505,21 @@ export const FinanceView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsNewPaymentOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600"
+                  disabled={isSavingPayment}
+                  onClick={() => {
+                    setPaymentError(null);
+                    setIsNewPaymentOpen(false);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-xl shadow-2xs"
+                  disabled={isSavingPayment}
+                  className="px-5 py-2 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-xl shadow-2xs disabled:opacity-50"
                 >
-                  Save Receipt
+                  {isSavingPayment ? 'Saving...' : 'Save Receipt'}
                 </button>
               </div>
             </form>

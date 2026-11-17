@@ -170,6 +170,10 @@ const KEY_TO_COLLECTION: Record<string, string> = {
   [STORAGE_KEYS.USERS]: 'users'
 };
 
+const COLLECTION_TO_KEY: Record<string, string> = Object.fromEntries(
+  Object.entries(KEY_TO_COLLECTION).map(([k, v]) => [v, k])
+);
+
 class StorageService {
   private memStore = new Map<string, any>();
   public isHydrated: boolean = false;
@@ -230,7 +234,23 @@ class StorageService {
               cleaned = cleaned.map((a: any) => ({
                 ...a,
                 date: a.date || a.attendanceDate || (a.createdAt ? String(a.createdAt).slice(0, 10) : ''),
-                attendanceDate: a.attendanceDate || a.date
+                attendanceDate: a.attendanceDate || a.date,
+                checkInGPS: a.checkInGPS || a.checkInGps,
+                checkInGps: a.checkInGps || a.checkInGPS,
+                checkOutGPS: a.checkOutGPS || a.checkOutGps,
+                checkOutGps: a.checkOutGps || a.checkOutGPS
+              }));
+            } else if (collectionKey === 'holidays') {
+              cleaned = cleaned.map((h: any) => ({
+                ...h,
+                date: h.date || h.holidayDate || '',
+                holidayDate: h.holidayDate || h.date || ''
+              }));
+            } else if (collectionKey === 'expenses') {
+              cleaned = cleaned.map((e: any) => ({
+                ...e,
+                date: e.date || e.expenseDate || (e.createdAt ? String(e.createdAt).slice(0, 10) : ''),
+                expenseDate: e.expenseDate || e.date || (e.createdAt ? String(e.createdAt).slice(0, 10) : '')
               }));
             } else if (collectionKey === 'quotations') {
               cleaned = cleaned.map((q: any) => ({
@@ -305,7 +325,8 @@ class StorageService {
     }
   }
 
-  private deleteSync(collection: string, id: string): void {
+  private deleteSync(collection: string, id: string, rollbackSnapshot?: any[]): void {
+    const key = COLLECTION_TO_KEY[collection];
     if (typeof window !== 'undefined') {
       apiClient
         .syncPush(collection, { item: { id }, action: 'delete' })
@@ -316,6 +337,9 @@ class StorageService {
         .catch((e: any) => {
           const errMsg = e?.message || `Failed to delete ${collection} record from MySQL`;
           console.error(`[MySQL Storage Error] Failed to delete ${collection}/${id}:`, errMsg);
+          if (key && rollbackSnapshot !== undefined) {
+            this.memStore.set(key, rollbackSnapshot);
+          }
           this.lastSyncError = errMsg;
           window.dispatchEvent(new CustomEvent('solarpulse_storage_error', { detail: { collection, error: errMsg } }));
           this.hydrateFromBackend();
@@ -1019,7 +1043,7 @@ class StorageService {
 
     project.updatedAt = new Date().toISOString();
     projects[projectIndex] = project;
-    this.set(STORAGE_KEYS.PROJECTS, projects);
+    this.set(STORAGE_KEYS.PROJECTS, projects, project);
 
     this.addNotification({
       title: 'Project Specialist Assigned',
@@ -1029,6 +1053,134 @@ class StorageService {
       linkId: projectId,
       projectId: projectId,
       projectName: project.title
+    });
+
+    return newAssignment;
+  }
+
+  async assignUserToProjectAsync(
+    projectId: string,
+    assignmentData: {
+      userId: string;
+      userName: string;
+      userEmail?: string;
+      employeeCode?: string;
+      role: ProjectAssignmentRole;
+      department: string;
+      notes?: string;
+      autoSyncStages?: boolean;
+    },
+    assignedByName: string = 'Admin'
+  ): Promise<ProjectUserAssignment> {
+    const projects = this.getProjects();
+    const projectIndex = projects.findIndex(p => p.id === projectId);
+    if (projectIndex === -1) {
+      throw new Error(`Project with ID ${projectId} not found.`);
+    }
+
+    if (
+      assignmentData.role === 'Accountant' ||
+      (assignmentData.role as string) === 'Admin' ||
+      (assignmentData.role as string) === 'HR Manager' ||
+      (assignmentData.role as string) === 'Customer'
+    ) {
+      throw new Error(`Role "${assignmentData.role}" is not eligible for project specialist assignment. Only field, technical, service, or sales coordination specialists may be assigned.`);
+    }
+
+    const emp = this.getEmployees().find(e => e.id === assignmentData.userId);
+    if (emp) {
+      const desig = (emp.designation || '').toLowerCase().trim();
+      const dept = (emp.department || '').toLowerCase().trim();
+      if (
+        desig.includes('director') ||
+        desig === 'admin' ||
+        desig.includes('admin ') ||
+        desig.includes(' admin') ||
+        desig.includes('administrator') ||
+        desig.includes('accountant') ||
+        desig.includes('finance') ||
+        desig.includes('tally') ||
+        desig.includes('hr manager') ||
+        desig.includes('human resource') ||
+        desig.includes('hr & admin') ||
+        desig.includes('customer') ||
+        desig.includes('client') ||
+        dept === 'management' ||
+        dept === 'finance' ||
+        dept === 'hr' ||
+        dept === 'customer' ||
+        dept === 'administration' ||
+        (dept === 'operations' && desig.includes('manager'))
+      ) {
+        throw new Error(`Cannot assign administrative or finance staff (${emp.name} - ${emp.designation}) as a project specialist.`);
+      }
+    }
+
+    const baseProject = projects[projectIndex];
+    const newAssignment: ProjectUserAssignment = {
+      id: `asgn-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      projectId,
+      userId: assignmentData.userId,
+      userName: assignmentData.userName,
+      userEmail: assignmentData.userEmail || '',
+      employeeCode: assignmentData.employeeCode || '',
+      role: assignmentData.role,
+      department: assignmentData.department || 'Operations',
+      assignedAt: new Date().toISOString(),
+      assignedBy: assignedByName,
+      notes: assignmentData.notes || '',
+      isActive: true
+    };
+
+    const nextAssignedUsers = [...(baseProject.assignedUsers || []), newAssignment];
+    const nextStages =
+      assignmentData.autoSyncStages !== false
+        ? baseProject.stages.map(stg => {
+            const matchesRole =
+              stg.assignedRole === assignmentData.role ||
+              (assignmentData.role === 'Site Survey Engineer' && (stg.stageKey === 'site_survey' || stg.assignedRole === 'Site Survey Engineer')) ||
+              (assignmentData.role === 'Civil Team' && (stg.stageKey === 'civil_work' || stg.assignedRole === 'Civil Team')) ||
+              (assignmentData.role === 'Structure Team' && (stg.stageKey === 'structure_fabrication' || stg.assignedRole === 'Structure Team')) ||
+              (assignmentData.role === 'Installation Team' && (stg.stageKey === 'solar_installation' || stg.assignedRole === 'Installation Team')) ||
+              (assignmentData.role === 'Electrical Team' && (stg.stageKey === 'ac_side_electrical' || stg.assignedRole === 'Electrical Team')) ||
+              (assignmentData.role === 'Technician' && (stg.stageKey === 'final_verification' || stg.assignedRole === 'Technician')) ||
+              (assignmentData.role === 'Service Manager' && (stg.stageKey === 'service_amc' || stg.assignedRole === 'Service Manager'));
+
+            if (matchesRole) {
+              return {
+                ...stg,
+                assignedEmployeeId: assignmentData.userId,
+                assignedEmployeeName: assignmentData.userName,
+                assignedToName: assignmentData.userName,
+                assignedToId: assignmentData.userId
+              };
+            }
+            return stg;
+          })
+        : baseProject.stages;
+
+    const updatedProject: SolarProject = {
+      ...baseProject,
+      assignedUsers: nextAssignedUsers,
+      stages: nextStages,
+      updatedAt: new Date().toISOString()
+    };
+
+    const committed = await this.confirmSyncPush('projects', updatedProject);
+    const nextProjects = [...this.getProjects()];
+    const idx = nextProjects.findIndex(p => p.id === updatedProject.id);
+    if (idx >= 0) nextProjects[idx] = committed?.id ? committed : updatedProject;
+    this.memStore.set(STORAGE_KEYS.PROJECTS, nextProjects);
+    this.notifyStorageUpdated();
+
+    this.addNotification({
+      title: 'Project Specialist Assigned',
+      message: `${assignmentData.userName} assigned as ${assignmentData.role} to ${baseProject.title} (${baseProject.projectCode}).`,
+      type: 'INFO',
+      linkType: 'PROJECT',
+      linkId: projectId,
+      projectId: projectId,
+      projectName: baseProject.title
     });
 
     return newAssignment;
@@ -1079,7 +1231,62 @@ class StorageService {
 
     project.updatedAt = new Date().toISOString();
     projects[projectIndex] = project;
-    this.set(STORAGE_KEYS.PROJECTS, projects);
+    this.set(STORAGE_KEYS.PROJECTS, projects, project);
+    return true;
+  }
+
+  async updateProjectUserAssignmentAsync(
+    projectId: string,
+    assignmentId: string,
+    updates: Partial<ProjectUserAssignment>,
+    autoSyncStages: boolean = true
+  ): Promise<boolean> {
+    const projects = this.getProjects();
+    const projectIndex = projects.findIndex(p => p.id === projectId);
+    if (projectIndex === -1) return false;
+
+    const baseProject = projects[projectIndex];
+    if (!baseProject.assignedUsers) return false;
+
+    const asgnIndex = baseProject.assignedUsers.findIndex(a => a.id === assignmentId);
+    if (asgnIndex === -1) return false;
+
+    if (updates.role === 'Accountant' || (updates.role as string) === 'Admin' || (updates.role as string) === 'HR Manager' || (updates.role as string) === 'Customer') {
+      throw new Error(`Role "${updates.role}" is not an eligible project specialist role.`);
+    }
+
+    const existing = baseProject.assignedUsers[asgnIndex];
+    const updatedAsgn: ProjectUserAssignment = { ...existing, ...updates };
+    const nextAssignedUsers = baseProject.assignedUsers.map((a, i) => (i === asgnIndex ? updatedAsgn : a));
+    const nextStages =
+      autoSyncStages && updatedAsgn.isActive
+        ? baseProject.stages.map(stg => {
+            if (stg.assignedRole === updatedAsgn.role) {
+              return {
+                ...stg,
+                assignedEmployeeId: updatedAsgn.userId,
+                assignedEmployeeName: updatedAsgn.userName,
+                assignedToName: updatedAsgn.userName,
+                assignedToId: updatedAsgn.userId
+              };
+            }
+            return stg;
+          })
+        : baseProject.stages;
+
+    const updatedProject: SolarProject = {
+      ...baseProject,
+      assignedUsers: nextAssignedUsers,
+      stages: nextStages,
+      updatedAt: new Date().toISOString()
+    };
+
+    const committed = await this.confirmSyncPush('projects', updatedProject);
+    const nextProjects = [...this.getProjects()];
+    const idx = nextProjects.findIndex(p => p.id === updatedProject.id);
+    if (idx >= 0) nextProjects[idx] = committed?.id ? committed : updatedProject;
+    this.memStore.set(STORAGE_KEYS.PROJECTS, nextProjects);
+    this.notifyStorageUpdated();
     return true;
   }
 
@@ -1313,10 +1520,33 @@ class StorageService {
     this.set(STORAGE_KEYS.PAYMENTS, payments, payment);
   }
 
+  async savePaymentAsync(payment: PaymentRecord): Promise<PaymentRecord> {
+    const committed = await this.confirmSyncPush('payments', payment);
+    const saved = committed?.id ? committed : payment;
+    const payments = [...this.getPayments()];
+    const index = payments.findIndex(p => p.id === saved.id);
+    if (index >= 0) {
+      payments[index] = saved;
+    } else {
+      payments.unshift(saved);
+    }
+    this.memStore.set(STORAGE_KEYS.PAYMENTS, payments);
+    this.notifyStorageUpdated();
+    return saved;
+  }
+
   deletePayment(id: string): void {
+    const snapshot = [...this.getPayments()];
+    const payments = snapshot.filter(p => p.id !== id);
+    this.memStore.set(STORAGE_KEYS.PAYMENTS, payments);
+    this.deleteSync('payments', id, snapshot);
+  }
+
+  async deletePaymentAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('payments', id);
     const payments = this.getPayments().filter(p => p.id !== id);
     this.memStore.set(STORAGE_KEYS.PAYMENTS, payments);
-    this.deleteSync('payments', id);
+    this.notifyStorageUpdated();
   }
 
   async importPayments(payments: any[]): Promise<{
@@ -1339,24 +1569,72 @@ class StorageService {
 
   // --- Expenses ---
   getExpenses(): ExpenseRecord[] {
-    return this.get<ExpenseRecord[]>(STORAGE_KEYS.EXPENSES, initialExpenses);
+    const list = this.get<ExpenseRecord[]>(STORAGE_KEYS.EXPENSES, initialExpenses);
+    const safeList = Array.isArray(list) ? list : initialExpenses;
+    return safeList.filter(Boolean).map((e: any) => {
+      const normalizedDate = e.date || e.expenseDate || (e.createdAt ? String(e.createdAt).slice(0, 10) : new Date().toISOString().slice(0, 10));
+      return {
+        ...e,
+        date: normalizedDate,
+        expenseDate: e.expenseDate || normalizedDate
+      };
+    });
   }
 
   saveExpense(expense: ExpenseRecord): void {
+    const normalized: ExpenseRecord = {
+      ...expense,
+      date: expense.date || (expense as any).expenseDate || new Date().toISOString().slice(0, 10),
+      ...( { expenseDate: (expense as any).expenseDate || expense.date || new Date().toISOString().slice(0, 10) } as any )
+    };
     const expenses = this.getExpenses();
-    const index = expenses.findIndex(e => e.id === expense.id);
+    const index = expenses.findIndex(e => e.id === normalized.id);
     if (index >= 0) {
-      expenses[index] = expense;
+      expenses[index] = normalized;
     } else {
-      expenses.unshift(expense);
+      expenses.unshift(normalized);
     }
-    this.set(STORAGE_KEYS.EXPENSES, expenses, expense);
+    this.set(STORAGE_KEYS.EXPENSES, expenses, normalized);
+  }
+
+  async saveExpenseAsync(expense: ExpenseRecord): Promise<ExpenseRecord> {
+    const normalized: ExpenseRecord = {
+      ...expense,
+      date: expense.date || (expense as any).expenseDate || new Date().toISOString().slice(0, 10),
+      ...( { expenseDate: (expense as any).expenseDate || expense.date || new Date().toISOString().slice(0, 10) } as any )
+    };
+    const committed = await this.confirmSyncPush('expenses', normalized);
+    const saved = committed?.id
+      ? {
+          ...committed,
+          date: committed.date || (committed as any).expenseDate || normalized.date,
+          expenseDate: (committed as any).expenseDate || committed.date || normalized.date
+        }
+      : normalized;
+    const expenses = [...this.getExpenses()];
+    const index = expenses.findIndex(e => e.id === saved.id);
+    if (index >= 0) {
+      expenses[index] = saved;
+    } else {
+      expenses.unshift(saved);
+    }
+    this.memStore.set(STORAGE_KEYS.EXPENSES, expenses);
+    this.notifyStorageUpdated();
+    return saved;
   }
 
   deleteExpense(id: string): void {
+    const snapshot = [...this.getExpenses()];
+    const expenses = snapshot.filter(e => e.id !== id);
+    this.memStore.set(STORAGE_KEYS.EXPENSES, expenses);
+    this.deleteSync('expenses', id, snapshot);
+  }
+
+  async deleteExpenseAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('expenses', id);
     const expenses = this.getExpenses().filter(e => e.id !== id);
     this.memStore.set(STORAGE_KEYS.EXPENSES, expenses);
-    this.deleteSync('expenses', id);
+    this.notifyStorageUpdated();
   }
 
   async importExpenses(expenses: any[]): Promise<{
@@ -1462,14 +1740,73 @@ class StorageService {
     this.set(STORAGE_KEYS.EMPLOYEES, employees, emp);
   }
 
+  async saveEmployeeAsync(emp: Employee): Promise<Employee> {
+    const employees = this.getEmployees();
+    const validation = validateEmployee(emp, employees, emp.id);
+    assertValid(validation);
+
+    const committed = await this.confirmSyncPush('employees', emp);
+    const saved = committed?.id ? committed : emp;
+    const rawEmployees = [...this.get<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees)];
+    const index = rawEmployees.findIndex(e => e.id === saved.id);
+    if (index >= 0) {
+      rawEmployees[index] = { ...rawEmployees[index], ...saved };
+    } else {
+      rawEmployees.unshift(saved);
+    }
+    this.memStore.set(STORAGE_KEYS.EMPLOYEES, rawEmployees);
+
+    // Keep linked user record in memory synchronized for User Management, RBAC & Field Operations
+    const users = [...this.getUsers()];
+    const empEmail = (saved.email || '').trim().toLowerCase();
+    const uIdx = users.findIndex(
+      u => u && (u.id === saved.id || (empEmail && (u.email || '').trim().toLowerCase() === empEmail))
+    );
+    if (uIdx >= 0) {
+      users[uIdx] = {
+        ...users[uIdx],
+        name: saved.name,
+        email: saved.email || users[uIdx].email,
+        phone: saved.phone || users[uIdx].phone,
+        department: saved.department || users[uIdx].department,
+        designation: saved.designation || users[uIdx].designation,
+        role: saved.systemRole || saved.assignedRole || users[uIdx].role,
+        isFieldWorker: saved.isFieldWorker,
+        status: saved.accountStatus === 'DISABLED' || saved.status === 'TERMINATED' ? 'DISABLED' : saved.status || users[uIdx].status,
+        active: saved.loginEnabled !== false && saved.accountStatus !== 'DISABLED' && saved.status !== 'TERMINATED'
+      };
+      this.memStore.set(STORAGE_KEYS.USERS, users);
+    }
+
+    this.notifyStorageUpdated();
+    return saved;
+  }
+
   saveEmployees(employees: Employee[]): void {
     this.set(STORAGE_KEYS.EMPLOYEES, employees);
   }
 
   deleteEmployee(id: string): void {
-    const employees = this.getEmployees().filter(e => e.id !== id);
+    const snapshot = [...this.get<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees)];
+    const employees = snapshot.filter(e => e.id !== id);
     this.memStore.set(STORAGE_KEYS.EMPLOYEES, employees);
-    this.deleteSync('employees', id);
+    this.deleteSync('employees', id, snapshot);
+  }
+
+  async deleteEmployeeAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('employees', id);
+    const rawEmployees = this.get<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees);
+    const target = rawEmployees.find(e => e.id === id);
+    const targetEmail = (target?.email || '').trim().toLowerCase();
+    this.memStore.set(
+      STORAGE_KEYS.EMPLOYEES,
+      rawEmployees.filter(e => e.id !== id)
+    );
+    const users = this.getUsers().filter(
+      u => u && u.id !== id && (!targetEmail || (u.email || '').trim().toLowerCase() !== targetEmail)
+    );
+    this.memStore.set(STORAGE_KEYS.USERS, users);
+    this.notifyStorageUpdated();
   }
 
   async importEmployees(employees: any[]): Promise<{
@@ -1507,19 +1844,24 @@ class StorageService {
   }
 
   deleteUser(id: string): void {
-    const users = this.getUsers().filter(u => u.id !== id);
+    const snapshot = [...this.getUsers()];
+    const users = snapshot.filter(u => u.id !== id);
     this.memStore.set(STORAGE_KEYS.USERS, users);
-    this.deleteSync('users', id);
+    this.deleteSync('users', id, snapshot);
   }
 
   // --- Attendance ---
   getAttendance(): AttendanceRecord[] {
     const list = this.get<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, initialAttendance);
     const safeList = Array.isArray(list) ? list : initialAttendance;
-    return safeList.filter(Boolean).map(a => ({
+    return safeList.filter(Boolean).map((a: any) => ({
       ...a,
-      date: a.date || (a as any).attendanceDate || ((a as any).createdAt ? String((a as any).createdAt).slice(0, 10) : new Date().toISOString().slice(0, 10)),
-      attendanceDate: (a as any).attendanceDate || a.date
+      date: a.date || a.attendanceDate || (a.createdAt ? String(a.createdAt).slice(0, 10) : new Date().toISOString().slice(0, 10)),
+      attendanceDate: a.attendanceDate || a.date,
+      checkInGPS: a.checkInGPS || a.checkInGps,
+      checkInGps: a.checkInGps || a.checkInGPS,
+      checkOutGPS: a.checkOutGPS || a.checkOutGps,
+      checkOutGps: a.checkOutGps || a.checkOutGPS
     }));
   }
 
@@ -1534,14 +1876,97 @@ class StorageService {
     this.set(STORAGE_KEYS.ATTENDANCE, attendance, record);
   }
 
+  async saveAttendanceRecordAsync(record: AttendanceRecord): Promise<AttendanceRecord> {
+    const payload: any = {
+      ...record,
+      attendanceDate: (record as any).attendanceDate || record.date,
+      date: record.date || (record as any).attendanceDate,
+      checkInGPS: (record as any).checkInGPS || (record as any).checkInGps,
+      checkInGps: (record as any).checkInGps || (record as any).checkInGPS,
+      checkOutGPS: (record as any).checkOutGPS || (record as any).checkOutGps,
+      checkOutGps: (record as any).checkOutGps || (record as any).checkOutGPS
+    };
+    const committed = await this.confirmSyncPush('attendance', payload);
+    const savedRaw: any = committed?.id ? committed : payload;
+    const saved: AttendanceRecord = {
+      ...savedRaw,
+      date: savedRaw.date || savedRaw.attendanceDate || payload.date,
+      attendanceDate: savedRaw.attendanceDate || savedRaw.date || payload.attendanceDate,
+      checkInGPS: savedRaw.checkInGPS || savedRaw.checkInGps || payload.checkInGPS,
+      checkInGps: savedRaw.checkInGps || savedRaw.checkInGPS || payload.checkInGps,
+      checkOutGPS: savedRaw.checkOutGPS || savedRaw.checkOutGps || payload.checkOutGPS,
+      checkOutGps: savedRaw.checkOutGps || savedRaw.checkOutGPS || payload.checkOutGps
+    };
+    const attendance = [...this.getAttendance()];
+    const index = attendance.findIndex(a => a.id === saved.id);
+    if (index >= 0) {
+      attendance[index] = saved;
+    } else {
+      attendance.unshift(saved);
+    }
+    this.memStore.set(STORAGE_KEYS.ATTENDANCE, attendance);
+    this.notifyStorageUpdated();
+    return saved;
+  }
+
+  async updateFuelApprovalAsync(
+    attendanceId: string,
+    approvalStatus: 'APPROVED' | 'REJECTED' | 'PENDING',
+    reviewedBy: string,
+    notes?: string
+  ): Promise<AttendanceRecord> {
+    const updated = await apiClient.updateFuelApproval(attendanceId, approvalStatus, reviewedBy, notes);
+    const existingList = [...this.getAttendance()];
+    const idx = existingList.findIndex(a => a.id === attendanceId);
+    const fallbackUpdated = idx >= 0
+      ? {
+          ...existingList[idx],
+          fuelExpense: existingList[idx].fuelExpense
+            ? {
+                ...existingList[idx].fuelExpense!,
+                approvalStatus,
+                approvedBy: reviewedBy,
+                approvedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                approvalNotes: notes ?? existingList[idx].fuelExpense!.approvalNotes
+              }
+            : undefined
+        }
+      : undefined;
+
+    const committedRaw: any = updated && updated.id ? updated : fallbackUpdated;
+    if (committedRaw && committedRaw.id) {
+      const committed: AttendanceRecord = {
+        ...committedRaw,
+        date: committedRaw.date || committedRaw.attendanceDate,
+        attendanceDate: committedRaw.attendanceDate || committedRaw.date
+      };
+      if (idx >= 0) existingList[idx] = committed;
+      else existingList.unshift(committed);
+      this.memStore.set(STORAGE_KEYS.ATTENDANCE, existingList);
+      this.lastSyncError = null;
+      this.notifyStorageUpdated();
+      return committed;
+    }
+    throw new Error('Attendance record not found after fuel approval update.');
+  }
+
   recordAttendance(record: AttendanceRecord): void {
     this.saveAttendanceRecord(record);
   }
 
   deleteAttendanceRecord(id: string): void {
+    const snapshot = [...this.getAttendance()];
+    const attendance = snapshot.filter(a => a.id !== id);
+    this.memStore.set(STORAGE_KEYS.ATTENDANCE, attendance);
+    this.deleteSync('attendance', id, snapshot);
+  }
+
+  async deleteAttendanceRecordAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('attendance', id);
     const attendance = this.getAttendance().filter(a => a.id !== id);
     this.memStore.set(STORAGE_KEYS.ATTENDANCE, attendance);
-    this.deleteSync('attendance', id);
+    this.notifyStorageUpdated();
   }
 
   async importAttendance(attendance: any[]): Promise<{
@@ -1612,38 +2037,116 @@ class StorageService {
     this.set(STORAGE_KEYS.PAYSLIPS, payslips, payslip);
   }
 
+  async savePayslipAsync(payslip: Payslip): Promise<Payslip> {
+    const committed = await this.confirmSyncPush('payslips', payslip);
+    const saved = committed?.id ? committed : payslip;
+    const payslips = [...this.getPayslips()];
+    const index = payslips.findIndex(p => p.id === saved.id);
+    if (index >= 0) {
+      payslips[index] = saved;
+    } else {
+      payslips.unshift(saved);
+    }
+    this.memStore.set(STORAGE_KEYS.PAYSLIPS, payslips);
+    this.notifyStorageUpdated();
+    return saved;
+  }
+
   deletePayslip(id: string): void {
+    const snapshot = [...this.getPayslips()];
+    const payslips = snapshot.filter(p => p.id !== id);
+    this.memStore.set(STORAGE_KEYS.PAYSLIPS, payslips);
+    this.deleteSync('payslips', id, snapshot);
+  }
+
+  async deletePayslipAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('payslips', id);
     const payslips = this.getPayslips().filter(p => p.id !== id);
     this.memStore.set(STORAGE_KEYS.PAYSLIPS, payslips);
-    this.deleteSync('payslips', id);
+    this.notifyStorageUpdated();
   }
 
   // --- Holidays ---
   getHolidays(): HolidayRecord[] {
-    return this.get<HolidayRecord[]>(STORAGE_KEYS.HOLIDAYS, initialHolidays);
+    const list = this.get<HolidayRecord[]>(STORAGE_KEYS.HOLIDAYS, initialHolidays);
+    const safeList = Array.isArray(list) ? list : initialHolidays;
+    return safeList.filter(Boolean).map((h: any) => {
+      const hDate = h.date || h.holidayDate || '';
+      return {
+        ...h,
+        date: hDate,
+        holidayDate: h.holidayDate || hDate
+      };
+    });
   }
 
   saveHoliday(holiday: HolidayRecord): void {
+    const normalized: any = {
+      ...holiday,
+      date: holiday.date || (holiday as any).holidayDate || '',
+      holidayDate: (holiday as any).holidayDate || holiday.date || ''
+    };
     const holidays = this.getHolidays();
-    const index = holidays.findIndex(h => h.id === holiday.id);
+    const index = holidays.findIndex(h => h.id === normalized.id);
     if (index >= 0) {
-      holidays[index] = holiday;
+      holidays[index] = normalized;
     } else {
-      holidays.push(holiday);
+      holidays.push(normalized);
     }
     // Sort by date ascending
-    holidays.sort((a, b) => a.date.localeCompare(b.date));
-    this.set(STORAGE_KEYS.HOLIDAYS, holidays, holiday);
+    holidays.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    this.set(STORAGE_KEYS.HOLIDAYS, holidays, normalized);
+  }
+
+  async saveHolidayAsync(holiday: HolidayRecord): Promise<HolidayRecord> {
+    const payload: any = {
+      ...holiday,
+      date: holiday.date || (holiday as any).holidayDate || '',
+      holidayDate: (holiday as any).holidayDate || holiday.date || ''
+    };
+    const committed = await this.confirmSyncPush('holidays', payload);
+    const savedRaw: any = committed?.id ? committed : payload;
+    const saved: HolidayRecord = {
+      ...savedRaw,
+      date: savedRaw.date || savedRaw.holidayDate || payload.date,
+      holidayDate: savedRaw.holidayDate || savedRaw.date || payload.holidayDate
+    } as HolidayRecord;
+    const holidays = [...this.getHolidays()];
+    const index = holidays.findIndex(h => h.id === saved.id);
+    if (index >= 0) {
+      holidays[index] = saved;
+    } else {
+      holidays.push(saved);
+    }
+    holidays.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    this.memStore.set(STORAGE_KEYS.HOLIDAYS, holidays);
+    this.notifyStorageUpdated();
+    return saved;
   }
 
   deleteHoliday(id: string): void {
+    const snapshot = [...this.getHolidays()];
+    const holidays = snapshot.filter(h => h.id !== id);
+    this.memStore.set(STORAGE_KEYS.HOLIDAYS, holidays);
+    this.deleteSync('holidays', id, snapshot);
+  }
+
+  async deleteHolidayAsync(id: string): Promise<void> {
+    await this.confirmSyncDelete('holidays', id);
     const holidays = this.getHolidays().filter(h => h.id !== id);
     this.memStore.set(STORAGE_KEYS.HOLIDAYS, holidays);
-    this.deleteSync('holidays', id);
+    this.notifyStorageUpdated();
   }
 
   resetStandardHolidays(): void {
     this.set(STORAGE_KEYS.HOLIDAYS, initialHolidays);
+  }
+
+  async resetStandardHolidaysAsync(): Promise<void> {
+    await apiClient.syncPush('holidays', { items: initialHolidays });
+    this.lastSyncError = null;
+    this.memStore.set(STORAGE_KEYS.HOLIDAYS, [...initialHolidays]);
+    this.notifyStorageUpdated();
   }
 
   // --- Service & AMC ---

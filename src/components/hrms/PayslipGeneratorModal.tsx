@@ -39,7 +39,7 @@ import {
 interface PayslipGeneratorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (payslip: Payslip) => void;
+  onSave: (payslip: Payslip) => void | Promise<void>;
   employee: Employee | null;
   existingPayslip?: Payslip | null;
   allEmployees: Employee[];
@@ -137,6 +137,13 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [storageSyncTick, setStorageSyncTick] = useState(0);
+
+  useEffect(() => {
+    const handleStorageUpdate = () => setStorageSyncTick(t => t + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
 
   // Track modal open/session state to initialize form without resetting on user dropdown selection
   const prevSessionRef = useRef<{
@@ -174,7 +181,7 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
 
       return false;
     });
-  }, [currentEmployee, salaryMonth, parsedPeriod.prefix, isOpen, attendanceLogs]);
+  }, [currentEmployee, salaryMonth, parsedPeriod.prefix, isOpen, attendanceLogs, storageSyncTick]);
 
   const fuelAttendanceRecords = useMemo(() => {
     return monthAttendanceLogs.filter(a => {
@@ -185,7 +192,6 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
         const fin = Number(a.fuelExpense.finalOdometerReading);
         if (!isNaN(init) && !isNaN(fin) && fin >= init) {
           km = Math.round((fin - init) * 10) / 10;
-          a.fuelExpense.totalKmDriven = km;
         } else {
           return false;
         }
@@ -238,7 +244,7 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
       };
     }
     return null;
-  }, [currentEmployee, salaryMonth, existingPayslip, isOpen]);
+  }, [currentEmployee, salaryMonth, existingPayslip, isOpen, storageSyncTick]);
 
   // Suggested default hourly rate based on base salary: base / 26 working days / 8 hours
   const suggestedHourlyRate = useMemo(() => {
@@ -552,9 +558,9 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) return;
+    if (isSubmitting || !validate()) return;
 
     setIsSubmitting(true);
     try {
@@ -622,24 +628,42 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
         notes: notes.trim() || undefined
       };
 
+      // Save primary payslip first to confirm MySQL persistence
+      await onSave(finalPayslip);
+
       // Tag eligible attendance fuel records with payslip reimbursement tracking
       if (fuelAttendanceRecords.length > 0) {
-        fuelAttendanceRecords.forEach(att => {
-          const updatedAtt: AttendanceRecord = {
-            ...att,
-            reimbursedInPayslipId: payslipId,
-            reimbursementStatus: 'REIMBURSED',
-            fuelExpense: att.fuelExpense ? {
-              ...att.fuelExpense,
-              approvalStatus: att.fuelExpense.approvalStatus || 'APPROVED'
-            } : undefined
-          };
-          storageService.saveAttendanceRecord(updatedAtt);
-        });
+        await Promise.all(
+          fuelAttendanceRecords.map(att => {
+            const init = Number(att.fuelExpense?.initialOdometerReading);
+            const fin = Number(att.fuelExpense?.finalOdometerReading);
+            const computedKm =
+              Number(att.fuelExpense?.totalKmDriven) > 0
+                ? Number(att.fuelExpense?.totalKmDriven)
+                : !isNaN(init) && !isNaN(fin) && fin >= init
+                  ? Math.round((fin - init) * 10) / 10
+                  : 0;
+            const updatedAtt: AttendanceRecord = {
+              ...att,
+              reimbursedInPayslipId: payslipId,
+              reimbursementStatus: 'REIMBURSED',
+              fuelExpense: att.fuelExpense
+                ? {
+                    ...att.fuelExpense,
+                    totalKmDriven: computedKm || att.fuelExpense.totalKmDriven,
+                    approvalStatus: att.fuelExpense.approvalStatus || 'APPROVED'
+                  }
+                : undefined
+            };
+            return storageService.saveAttendanceRecordAsync(updatedAtt);
+          })
+        );
       }
 
-      onSave(finalPayslip);
       onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save payslip to MySQL. Please try again.';
+      setErrors(prev => ({ ...prev, form: msg }));
     } finally {
       setIsSubmitting(false);
     }
@@ -1533,7 +1557,7 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
               className="inline-flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-4 h-4" />
-              <span>{isEditing ? 'Update Payslip' : 'Generate Payslip Voucher'}</span>
+              <span>{isSubmitting ? 'Saving...' : isEditing ? 'Update Payslip' : 'Generate Payslip Voucher'}</span>
             </button>
           </div>
         </form>

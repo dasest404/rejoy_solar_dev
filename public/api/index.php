@@ -1605,7 +1605,8 @@ function saveExpenseToDb($pdo, $item) {
     $vendorName = $item['vendorName'] ?? $item['vendor_name'] ?? 'Vendor';
     $category = $item['category'] ?? 'Miscellaneous';
     $amount = floatval($item['amount'] ?? 0);
-    $expDate = !empty($item['expenseDate'] ?? $item['expense_date']) ? substr($item['expenseDate'] ?? $item['expense_date'], 0, 10) : date('Y-m-d');
+    $rawExpDate = $item['expenseDate'] ?? ($item['date'] ?? ($item['expense_date'] ?? ''));
+    $expDate = !empty($rawExpDate) ? substr((string)$rawExpDate, 0, 10) : date('Y-m-d');
     $mode = $item['paymentMode'] ?? $item['payment_mode'] ?? 'Bank Payment';
     $refNo = $item['referenceNo'] ?? $item['reference_no'] ?? '';
     $notes = $item['notes'] ?? '';
@@ -1620,6 +1621,8 @@ function saveExpenseToDb($pdo, $item) {
             `notes`, `receipt_url`, `approved_by`, `tally_sync_status`
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
+            `project_id` = VALUES(`project_id`),
+            `project_code` = VALUES(`project_code`),
             `vendor_name` = VALUES(`vendor_name`),
             `category` = VALUES(`category`),
             `amount` = VALUES(`amount`),
@@ -1636,6 +1639,8 @@ function saveExpenseToDb($pdo, $item) {
         $category, $amount, $expDate, $mode, $refNo,
         $notes, $receiptUrl, $approvedBy, $tallyStatus
     ]);
+    $item['expenseDate'] = $expDate;
+    $item['date'] = $expDate;
     return $item;
 }
 
@@ -2976,18 +2981,30 @@ function saveAttendanceToDb($pdo, $item) {
     if (empty($item['id'])) $item['id'] = 'att-' . round(microtime(true) * 1000);
     $empId = $item['employeeId'] ?? $item['employee_id'] ?? '';
     $empName = $item['employeeName'] ?? $item['employee_name'] ?? 'Employee';
-    $attDate = !empty($item['attendanceDate'] ?? $item['attendance_date']) ? substr($item['attendanceDate'] ?? $item['attendance_date'], 0, 10) : date('Y-m-d');
+    $rawAttDate = $item['attendanceDate'] ?? ($item['date'] ?? ($item['attendance_date'] ?? ''));
+    $attDate = !empty($rawAttDate) ? substr((string)$rawAttDate, 0, 10) : date('Y-m-d');
     $checkInTime = $item['checkInTime'] ?? $item['check_in_time'] ?? '09:00';
     $checkOutTime = $item['checkOutTime'] ?? $item['check_out_time'] ?? null;
-    $checkInGps = $item['checkInGps'] ?? $item['check_in_gps_json'] ?? null;
+    $checkInGps = $item['checkInGPS'] ?? $item['checkInGps'] ?? $item['gpsCheckIn'] ?? $item['check_in_gps_json'] ?? null;
+    $checkInGpsParsed = is_string($checkInGps) ? (json_decode($checkInGps, true) ?: $checkInGps) : $checkInGps;
     $checkInGpsJson = $checkInGps ? (is_string($checkInGps) ? $checkInGps : json_encode($checkInGps)) : null;
-    $checkOutGps = $item['checkOutGps'] ?? $item['check_out_gps_json'] ?? null;
+    $checkOutGps = $item['checkOutGPS'] ?? $item['checkOutGps'] ?? $item['gpsCheckOut'] ?? $item['check_out_gps_json'] ?? null;
+    $checkOutGpsParsed = is_string($checkOutGps) ? (json_decode($checkOutGps, true) ?: $checkOutGps) : $checkOutGps;
     $checkOutGpsJson = $checkOutGps ? (is_string($checkOutGps) ? $checkOutGps : json_encode($checkOutGps)) : null;
     $projId = $item['siteProjectId'] ?? $item['site_project_id'] ?? '';
     $projTitle = $item['siteProjectTitle'] ?? $item['site_project_title'] ?? '';
     $status = $item['status'] ?? 'PRESENT';
-    $fuelExpense = $item['fuelExpense'] ?? $item['fuel_expense'] ?? $item['fuel_expense_json'] ?? null;
-    $fuelExpenseJson = $fuelExpense ? (is_string($fuelExpense) ? $fuelExpense : json_encode($fuelExpense)) : null;
+    $fuelExpenseRaw = $item['fuelExpense'] ?? $item['fuel_expense'] ?? $item['fuel_expense_json'] ?? null;
+    $fuelExpense = is_string($fuelExpenseRaw) ? (json_decode($fuelExpenseRaw, true) ?: null) : (is_array($fuelExpenseRaw) ? $fuelExpenseRaw : null);
+    if (is_array($fuelExpense)) {
+        if (!isset($fuelExpense['totalKmDriven']) && isset($fuelExpense['finalOdometerReading']) && isset($fuelExpense['initialOdometerReading'])) {
+            $diff = floatval($fuelExpense['finalOdometerReading']) - floatval($fuelExpense['initialOdometerReading']);
+            if ($diff >= 0) {
+                $fuelExpense['totalKmDriven'] = round($diff * 10) / 10;
+            }
+        }
+    }
+    $fuelExpenseJson = $fuelExpense ? json_encode($fuelExpense) : ($fuelExpenseRaw && is_string($fuelExpenseRaw) ? $fuelExpenseRaw : null);
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_attendance` (
@@ -2996,6 +3013,7 @@ function saveAttendanceToDb($pdo, $item) {
             `site_project_title`, `status`, `fuel_expense_json`
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
+            `employee_id` = VALUES(`employee_id`),
             `employee_name` = VALUES(`employee_name`),
             `attendance_date` = VALUES(`attendance_date`),
             `check_in_time` = VALUES(`check_in_time`),
@@ -3012,6 +3030,22 @@ function saveAttendanceToDb($pdo, $item) {
         $checkOutTime, $checkInGpsJson, $checkOutGpsJson, $projId,
         $projTitle, $status, $fuelExpenseJson
     ]);
+
+    $item['employeeId'] = $empId;
+    $item['employeeName'] = $empName;
+    $item['attendanceDate'] = $attDate;
+    $item['date'] = $attDate;
+    if ($checkInGpsParsed) {
+        $item['checkInGps'] = $checkInGpsParsed;
+        $item['checkInGPS'] = $checkInGpsParsed;
+    }
+    if ($checkOutGpsParsed) {
+        $item['checkOutGps'] = $checkOutGpsParsed;
+        $item['checkOutGPS'] = $checkOutGpsParsed;
+    }
+    if ($fuelExpense !== null) {
+        $item['fuelExpense'] = $fuelExpense;
+    }
     return $item;
 }
 
@@ -3093,6 +3127,8 @@ function saveHolidayToDb($pdo, $item) {
             `description` = VALUES(`description`)
     ");
     $stmt->execute([$item['id'], $name, $hDate, $type, $desc]);
+    $item['holidayDate'] = $hDate;
+    $item['date'] = $hDate;
     return $item;
 }
 
@@ -7779,6 +7815,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'category' => $r['category'],
                 'amount' => floatval($r['amount'] ?? 0),
                 'expenseDate' => $r['expense_date'],
+                'date' => $r['expense_date'],
                 'paymentMode' => $r['payment_mode'] ?? 'Bank Payment',
                 'referenceNo' => $r['reference_no'] ?? '',
                 'notes' => $r['notes'] ?? '',
@@ -7997,7 +8034,17 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
             $fuelExpense = null;
             if (!empty($r['fuel_expense_json'])) {
                 $fuelExpense = json_decode($r['fuel_expense_json'], true);
+                if (is_array($fuelExpense)) {
+                    if (!isset($fuelExpense['totalKmDriven']) && isset($fuelExpense['finalOdometerReading']) && isset($fuelExpense['initialOdometerReading'])) {
+                        $diff = floatval($fuelExpense['finalOdometerReading']) - floatval($fuelExpense['initialOdometerReading']);
+                        if ($diff >= 0) {
+                            $fuelExpense['totalKmDriven'] = round($diff * 10) / 10;
+                        }
+                    }
+                }
             }
+            $checkInGps = json_decode($r['check_in_gps_json'] ?? 'null', true);
+            $checkOutGps = json_decode($r['check_out_gps_json'] ?? 'null', true);
             return [
                 'id' => $r['id'],
                 'employeeId' => $r['employee_id'],
@@ -8006,8 +8053,10 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'date' => $r['attendance_date'],
                 'checkInTime' => $r['check_in_time'],
                 'checkOutTime' => $r['check_out_time'],
-                'checkInGps' => json_decode($r['check_in_gps_json'] ?? 'null', true),
-                'checkOutGps' => json_decode($r['check_out_gps_json'] ?? 'null', true),
+                'checkInGps' => $checkInGps,
+                'checkInGPS' => $checkInGps,
+                'checkOutGps' => $checkOutGps,
+                'checkOutGPS' => $checkOutGps,
                 'siteProjectId' => $r['site_project_id'] ?? '',
                 'siteProjectTitle' => $r['site_project_title'] ?? '',
                 'status' => $r['status'] ?? 'PRESENT',
@@ -10397,6 +10446,348 @@ if (preg_match('#^/vendor-sales-invoices/([^/]+)/?$#', $cleanPath, $matches)) {
                 echo json_encode(['success' => false, 'message' => $e->getMessage()]);
                 exit;
             }
+        }
+    }
+}
+
+// ==========================================================
+// DIRECT HRMS & FINANCE REST ENDPOINTS (Attendance, Fuel Approval, Payslips, Holidays, Expenses)
+// ==========================================================
+
+// PUT /api/attendance/{id}/fuel-approval
+if (($method === 'PUT' || $method === 'POST') && preg_match('#^/attendance/([^/]+)/fuel-approval/?$#', $cleanPath, $matches)) {
+    $attId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminOrHrUserPhp($pdo);
+
+    $stmt = $pdo->prepare('SELECT * FROM `solar_attendance` WHERE `id` = ? LIMIT 1');
+    $stmt->execute([$attId]);
+    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$existing) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'Attendance record not found.']);
+        exit;
+    }
+
+    $currentFuel = !empty($existing['fuel_expense_json']) ? (json_decode($existing['fuel_expense_json'], true) ?: []) : [];
+    $nextStatus = $body['approvalStatus'] ?? ($body['status'] ?? 'APPROVED');
+    $reviewer = $body['approvedBy'] ?? ($body['reviewedBy'] ?? ($actor['name'] ?? 'Administrator'));
+    $nowIso = date('c');
+
+    $updatedFuel = array_merge($currentFuel, [
+        'approvalStatus' => $nextStatus,
+        'approvedBy' => $reviewer,
+        'approvedAt' => $nowIso,
+        'updatedAt' => $nowIso,
+        'approvalNotes' => $body['notes'] ?? ($currentFuel['approvalNotes'] ?? null)
+    ]);
+
+    $checkInGps = json_decode($existing['check_in_gps_json'] ?? 'null', true);
+    $checkOutGps = json_decode($existing['check_out_gps_json'] ?? 'null', true);
+
+    $saved = saveAttendanceToDb($pdo, [
+        'id' => $existing['id'],
+        'employeeId' => $existing['employee_id'],
+        'employeeName' => $existing['employee_name'],
+        'attendanceDate' => $existing['attendance_date'],
+        'date' => $existing['attendance_date'],
+        'checkInTime' => $existing['check_in_time'],
+        'checkOutTime' => $existing['check_out_time'],
+        'checkInGps' => $checkInGps,
+        'checkInGPS' => $checkInGps,
+        'checkOutGps' => $checkOutGps,
+        'checkOutGPS' => $checkOutGps,
+        'siteProjectId' => $existing['site_project_id'] ?? '',
+        'siteProjectTitle' => $existing['site_project_title'] ?? '',
+        'status' => $existing['status'] ?? 'PRESENT',
+        'fuelExpense' => $updatedFuel
+    ]);
+
+    http_response_code(200);
+    echo json_encode([
+        'success' => true,
+        'data' => $saved,
+        'message' => "Fuel log marked as {$nextStatus}."
+    ]);
+    exit;
+}
+
+// GET|POST /api/attendance
+if (in_array($cleanPath, ['/attendance', '/attendance/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_attendance` ORDER BY `attendance_date` DESC, `check_in_time` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            $fuelExpense = !empty($r['fuel_expense_json']) ? json_decode($r['fuel_expense_json'], true) : null;
+            if (is_array($fuelExpense) && !isset($fuelExpense['totalKmDriven']) && isset($fuelExpense['finalOdometerReading']) && isset($fuelExpense['initialOdometerReading'])) {
+                $diff = floatval($fuelExpense['finalOdometerReading']) - floatval($fuelExpense['initialOdometerReading']);
+                if ($diff >= 0) $fuelExpense['totalKmDriven'] = round($diff * 10) / 10;
+            }
+            $checkInGps = json_decode($r['check_in_gps_json'] ?? 'null', true);
+            $checkOutGps = json_decode($r['check_out_gps_json'] ?? 'null', true);
+            return [
+                'id' => $r['id'],
+                'employeeId' => $r['employee_id'],
+                'employeeName' => $r['employee_name'],
+                'attendanceDate' => $r['attendance_date'],
+                'date' => $r['attendance_date'],
+                'checkInTime' => $r['check_in_time'],
+                'checkOutTime' => $r['check_out_time'],
+                'checkInGps' => $checkInGps,
+                'checkInGPS' => $checkInGps,
+                'checkOutGps' => $checkOutGps,
+                'checkOutGPS' => $checkOutGps,
+                'siteProjectId' => $r['site_project_id'] ?? '',
+                'siteProjectTitle' => $r['site_project_title'] ?? '',
+                'status' => $r['status'] ?? 'PRESENT',
+                'fuelExpense' => $fuelExpense,
+                'createdAt' => $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $saved = saveAttendanceToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/attendance/{id}
+if (preg_match('#^/attendance/([^/]+)/?$#', $cleanPath, $matches)) {
+    $attId = urldecode($matches[1]);
+    if ($attId !== 'import') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAuthUserPhp($pdo);
+
+        if ($method === 'PUT' || $method === 'POST') {
+            $body['id'] = $attId;
+            $saved = saveAttendanceToDb($pdo, $body);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $saved]);
+            exit;
+        }
+        if ($method === 'DELETE') {
+            deleteItemFromDb($pdo, 'attendance', $attId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Attendance record deleted from MySQL.']);
+            exit;
+        }
+    }
+}
+
+// GET|POST /api/payslips
+if (in_array($cleanPath, ['/payslips', '/payslips/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_payslips` ORDER BY `year` DESC, `month` DESC, `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            $addExpenses = json_decode($r['additional_expenses_json'] ?? '[]', true) ?: [];
+            $dedList = json_decode($r['deductions_json'] ?? '[]', true) ?: [];
+            $totalExpenses = is_array($addExpenses) ? array_reduce($addExpenses, fn($s, $x) => $s + floatval($x['amount'] ?? 0), 0) : 0;
+            $totalDeductions = (!empty($dedList) && is_array($dedList))
+                ? array_reduce($dedList, fn($s, $x) => $s + floatval($x['amount'] ?? 0), 0)
+                : floatval($r['deductions'] ?? 0);
+            $basic = floatval($r['basic_salary'] ?? 0);
+            $overtimeAmt = floatval($r['allowances'] ?? 0);
+            $net = floatval($r['net_salary'] ?? ($basic + $overtimeAmt + $totalExpenses - $totalDeductions));
+            return [
+                'id' => $r['id'],
+                'payslipNumber' => $r['id'],
+                'employeeId' => $r['employee_id'],
+                'employeeName' => $r['employee_name'],
+                'employeeCode' => $r['employee_id'],
+                'month' => $r['month'],
+                'year' => intval($r['year']),
+                'baseSalary' => $basic,
+                'basicSalary' => $basic,
+                'allowances' => $overtimeAmt,
+                'overtimeAmount' => $overtimeAmt,
+                'overtimeType' => (!empty($r['overtime_hours']) && floatval($r['overtime_hours']) > 0) ? 'CALCULATED' : 'DIRECT',
+                'overtimeHours' => floatval($r['overtime_hours'] ?? 0),
+                'overtimeRatePerHour' => floatval($r['overtime_rate'] ?? 0),
+                'additionalExpenses' => $addExpenses,
+                'totalAdditionalExpenses' => $totalExpenses,
+                'deductions' => $dedList,
+                'totalDeductions' => $totalDeductions,
+                'grossEarnings' => $basic + $overtimeAmt + $totalExpenses,
+                'netPay' => $net,
+                'netSalary' => $net,
+                'paymentStatus' => $r['payment_status'] ?? 'PAID',
+                'status' => ($r['payment_status'] ?? 'PAID') === 'PAID' ? 'PAID' : ($r['payment_status'] ?? 'GENERATED'),
+                'paymentDate' => $r['payment_date'],
+                'paymentMode' => $r['payment_mode'] ?? 'NEFT/RTGS Bank Transfer',
+                'bankReferenceNo' => $r['bank_reference_no'] ?? '',
+                'notes' => $r['notes'] ?? '',
+                'createdAt' => $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $saved = savePayslipToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/payslips/{id}
+if (preg_match('#^/payslips/([^/]+)/?$#', $cleanPath, $matches)) {
+    $psId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'PUT' || $method === 'POST') {
+        $body['id'] = $psId;
+        $saved = savePayslipToDb($pdo, $body);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+    if ($method === 'DELETE') {
+        deleteItemFromDb($pdo, 'payslips', $psId, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Payslip deleted from MySQL.']);
+        exit;
+    }
+}
+
+// GET|POST /api/holidays
+if (in_array($cleanPath, ['/holidays', '/holidays/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_holidays` ORDER BY `holiday_date` ASC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            return [
+                'id' => $r['id'],
+                'name' => $r['name'],
+                'holidayDate' => $r['holiday_date'],
+                'date' => $r['holiday_date'],
+                'type' => $r['type'] ?? 'Mandatory',
+                'description' => $r['description'] ?? '',
+                'createdAt' => $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $saved = saveHolidayToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/holidays/{id}
+if (preg_match('#^/holidays/([^/]+)/?$#', $cleanPath, $matches)) {
+    $holId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'PUT' || $method === 'POST') {
+        $body['id'] = $holId;
+        $saved = saveHolidayToDb($pdo, $body);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+    if ($method === 'DELETE') {
+        deleteItemFromDb($pdo, 'holidays', $holId, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Holiday deleted from MySQL.']);
+        exit;
+    }
+}
+
+// GET|POST /api/expenses
+if (in_array($cleanPath, ['/expenses', '/expenses/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_expenses` ORDER BY `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            return [
+                'id' => $r['id'],
+                'expenseNumber' => $r['expense_number'],
+                'projectId' => $r['project_id'],
+                'projectCode' => $r['project_code'] ?? '',
+                'vendorName' => $r['vendor_name'],
+                'category' => $r['category'],
+                'amount' => floatval($r['amount'] ?? 0),
+                'expenseDate' => $r['expense_date'],
+                'date' => $r['expense_date'],
+                'paymentMode' => $r['payment_mode'] ?? 'Bank Payment',
+                'referenceNo' => $r['reference_no'] ?? '',
+                'notes' => $r['notes'] ?? '',
+                'receiptUrl' => $r['receipt_url'] ?? '',
+                'approvedBy' => $r['approved_by'] ?? '',
+                'tallySyncStatus' => $r['tally_sync_status'] ?? 'NOT SYNCED',
+                'createdAt' => $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $saved = saveExpenseToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/expenses/{id}
+if (preg_match('#^/expenses/([^/]+)/?$#', $cleanPath, $matches)) {
+    $expId = urldecode($matches[1]);
+    if ($expId !== 'import') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAuthUserPhp($pdo);
+
+        if ($method === 'PUT' || $method === 'POST') {
+            $body['id'] = $expId;
+            $saved = saveExpenseToDb($pdo, $body);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $saved]);
+            exit;
+        }
+        if ($method === 'DELETE') {
+            deleteItemFromDb($pdo, 'expenses', $expId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Expense deleted from MySQL.']);
+            exit;
         }
     }
 }

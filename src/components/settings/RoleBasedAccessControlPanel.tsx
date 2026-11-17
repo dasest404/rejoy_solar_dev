@@ -1,8 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
 import { storageService } from '../../services/storage';
-import { apiClient } from '../../services/apiClient';
 import { UserRole, Employee } from '../../types/solar';
 import {
   SystemAclConfig,
@@ -45,7 +44,7 @@ import {
 
 export const RoleBasedAccessControlPanel: React.FC = () => {
   const { currentRole, currentUser, switchPersona } = useAuth();
-  const { showToast, triggerRefresh } = useApp();
+  const { showToast, triggerRefresh, refreshTrigger } = useApp();
 
   // Active view tab inside the ACL module
   const [aclTab, setAclTab] = useState<'matrix' | 'audit'>('matrix');
@@ -67,6 +66,21 @@ export const RoleBasedAccessControlPanel: React.FC = () => {
 
   // Employees directory for role assignment
   const [employees, setEmployees] = useState<Employee[]>(() => storageService.getEmployees());
+
+  useEffect(() => {
+    const syncPanelData = () => {
+      setEmployees(storageService.getEmployees());
+      const latestConfig = storageService.getAclConfig();
+      setAclConfig(latestConfig);
+      if (!hasPendingChanges) {
+        setPendingRolePerms({ ...(latestConfig[selectedRole] || {}) });
+      }
+      setAuditLogs(storageService.getAclAuditLogs());
+    };
+    syncPanelData();
+    window.addEventListener('solarpulse_storage_updated', syncPanelData);
+    return () => window.removeEventListener('solarpulse_storage_updated', syncPanelData);
+  }, [refreshTrigger, selectedRole, hasPendingChanges]);
 
   // Whenever selectedRole changes, reset the pending edits to the stored role perms
   const handleRoleSelect = (role: UserRole) => {
@@ -301,8 +315,7 @@ export const RoleBasedAccessControlPanel: React.FC = () => {
     };
 
     try {
-      await apiClient.saveEmployee(updatedTarget);
-      await storageService.hydrateFromBackend();
+      await storageService.saveEmployeeAsync(updatedTarget);
       setEmployees(storageService.getEmployees());
       storageService.addAclAuditLog({
         changedBy: currentUser?.name || 'Administrator',
@@ -311,6 +324,7 @@ export const RoleBasedAccessControlPanel: React.FC = () => {
         summary: `Assigned role ${newRole} to employee ${empId}`
       });
       setAuditLogs(storageService.getAclAuditLogs());
+      triggerRefresh();
       showToast(`Updated employee operational role to ${newRole}`, 'success');
     } catch (err: any) {
       showToast(err?.message || 'Failed to update employee role in MySQL', 'error');

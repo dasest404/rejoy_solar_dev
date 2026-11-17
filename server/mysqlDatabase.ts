@@ -4380,29 +4380,52 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('expenses');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_expenses` ORDER BY `created_at` DESC');
-    const mapped = (rows as any[]).map(r => ({
-      id: r.id,
-      expenseNumber: r.expense_number,
-      projectId: r.project_id,
-      projectCode: r.project_code,
-      vendorName: r.vendor_name,
-      category: r.category,
-      amount: Number(r.amount) || 0,
-      expenseDate: r.expense_date,
-      paymentMode: r.payment_mode,
-      referenceNo: r.reference_no,
-      notes: r.notes,
-      receiptUrl: r.receipt_url,
-      approvedBy: r.approved_by,
-      tallySyncStatus: r.tally_sync_status,
-      createdAt: r.created_at
-    }));
+    const formatDateOnly = (raw: any): string => {
+      if (raw instanceof Date) {
+        return `${raw.getFullYear()}-${String(raw.getMonth() + 1).padStart(2, '0')}-${String(raw.getDate()).padStart(2, '0')}`;
+      }
+      if (!raw) return '';
+      const s = String(raw).trim();
+      return s.includes('T') ? s.split('T')[0] : (s.length >= 10 ? s.slice(0, 10) : s);
+    };
+    const mapped = (rows as any[]).map(r => {
+      const expDate = formatDateOnly(r.expense_date);
+      return {
+        id: r.id,
+        expenseNumber: r.expense_number,
+        projectId: r.project_id,
+        projectCode: r.project_code,
+        vendorName: r.vendor_name,
+        category: r.category,
+        amount: Number(r.amount) || 0,
+        expenseDate: expDate,
+        date: expDate,
+        paymentMode: r.payment_mode,
+        referenceNo: r.reference_no,
+        notes: r.notes,
+        receiptUrl: r.receipt_url,
+        approvedBy: r.approved_by,
+        tallySyncStatus: r.tally_sync_status,
+        createdAt: r.created_at
+      };
+    });
     this.setFallbackItems('expenses', mapped);
     return mapped;
   }
 
   public async saveExpense(item: any): Promise<any> {
     this.assertDbConnected();
+    const rawDate = item.expenseDate || item.date || item.expense_date;
+    let expDate = '';
+    if (rawDate instanceof Date) {
+      expDate = `${rawDate.getFullYear()}-${String(rawDate.getMonth() + 1).padStart(2, '0')}-${String(rawDate.getDate()).padStart(2, '0')}`;
+    } else if (rawDate) {
+      const s = String(rawDate).trim();
+      expDate = s.includes('T') ? s.split('T')[0] : (s.length >= 10 ? s.slice(0, 10) : s);
+    } else {
+      expDate = new Date().toISOString().split('T')[0];
+    }
+
     const sql = `
       INSERT INTO \`solar_expenses\` (
         \`id\`, \`expense_number\`, \`project_id\`, \`project_code\`, \`vendor_name\`,
@@ -4410,11 +4433,12 @@ class MySqlDatabaseManager {
         \`notes\`, \`receipt_url\`, \`approved_by\`, \`tally_sync_status\`
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
+        \`project_id\` = VALUES(\`project_id\`), \`project_code\` = VALUES(\`project_code\`),
         \`vendor_name\` = VALUES(\`vendor_name\`), \`category\` = VALUES(\`category\`),
         \`amount\` = VALUES(\`amount\`), \`expense_date\` = VALUES(\`expense_date\`),
         \`payment_mode\` = VALUES(\`payment_mode\`), \`reference_no\` = VALUES(\`reference_no\`),
-        \`notes\` = VALUES(\`notes\`), \`approved_by\` = VALUES(\`approved_by\`),
-        \`tally_sync_status\` = VALUES(\`tally_sync_status\`)
+        \`notes\` = VALUES(\`notes\`), \`receipt_url\` = VALUES(\`receipt_url\`),
+        \`approved_by\` = VALUES(\`approved_by\`), \`tally_sync_status\` = VALUES(\`tally_sync_status\`)
     `;
     await this.pool!.query(sql, [
       item.id,
@@ -4424,7 +4448,7 @@ class MySqlDatabaseManager {
       item.vendorName || item.vendor || 'General Vendor',
       item.category || item.expenseCategory || 'General',
       Number(item.amount) || 0,
-      item.expenseDate ? String(item.expenseDate).split('T')[0] : new Date().toISOString().split('T')[0],
+      expDate,
       item.paymentMode || item.paymentMethod || 'Bank Payment',
       item.referenceNo || item.referenceNumber || '',
       item.notes || '',
@@ -4433,12 +4457,13 @@ class MySqlDatabaseManager {
       item.tallySyncStatus || 'NOT SYNCED'
     ]);
 
+    const normalized = { ...item, expenseDate: expDate, date: expDate };
     const items = this.getFallbackItems('expenses');
-    const idx = items.findIndex(e => e.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(e => e.id === normalized.id);
+    if (idx >= 0) items[idx] = { ...items[idx], ...normalized };
+    else items.unshift(normalized);
     this.setFallbackItems('expenses', items);
-    return item;
+    return normalized;
   }
 
   public async deleteExpense(id: string): Promise<boolean> {
@@ -6224,6 +6249,9 @@ class MySqlDatabaseManager {
         }
       }
 
+      const parsedCheckInGps = r.check_in_gps_json ? (typeof r.check_in_gps_json === 'string' ? JSON.parse(r.check_in_gps_json) : r.check_in_gps_json) : undefined;
+      const parsedCheckOutGps = r.check_out_gps_json ? (typeof r.check_out_gps_json === 'string' ? JSON.parse(r.check_out_gps_json) : r.check_out_gps_json) : undefined;
+
       return {
         id: r.id,
         employeeId: r.employee_id,
@@ -6232,8 +6260,10 @@ class MySqlDatabaseManager {
         attendanceDate: formattedDate,
         checkInTime: r.check_in_time,
         checkOutTime: r.check_out_time,
-        checkInGPS: r.check_in_gps_json ? JSON.parse(r.check_in_gps_json) : undefined,
-        checkOutGPS: r.check_out_gps_json ? JSON.parse(r.check_out_gps_json) : undefined,
+        checkInGPS: parsedCheckInGps,
+        checkInGps: parsedCheckInGps,
+        checkOutGPS: parsedCheckOutGps,
+        checkOutGps: parsedCheckOutGps,
         siteProjectId: r.site_project_id,
         siteProjectTitle: r.site_project_title,
         status: r.status,
@@ -6248,7 +6278,7 @@ class MySqlDatabaseManager {
   public async saveAttendance(item: any): Promise<any> {
     this.assertDbConnected();
     let attDate = '';
-    const rawDate = item.attendanceDate || item.date;
+    const rawDate = item.attendanceDate || item.date || item.attendance_date;
     if (rawDate instanceof Date) {
       const y = rawDate.getFullYear();
       const m = String(rawDate.getMonth() + 1).padStart(2, '0');
@@ -6261,9 +6291,27 @@ class MySqlDatabaseManager {
       attDate = new Date().toISOString().split('T')[0];
     }
 
-    const fuelExpenseJson = item.fuelExpense
-      ? JSON.stringify(item.fuelExpense)
-      : (item.fuel_expense_json ? (typeof item.fuel_expense_json === 'string' ? item.fuel_expense_json : JSON.stringify(item.fuel_expense_json)) : null);
+    const rawInGps = item.checkInGPS ?? item.checkInGps ?? item.gpsCheckIn ?? item.check_in_gps_json ?? null;
+    const rawOutGps = item.checkOutGPS ?? item.checkOutGps ?? item.gpsCheckOut ?? item.check_out_gps_json ?? null;
+    const inGpsObj = typeof rawInGps === 'string' ? (() => { try { return JSON.parse(rawInGps); } catch { return undefined; } })() : (rawInGps || undefined);
+    const outGpsObj = typeof rawOutGps === 'string' ? (() => { try { return JSON.parse(rawOutGps); } catch { return undefined; } })() : (rawOutGps || undefined);
+
+    let fuelExpense = item.fuelExpense;
+    if (!fuelExpense && item.fuel_expense_json) {
+      try {
+        fuelExpense = typeof item.fuel_expense_json === 'string' ? JSON.parse(item.fuel_expense_json) : item.fuel_expense_json;
+      } catch {}
+    }
+    if (fuelExpense && typeof fuelExpense === 'object') {
+      if (fuelExpense.totalKmDriven == null && fuelExpense.finalOdometerReading != null && fuelExpense.initialOdometerReading != null) {
+        const diff = Number(fuelExpense.finalOdometerReading) - Number(fuelExpense.initialOdometerReading);
+        if (diff >= 0) {
+          fuelExpense = { ...fuelExpense, totalKmDriven: Math.round(diff * 10) / 10 };
+        }
+      }
+    }
+
+    const fuelExpenseJson = fuelExpense ? JSON.stringify(fuelExpense) : null;
 
     const sql = `
       INSERT INTO \`solar_attendance\` (
@@ -6272,6 +6320,7 @@ class MySqlDatabaseManager {
         \`site_project_id\`, \`site_project_title\`, \`status\`, \`fuel_expense_json\`
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
+        \`employee_id\` = VALUES(\`employee_id\`),
         \`employee_name\` = VALUES(\`employee_name\`),
         \`attendance_date\` = VALUES(\`attendance_date\`),
         \`check_in_time\` = VALUES(\`check_in_time\`),
@@ -6285,25 +6334,33 @@ class MySqlDatabaseManager {
     `;
     await this.pool!.query(sql, [
       item.id,
-      item.employeeId,
-      item.employeeName,
+      item.employeeId || '',
+      item.employeeName || 'Employee',
       attDate,
       item.checkInTime || '09:00 AM',
       item.checkOutTime || null,
-      item.checkInGPS ? JSON.stringify(item.checkInGPS) : null,
-      item.checkOutGPS ? JSON.stringify(item.checkOutGPS) : null,
+      inGpsObj ? JSON.stringify(inGpsObj) : null,
+      outGpsObj ? JSON.stringify(outGpsObj) : null,
       item.siteProjectId || '',
       item.siteProjectTitle || '',
       item.status || 'PRESENT',
       fuelExpenseJson
     ]);
 
+    const normalized = {
+      ...item,
+      date: attDate,
+      attendanceDate: attDate,
+      ...(inGpsObj ? { checkInGPS: inGpsObj, checkInGps: inGpsObj } : {}),
+      ...(outGpsObj ? { checkOutGPS: outGpsObj, checkOutGps: outGpsObj } : {}),
+      ...(fuelExpense ? { fuelExpense } : {})
+    };
     const items = this.getFallbackItems('attendance');
-    const idx = items.findIndex(a => a.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(a => a.id === normalized.id);
+    if (idx >= 0) items[idx] = { ...items[idx], ...normalized };
+    else items.unshift(normalized);
     this.setFallbackItems('attendance', items);
-    return item;
+    return normalized;
   }
 
   public async deleteAttendance(id: string): Promise<boolean> {
@@ -6469,7 +6526,16 @@ class MySqlDatabaseManager {
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_holidays` ORDER BY `holiday_date` ASC');
     const mapped = (rows as any[]).map(r => {
-      const hDate = r.holiday_date ? String(r.holiday_date).split('T')[0] : '';
+      let hDate = '';
+      if (r.holiday_date instanceof Date) {
+        const y = r.holiday_date.getFullYear();
+        const m = String(r.holiday_date.getMonth() + 1).padStart(2, '0');
+        const d = String(r.holiday_date.getDate()).padStart(2, '0');
+        hDate = `${y}-${m}-${d}`;
+      } else if (r.holiday_date) {
+        const s = String(r.holiday_date).trim();
+        hDate = s.includes('T') ? s.split('T')[0] : (s.length >= 10 ? s.slice(0, 10) : s);
+      }
       return {
         id: r.id,
         name: r.name,
@@ -6486,6 +6552,20 @@ class MySqlDatabaseManager {
 
   public async saveHoliday(item: any): Promise<any> {
     this.assertDbConnected();
+    const rawDate = item.holidayDate || item.date || item.holiday_date;
+    let hDate = '';
+    if (rawDate instanceof Date) {
+      const y = rawDate.getFullYear();
+      const m = String(rawDate.getMonth() + 1).padStart(2, '0');
+      const d = String(rawDate.getDate()).padStart(2, '0');
+      hDate = `${y}-${m}-${d}`;
+    } else if (rawDate) {
+      const s = String(rawDate).trim();
+      hDate = s.includes('T') ? s.split('T')[0] : (s.length >= 10 ? s.slice(0, 10) : s);
+    } else {
+      hDate = new Date().toISOString().split('T')[0];
+    }
+
     const sql = `
       INSERT INTO \`solar_holidays\` (\`id\`, \`name\`, \`holiday_date\`, \`type\`, \`description\`)
       VALUES (?, ?, ?, ?, ?)
@@ -6496,18 +6576,19 @@ class MySqlDatabaseManager {
     await this.pool!.query(sql, [
       item.id,
       item.name || '',
-      item.holidayDate ? String(item.holidayDate).split('T')[0] : (item.date ? String(item.date).split('T')[0] : new Date().toISOString().split('T')[0]),
+      hDate,
       item.type || 'Mandatory',
       item.description || ''
     ]);
 
+    const normalized = { ...item, holidayDate: hDate, date: hDate };
     const items = this.getFallbackItems('holidays');
-    const idx = items.findIndex(h => h.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.push(item);
+    const idx = items.findIndex(h => h.id === normalized.id);
+    if (idx >= 0) items[idx] = { ...items[idx], ...normalized };
+    else items.push(normalized);
     items.sort((a, b) => (a.date || a.holidayDate || '').localeCompare(b.date || b.holidayDate || ''));
     this.setFallbackItems('holidays', items);
-    return item;
+    return normalized;
   }
 
   public async deleteHoliday(id: string): Promise<boolean> {

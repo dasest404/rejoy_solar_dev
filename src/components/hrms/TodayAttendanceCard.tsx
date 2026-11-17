@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
 import { storageService } from '../../services/storage';
@@ -89,15 +89,21 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   const { currentUser, currentRole } = useAuth();
   const { triggerRefresh, showToast, refreshTrigger } = useApp();
 
-  // Strictly do not show on Admin Dashboard or for Admin users
-  if (currentRole === 'Admin' || currentUser?.role === 'Admin') {
-    return null;
-  }
-
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<'IN' | 'OUT' | null>(null);
   const [currentTimeText, setCurrentTimeText] = useState('');
+  const [isSavingFuel, setIsSavingFuel] = useState(false);
+  const [localSyncCounter, setLocalSyncCounter] = useState(0);
+
+  const fuelDirtyRef = useRef(false);
+  const lastSyncedFuelKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const handleStorageUpdate = () => setLocalSyncCounter(c => c + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
 
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -113,7 +119,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   // Fetch employee directory & resolve current user to their HR employee record
   const employees = useMemo(() => {
     return storageService.getEmployees();
-  }, [refreshTrigger]);
+  }, [refreshTrigger, localSyncCounter]);
 
   const matchedEmployee = useMemo(() => {
     return findEmployeeForUser(currentUser, employees);
@@ -122,7 +128,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   // Fetch today's record for this user from storage
   const attendanceList = useMemo(() => {
     return storageService.getAttendance();
-  }, [refreshTrigger]);
+  }, [refreshTrigger, localSyncCounter]);
 
   const todayRecord = useMemo(() => {
     const userId = currentUser?.id;
@@ -164,8 +170,17 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   const [previewModalImg, setPreviewModalImg] = useState<{ url: string; title: string } | null>(null);
   const [fuelError, setFuelError] = useState<string | null>(null);
 
-  // Sync state with today's attendance record
+  // Sync state with today's attendance record only when record version changes and user has no unsaved edits
   useEffect(() => {
+    const syncKey = `${todayRecord?.id || 'none'}:${todayRecord?.fuelExpense?.updatedAt || todayRecord?.fuelExpense?.submittedAt || ''}`;
+    if (fuelDirtyRef.current && lastSyncedFuelKeyRef.current !== null) {
+      return;
+    }
+    if (lastSyncedFuelKeyRef.current === syncKey) {
+      return;
+    }
+    lastSyncedFuelKeyRef.current = syncKey;
+
     if (todayRecord?.fuelExpense) {
       const fe = todayRecord.fuelExpense;
       setInitialOdo(fe.initialOdometerReading !== undefined ? String(fe.initialOdometerReading) : '');
@@ -206,8 +221,9 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+      reader.onload = () => {
       const dataUrl = reader.result as string;
+      fuelDirtyRef.current = true;
       if (type === 'INITIAL') {
         setInitialOdoImg(dataUrl);
         setInitialOdoImgName(file.name);
@@ -225,7 +241,8 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   };
 
   // Direct save/update for fuel log
-  const handleSaveFuelLog = () => {
+  const handleSaveFuelLog = async () => {
+    if (isSavingFuel) return;
     if (!todayRecord) {
       showToast('Please start work first before logging fuel readings.', 'info');
       return;
@@ -243,6 +260,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
       ? parseFloat((fin - init).toFixed(1))
       : undefined;
 
+    const nowIso = new Date().toISOString();
     const fuelExpense: DailyFuelExpense = {
       initialOdometerReading: init,
       finalOdometerReading: fin,
@@ -252,8 +270,8 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
       finalOdometerImageUrl: finalOdoImg || undefined,
       finalOdometerImageName: finalOdoImgName || undefined,
       approvalStatus: todayRecord.fuelExpense?.approvalStatus || 'APPROVED',
-      submittedAt: todayRecord.fuelExpense?.submittedAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      submittedAt: todayRecord.fuelExpense?.submittedAt || nowIso,
+      updatedAt: nowIso
     };
 
     const canonicalEmpId = matchedEmployee?.id || todayRecord.employeeId || currentUser?.id || 'emp-user';
@@ -272,15 +290,26 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
       fuelExpense
     };
 
-    storageService.saveAttendanceRecord(updated);
-    triggerRefresh();
+    setIsSavingFuel(true);
     setFuelError(null);
-    showToast(
-      kmDriven !== undefined
-        ? `Daily fuel log saved: ${kmDriven} km recorded for payroll reimbursement! 🚗`
-        : 'Daily odometer readings saved!',
-      'success'
-    );
+    try {
+      await storageService.saveAttendanceRecordAsync(updated);
+      fuelDirtyRef.current = false;
+      lastSyncedFuelKeyRef.current = null;
+      triggerRefresh();
+      showToast(
+        kmDriven !== undefined
+          ? `Daily fuel log saved: ${kmDriven} km recorded for payroll reimbursement! 🚗`
+          : 'Daily odometer readings saved!',
+        'success'
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save fuel log to MySQL.';
+      setFuelError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSavingFuel(false);
+    }
   };
 
   useEffect(() => {
@@ -404,7 +433,9 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
         fuelExpense
       };
 
-      storageService.saveAttendanceRecord(newRecord);
+      await storageService.saveAttendanceRecordAsync(newRecord);
+      fuelDirtyRef.current = false;
+      lastSyncedFuelKeyRef.current = null;
       triggerRefresh();
       setIsLocating(false);
       setLocationError(null);
@@ -414,13 +445,13 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
       if (onPunchSuccess) onPunchSuccess('CHECK_IN', newRecord);
     } catch (err: any) {
       setIsLocating(false);
-      setLocationError('Unable to record start time. Please try again.');
+      setLocationError(err?.message || 'Unable to record start time. Please try again.');
     }
   };
 
   // Trigger Punch Out
   const handleFinishWork = async (useFallbackCoordinates = false) => {
-    if (attendanceState !== 'WORKING' || !todayRecord) return; // Prevent duplicate or invalid punches
+    if (attendanceState !== 'WORKING' || !todayRecord || isLocating) return; // Prevent duplicate or invalid punches
 
     setIsLocating(true);
     setLocationError(null);
@@ -498,7 +529,9 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
         fuelExpense
       };
 
-      storageService.saveAttendanceRecord(updatedRecord);
+      await storageService.saveAttendanceRecordAsync(updatedRecord);
+      fuelDirtyRef.current = false;
+      lastSyncedFuelKeyRef.current = null;
       triggerRefresh();
       setIsLocating(false);
       setLocationError(null);
@@ -506,9 +539,9 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
 
       showToast(`All done! You worked ${durationText} 🎉`, 'success');
       if (onPunchSuccess) onPunchSuccess('CHECK_OUT', updatedRecord);
-    } catch (_err) {
+    } catch (err: any) {
       setIsLocating(false);
-      setLocationError('Unable to record finish time. Please try again.');
+      setLocationError(err?.message || 'Unable to record finish time. Please try again.');
     }
   };
 
@@ -523,6 +556,11 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
     );
     return text;
   }, [todayRecord]);
+
+  // Strictly do not show on Admin Dashboard or for Admin users (placed after all hooks)
+  if (currentRole === 'Admin' || currentUser?.role === 'Admin') {
+    return null;
+  }
 
   return (
     <div
@@ -814,6 +852,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
                       step="1"
                       value={initialOdo}
                       onChange={e => {
+                        fuelDirtyRef.current = true;
                         setInitialOdo(e.target.value);
                         setFuelError(null);
                       }}
@@ -852,6 +891,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
                         <button
                           type="button"
                           onClick={() => {
+                            fuelDirtyRef.current = true;
                             setInitialOdoImg('');
                             setInitialOdoImgName('');
                           }}
@@ -896,6 +936,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
                       step="1"
                       value={finalOdo}
                       onChange={e => {
+                        fuelDirtyRef.current = true;
                         setFinalOdo(e.target.value);
                         setFuelError(null);
                       }}
@@ -934,6 +975,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
                         <button
                           type="button"
                           onClick={() => {
+                            fuelDirtyRef.current = true;
                             setFinalOdoImg('');
                             setFinalOdoImgName('');
                           }}
@@ -987,11 +1029,12 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
                 {todayRecord && (
                   <button
                     type="button"
+                    disabled={isSavingFuel}
                     onClick={handleSaveFuelLog}
-                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-2xs transition-colors cursor-pointer self-end sm:self-auto shrink-0"
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-2xs transition-colors cursor-pointer self-end sm:self-auto shrink-0"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>Save Fuel Log</span>
+                    <span>{isSavingFuel ? 'Saving...' : 'Save Fuel Log'}</span>
                   </button>
                 )}
               </div>

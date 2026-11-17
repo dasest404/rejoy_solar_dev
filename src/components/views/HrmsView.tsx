@@ -64,6 +64,8 @@ export const HrmsView: React.FC = () => {
   >('EMPLOYEES');
   const [searchTerm, setSearchTerm] = useState('');
   const [isPunching, setIsPunching] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [updatingFuelId, setUpdatingFuelId] = useState<string | null>(null);
   const [localUpdateCounter, setLocalUpdateCounter] = useState(0);
 
   // Modal states
@@ -216,6 +218,7 @@ export const HrmsView: React.FC = () => {
 
   // Quick Live GPS Punch
   const handlePunchAttendance = async () => {
+    if (isPunching) return;
     setIsPunching(true);
     try {
       const gps = await getCurrentGPSPosition();
@@ -239,10 +242,13 @@ export const HrmsView: React.FC = () => {
         status: 'PRESENT'
       };
 
-      storageService.recordAttendance(newRecord);
+      await storageService.saveAttendanceRecordAsync(newRecord);
       showToast(`Punch In recorded at ${timeStr} with GPS coordinates (${gps.latitude}°, ${gps.longitude}°)`, 'success');
       triggerRefresh();
       setLocalUpdateCounter(c => c + 1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save attendance punch-in to MySQL.';
+      showToast(msg, 'error');
     } finally {
       setIsPunching(false);
     }
@@ -318,15 +324,21 @@ export const HrmsView: React.FC = () => {
     setIsAttendanceModalOpen(true);
   };
 
-  const handleSaveAttendance = (rec: AttendanceRecord) => {
+  const handleSaveAttendance = async (rec: AttendanceRecord) => {
     const isEdit = Boolean(attendanceToEdit);
-    storageService.saveAttendanceRecord(rec);
-    showToast(
-      isEdit ? `Attendance record for ${rec.employeeName} updated` : `Field check-in recorded for ${rec.employeeName}`,
-      'success'
-    );
-    triggerRefresh();
-    setLocalUpdateCounter(c => c + 1);
+    try {
+      await storageService.saveAttendanceRecordAsync(rec);
+      showToast(
+        isEdit ? `Attendance record for ${rec.employeeName} updated` : `Field check-in recorded for ${rec.employeeName}`,
+        'success'
+      );
+      triggerRefresh();
+      setLocalUpdateCounter(c => c + 1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save attendance record to MySQL.';
+      showToast(msg, 'error');
+      throw err;
+    }
   };
 
   const handleOpenDeleteAttendance = (rec: AttendanceRecord) => {
@@ -347,23 +359,32 @@ export const HrmsView: React.FC = () => {
   };
 
   // Confirm Delete Handler
-  const handleConfirmDelete = () => {
-    if (deleteDialog.type === 'EMPLOYEE') {
-      storageService.deleteEmployee(deleteDialog.id);
-      showToast('Employee deleted from directory', 'success');
-    } else if (deleteDialog.type === 'ATTENDANCE') {
-      storageService.deleteAttendanceRecord(deleteDialog.id);
-      showToast('Attendance record deleted successfully', 'success');
-    } else if (deleteDialog.type === 'PAYSLIP') {
-      storageService.deletePayslip(deleteDialog.id);
-      showToast('Payslip record deleted successfully', 'success');
-    } else if (deleteDialog.type === 'HOLIDAY') {
-      storageService.deleteHoliday(deleteDialog.id);
-      showToast('Holiday record deleted successfully', 'success');
+  const handleConfirmDelete = async () => {
+    if (isDeleting) return;
+    setIsDeleting(true);
+    try {
+      if (deleteDialog.type === 'EMPLOYEE') {
+        await storageService.deleteEmployeeAsync(deleteDialog.id);
+        showToast('Employee deleted from directory', 'success');
+      } else if (deleteDialog.type === 'ATTENDANCE') {
+        await storageService.deleteAttendanceRecordAsync(deleteDialog.id);
+        showToast('Attendance record deleted successfully', 'success');
+      } else if (deleteDialog.type === 'PAYSLIP') {
+        await storageService.deletePayslipAsync(deleteDialog.id);
+        showToast('Payslip record deleted successfully', 'success');
+      } else if (deleteDialog.type === 'HOLIDAY') {
+        await storageService.deleteHolidayAsync(deleteDialog.id);
+        showToast('Holiday record deleted successfully', 'success');
+      }
+      setDeleteDialog(prev => ({ ...prev, isOpen: false }));
+      triggerRefresh();
+      setLocalUpdateCounter(c => c + 1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete record from MySQL.';
+      showToast(msg, 'error');
+    } finally {
+      setIsDeleting(false);
     }
-    setDeleteDialog(prev => ({ ...prev, isOpen: false }));
-    triggerRefresh();
-    setLocalUpdateCounter(c => c + 1);
   };
 
   // Holiday Handlers
@@ -377,16 +398,22 @@ export const HrmsView: React.FC = () => {
     setIsHolidayModalOpen(true);
   };
 
-  const handleSaveHoliday = (holiday: HolidayRecord) => {
-    storageService.saveHoliday(holiday);
-    setLocalUpdateCounter(c => c + 1);
-    triggerRefresh();
-    showToast(
-      holidayToEdit
-        ? `Holiday "${holiday.name}" updated successfully.`
-        : `Holiday "${holiday.name}" added to official calendar.`,
-      'success'
-    );
+  const handleSaveHoliday = async (holiday: HolidayRecord) => {
+    try {
+      await storageService.saveHolidayAsync(holiday);
+      setLocalUpdateCounter(c => c + 1);
+      triggerRefresh();
+      showToast(
+        holidayToEdit
+          ? `Holiday "${holiday.name}" updated successfully.`
+          : `Holiday "${holiday.name}" added to official calendar.`,
+        'success'
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save holiday to MySQL.';
+      showToast(msg, 'error');
+      throw err;
+    }
   };
 
   const handleOpenDeleteHoliday = (holiday: HolidayRecord) => {
@@ -405,11 +432,17 @@ export const HrmsView: React.FC = () => {
     });
   };
 
-  const handleResetStandardHolidays = () => {
-    storageService.resetStandardHolidays();
-    setLocalUpdateCounter(c => c + 1);
-    triggerRefresh();
-    showToast('Standard 2026 holiday schedule restored successfully.', 'success');
+  const handleResetStandardHolidays = async () => {
+    try {
+      await storageService.resetStandardHolidaysAsync();
+      setLocalUpdateCounter(c => c + 1);
+      triggerRefresh();
+      showToast('Holiday schedule reset successfully.', 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to reset holidays in MySQL.';
+      showToast(msg, 'error');
+      throw err;
+    }
   };
 
   // Payslip Handlers
@@ -430,16 +463,22 @@ export const HrmsView: React.FC = () => {
     setPayslipToView(payslip);
   };
 
-  const handleSavePayslip = (payslip: Payslip) => {
-    storageService.savePayslip(payslip);
-    setLocalUpdateCounter(c => c + 1);
-    triggerRefresh();
-    showToast(
-      payslipToEdit
-        ? `Payslip ${payslip.payslipNumber} updated successfully.`
-        : `Payslip ${payslip.payslipNumber} generated for ${payslip.employeeName}.`,
-      'success'
-    );
+  const handleSavePayslip = async (payslip: Payslip) => {
+    try {
+      await storageService.savePayslipAsync(payslip);
+      setLocalUpdateCounter(c => c + 1);
+      triggerRefresh();
+      showToast(
+        payslipToEdit
+          ? `Payslip ${payslip.payslipNumber} updated successfully.`
+          : `Payslip ${payslip.payslipNumber} generated for ${payslip.employeeName}.`,
+        'success'
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save payslip to MySQL.';
+      showToast(msg, 'error');
+      throw err;
+    }
   };
 
   const handleOpenDeletePayslip = (payslip: Payslip) => {
@@ -459,23 +498,22 @@ export const HrmsView: React.FC = () => {
   };
 
   const handleUpdateFuelApproval = async (attendanceId: string, status: 'APPROVED' | 'REJECTED') => {
+    if (updatingFuelId === attendanceId) return;
+    setUpdatingFuelId(attendanceId);
     try {
-      const res = await fetch(`/api/attendance/${encodeURIComponent(attendanceId)}/fuel-approval`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          status,
-          reviewedBy: currentUser?.name || 'HR Admin'
-        })
-      });
-      if (res.ok) {
-        showToast(`Fuel log marked as ${status} for payroll reimbursement.`, 'success');
-        triggerRefresh();
-      } else {
-        showToast('Failed to update fuel approval status.', 'error');
-      }
-    } catch {
-      showToast('Error communicating with server.', 'error');
+      await storageService.updateFuelApprovalAsync(
+        attendanceId,
+        status,
+        currentUser?.name || 'HR Admin'
+      );
+      showToast(`Fuel log marked as ${status} for payroll reimbursement.`, 'success');
+      triggerRefresh();
+      setLocalUpdateCounter(c => c + 1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update fuel approval status.';
+      showToast(msg, 'error');
+    } finally {
+      setUpdatingFuelId(null);
     }
   };
 
@@ -951,21 +989,23 @@ export const HrmsView: React.FC = () => {
                               {(canManageHr || canProcessPayroll) && a.fuelExpense?.approvalStatus !== 'APPROVED' && (
                                 <button
                                   type="button"
+                                  disabled={updatingFuelId === a.id}
                                   onClick={() => handleUpdateFuelApproval(a.id, 'APPROVED')}
                                   title="Approve Fuel Expense for Payroll"
-                                  className="text-[9px] px-1.5 py-0.5 font-bold rounded bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                                  className="text-[9px] px-1.5 py-0.5 font-bold rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
                                 >
-                                  Approve
+                                  {updatingFuelId === a.id ? 'Saving...' : 'Approve'}
                                 </button>
                               )}
                               {(canManageHr || canProcessPayroll) && a.fuelExpense?.approvalStatus !== 'REJECTED' && (
                                 <button
                                   type="button"
+                                  disabled={updatingFuelId === a.id}
                                   onClick={() => handleUpdateFuelApproval(a.id, 'REJECTED')}
                                   title="Reject Fuel Expense"
-                                  className="text-[9px] px-1.5 py-0.5 font-bold rounded bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 cursor-pointer"
+                                  className="text-[9px] px-1.5 py-0.5 font-bold rounded bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 disabled:opacity-50 cursor-pointer"
                                 >
-                                  Reject
+                                  {updatingFuelId === a.id ? 'Saving...' : 'Reject'}
                                 </button>
                               )}
                             </div>
@@ -1412,8 +1452,11 @@ export const HrmsView: React.FC = () => {
         description={deleteDialog.description}
         details={deleteDialog.details}
         confirmLabel="Delete Permanently"
+        isProcessing={isDeleting}
         onConfirm={handleConfirmDelete}
-        onCancel={() => setDeleteDialog(prev => ({ ...prev, isOpen: false }))}
+        onCancel={() => {
+          if (!isDeleting) setDeleteDialog(prev => ({ ...prev, isOpen: false }));
+        }}
       />
 
       {/* Payslip Generator & Editor Modal */}

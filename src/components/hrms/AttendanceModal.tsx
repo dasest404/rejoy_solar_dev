@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AttendanceRecord, Employee } from '../../types/solar';
 import { getCurrentGPSPosition } from '../../services/gps';
 import { X, Calendar, Clock, MapPin, Building, AlertCircle, Save, CheckCircle2, UserCheck } from 'lucide-react';
@@ -6,7 +6,7 @@ import { X, Calendar, Clock, MapPin, Building, AlertCircle, Save, CheckCircle2, 
 interface AttendanceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (record: AttendanceRecord) => void;
+  onSave: (record: AttendanceRecord) => void | Promise<void>;
   recordToEdit?: AttendanceRecord | null;
   employees: Employee[];
 }
@@ -44,8 +44,23 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const [isFetchingGps, setIsFetchingGps] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const prevSessionRef = useRef<{ isOpen: boolean; recordId?: string }>({ isOpen: false });
 
   useEffect(() => {
+    if (!isOpen) {
+      prevSessionRef.current = { isOpen: false };
+      return;
+    }
+
+    const prev = prevSessionRef.current;
+    const isNewlyOpened = !prev.isOpen;
+    const isDifferentRecord = recordToEdit?.id !== prev.recordId;
+    if (!isNewlyOpened && !isDifferentRecord) {
+      return;
+    }
+
+    prevSessionRef.current = { isOpen: true, recordId: recordToEdit?.id };
+
     if (recordToEdit) {
       let lat = 22.9868;
       let lng = 72.3789;
@@ -141,9 +156,9 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) return;
+    if (isSubmitting || !validate()) return;
 
     setIsSubmitting(true);
     try {
@@ -171,8 +186,11 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         reimbursementStatus: recordToEdit?.reimbursementStatus
       };
 
-      onSave(finalRecord);
+      await onSave(finalRecord);
       onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save attendance record to MySQL.';
+      setErrors(prev => ({ ...prev, form: msg }));
     } finally {
       setIsSubmitting(false);
     }
