@@ -129,7 +129,13 @@ function getDbConnection($config) {
             if (defined('PDO::MYSQL_ATTR_MULTI_STATEMENTS')) {
                 $options[PDO::MYSQL_ATTR_MULTI_STATEMENTS] = true;
             }
+            if (defined('PDO::MYSQL_ATTR_INIT_COMMAND')) {
+                $options[PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci";
+            }
             $pdo = new PDO($dsn, $config['user'], $config['pass'], $options);
+            try {
+                $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+            } catch (Exception $e) {}
             return $pdo;
         } catch (PDOException $e) {
             $lastError = $e->getMessage();
@@ -1453,16 +1459,21 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
             && !in_array(strtoupper((string)$status), ['INACTIVE', 'TERMINATED', 'DISABLED'], true)
             && strtoupper((string)$accountStatus) !== 'DISABLED';
 
+        $cleanPhotoUrl = trim((string)$photoUrl);
+        $hasPhotoUrl = $cleanPhotoUrl !== '';
+
         if (!$isActiveLogin) {
             if ($existingU) {
-                $pdo->prepare("
-                    UPDATE `solar_users`
-                    SET `name` = ?, `department` = ?, `designation` = ?, `employee_id` = ?,
-                        `is_field_worker` = ?, `photo_url` = COALESCE(NULLIF(?, ''), `photo_url`),
-                        `avatar` = COALESCE(NULLIF(?, ''), `avatar`),
-                        `status` = 'DISABLED', `updated_at` = CURRENT_TIMESTAMP
-                    WHERE `id` = ?
-                ")->execute([$name, $dept, $desig, $code, $isFieldWorker, $photoUrl, $photoUrl, $existingU['id']]);
+                $disSql = "UPDATE `solar_users` SET `name` = ?, `department` = ?, `designation` = ?, `employee_id` = ?, `is_field_worker` = ?"
+                    . ($hasPhotoUrl ? ', `photo_url` = ?, `avatar` = ?' : '')
+                    . ", `status` = 'DISABLED', `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ?";
+                $disParams = [$name, $dept, $desig, $code, $isFieldWorker];
+                if ($hasPhotoUrl) {
+                    $disParams[] = $cleanPhotoUrl;
+                    $disParams[] = $cleanPhotoUrl;
+                }
+                $disParams[] = $existingU['id'];
+                $pdo->prepare($disSql)->execute($disParams);
                 syncAuthCredentialPhp($pdo, $existingU['id'], $email, null, $systemRole, in_array($systemRole, ['Admin', 'Super Admin'], true) ? 'ADMIN' : 'EMPLOYEE', $item['id'], 'DISABLED');
                 try {
                     $pdo->prepare('DELETE FROM `solar_auth_sessions` WHERE `user_id` = ? OR `linked_entity_id` = ? OR LOWER(`email`) = ?')
@@ -1485,10 +1496,17 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
 
             $targetUserId = $existingU['id'] ?? $item['id'];
             if ($existingU) {
-                $upSql = "UPDATE `solar_users` SET `name` = ?, `email` = ?, `role` = ?, `phone` = ?, `department` = ?, `designation` = ?, `employee_id` = ?, `avatar` = COALESCE(NULLIF(?, ''), `avatar`), `photo_url` = COALESCE(NULLIF(?, ''), `photo_url`), `is_field_worker` = ?, `status` = 'ACTIVE', `updated_at` = CURRENT_TIMESTAMP"
+                $upSql = "UPDATE `solar_users` SET `name` = ?, `email` = ?, `role` = ?, `phone` = ?, `department` = ?, `designation` = ?, `employee_id` = ?"
+                    . ($hasPhotoUrl ? ', `avatar` = ?, `photo_url` = ?' : '')
+                    . ", `is_field_worker` = ?, `status` = 'ACTIVE', `updated_at` = CURRENT_TIMESTAMP"
                     . ($hasExplicitPass ? ', `password` = ?' : '')
                     . ' WHERE `id` = ?';
-                $upParams = [$name, $email, $systemRole, $phone, $dept, $desig, $code, $photoUrl, $photoUrl, $isFieldWorker];
+                $upParams = [$name, $email, $systemRole, $phone, $dept, $desig, $code];
+                if ($hasPhotoUrl) {
+                    $upParams[] = $cleanPhotoUrl;
+                    $upParams[] = $cleanPhotoUrl;
+                }
+                $upParams[] = $isFieldWorker;
                 if ($hasExplicitPass) $upParams[] = $userPassHash;
                 $upParams[] = $targetUserId;
                 $pdo->prepare($upSql)->execute($upParams);
@@ -5684,17 +5702,33 @@ if ($method === 'POST' && preg_match('#^/(?:employees|employee)/([^/]+)/photo/up
 
     $fileUrl = '/uploads/employees/' . $safeEmpId . '/profile/' . $diskFileName;
 
+    $linkedAuthUid = $empId;
+    $linkedEmpCode = $empId;
+    $linkedEmpEmail = '';
     try {
+        $stmtEmpMeta = $pdo->prepare('SELECT `id`, `auth_uid`, `employee_code`, `email` FROM `solar_employees` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 1');
+        $stmtEmpMeta->execute([$empId, $empId, $empId]);
+        if ($empMeta = $stmtEmpMeta->fetch(PDO::FETCH_ASSOC)) {
+            $linkedAuthUid = !empty($empMeta['auth_uid']) ? $empMeta['auth_uid'] : $empMeta['id'];
+            $linkedEmpCode = !empty($empMeta['employee_code']) ? $empMeta['employee_code'] : $empId;
+            $linkedEmpEmail = strtolower(trim((string)($empMeta['email'] ?? '')));
+        }
         $pdo->prepare('UPDATE `solar_employees` SET `photo_url` = ? WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ?')
             ->execute([$fileUrl, $empId, $empId, $empId]);
     } catch (Exception $e) {}
     try {
-        $pdo->prepare('UPDATE `solar_users` SET `avatar` = ?, `photo_url` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `employee_id` = ?')
-            ->execute([$fileUrl, $fileUrl, $empId, $empId]);
+        $uWhere = '`id` = ? OR `id` = ? OR `employee_id` = ? OR `employee_id` = ?';
+        $uMatchParams = [$empId, $linkedAuthUid, $empId, $linkedEmpCode];
+        if (!empty($linkedEmpEmail)) {
+            $uWhere .= ' OR LOWER(`email`) = ?';
+            $uMatchParams[] = $linkedEmpEmail;
+        }
+        $pdo->prepare("UPDATE `solar_users` SET `avatar` = ?, `photo_url` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE {$uWhere}")
+            ->execute(array_merge([$fileUrl, $fileUrl], $uMatchParams));
     } catch (Exception $e) {
         try {
-            $pdo->prepare('UPDATE `solar_users` SET `avatar` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `employee_id` = ?')
-                ->execute([$fileUrl, $empId, $empId]);
+            $pdo->prepare('UPDATE `solar_users` SET `avatar` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `id` = ? OR `employee_id` = ?')
+                ->execute([$fileUrl, $empId, $linkedAuthUid, $linkedEmpCode]);
         } catch (Exception $e2) {}
     }
 

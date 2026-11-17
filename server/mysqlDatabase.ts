@@ -101,6 +101,7 @@ class MySqlDatabaseManager {
           port: this.config.port,
           user: this.config.user,
           password: this.config.password,
+          charset: 'utf8mb4_unicode_ci',
           connectTimeout: 5000
         });
         await adminConn.query(`CREATE DATABASE IF NOT EXISTS \`${this.config.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
@@ -115,6 +116,7 @@ class MySqlDatabaseManager {
         user: this.config.user,
         password: this.config.password,
         database: this.config.database,
+        charset: 'utf8mb4_unicode_ci',
         waitForConnections: true,
         connectionLimit: 15,
         queueLimit: 0,
@@ -151,6 +153,7 @@ class MySqlDatabaseManager {
         user: cfg.user,
         password: cfg.password,
         database: cfg.database,
+        charset: 'utf8mb4_unicode_ci',
         connectTimeout: 5000
       });
       const [rows]: any = await tempConn.query('SELECT VERSION() as version');
@@ -708,6 +711,7 @@ class MySqlDatabaseManager {
             port: cfg.port,
             user: cfg.user,
             password: cfg.password,
+            charset: 'utf8mb4_unicode_ci',
             connectTimeout: 5000
           });
           await setupConn.query(`CREATE DATABASE IF NOT EXISTS \`${cfg.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
@@ -720,6 +724,7 @@ class MySqlDatabaseManager {
           user: cfg.user,
           password: cfg.password,
           database: cfg.database,
+          charset: 'utf8mb4_unicode_ci',
           multipleStatements: true
         });
         await conn.query(sql);
@@ -3943,21 +3948,22 @@ class MySqlDatabaseManager {
             passwordHash = await bcrypt.hash(`Emp@${Math.random().toString(36).slice(-8)}`, 10);
           }
 
+          const cleanPhotoUrl = String(photoUrl || '').trim();
+          const hasPhotoUrl = cleanPhotoUrl !== '';
           const targetUserId = existingUser?.id || item.id;
           if (existingUser) {
             await this.pool.query(`
               UPDATE \`solar_users\`
               SET \`name\` = ?, \`email\` = ?, \`role\` = ?, \`phone\` = ?,
                   \`department\` = ?, \`designation\` = ?, \`employee_id\` = ?,
-                  \`avatar\` = COALESCE(NULLIF(?, ''), \`avatar\`),
-                  \`photo_url\` = COALESCE(NULLIF(?, ''), \`photo_url\`),
+                  ${hasPhotoUrl ? '`avatar` = ?, `photo_url` = ?,' : ''}
                   \`is_field_worker\` = ?, \`status\` = 'ACTIVE', \`updated_at\` = CURRENT_TIMESTAMP
                   ${rawPass ? ', `password` = ?' : ''}
               WHERE \`id\` = ?
             `, [
               name, email.toLowerCase(), systemRole, phone,
               department, designation, employeeCode,
-              photoUrl, photoUrl,
+              ...(hasPhotoUrl ? [cleanPhotoUrl, cleanPhotoUrl] : []),
               isFieldWorker,
               ...(rawPass ? [passwordHash] : []),
               targetUserId
@@ -3970,7 +3976,7 @@ class MySqlDatabaseManager {
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
             `, [
               targetUserId, name, email.toLowerCase(), passwordHash, systemRole, phone,
-              department, designation, employeeCode, photoUrl || null, photoUrl || null, isFieldWorker
+              department, designation, employeeCode, cleanPhotoUrl || null, cleanPhotoUrl || null, isFieldWorker
             ]);
             console.log('[Audit][solar_users]', JSON.stringify({
               timestamp: new Date().toISOString(),
@@ -3991,15 +3997,21 @@ class MySqlDatabaseManager {
             status: 'ACTIVE'
           });
         } else if (!isActiveLogin && existingUser) {
+          const cleanPhotoUrl = String(photoUrl || '').trim();
+          const hasPhotoUrl = cleanPhotoUrl !== '';
           // Disable existing login account while still keeping is_field_worker, metadata, and photo synced
           await this.pool.query(
             `UPDATE \`solar_users\`
              SET \`name\` = ?, \`department\` = ?, \`designation\` = ?, \`employee_id\` = ?,
-                 \`is_field_worker\` = ?, \`photo_url\` = COALESCE(NULLIF(?, ''), \`photo_url\`),
-                 \`avatar\` = COALESCE(NULLIF(?, ''), \`avatar\`),
+                 \`is_field_worker\` = ?,
+                 ${hasPhotoUrl ? '`photo_url` = ?, `avatar` = ?,' : ''}
                  \`status\` = 'DISABLED', \`updated_at\` = CURRENT_TIMESTAMP
              WHERE \`id\` = ?`,
-            [name, department, designation, employeeCode, isFieldWorker, photoUrl, photoUrl, existingUser.id]
+            [
+              name, department, designation, employeeCode, isFieldWorker,
+              ...(hasPhotoUrl ? [cleanPhotoUrl, cleanPhotoUrl] : []),
+              existingUser.id
+            ]
           ).catch(() => {});
           await this.pool.query(
             "UPDATE `solar_auth_credentials` SET `status` = 'DISABLED' WHERE `user_id` = ? OR `linked_entity_id` = ? OR LOWER(`email`) = ?",
@@ -4242,18 +4254,36 @@ class MySqlDatabaseManager {
 
   public async updateEmployeePhoto(id: string, photoUrl: string): Promise<boolean> {
     if (this.pool) {
+      let linkedAuthUid = id;
+      let linkedEmpCode = id;
+      let linkedEmpEmail = '';
+      try {
+        const [empRows]: any = await this.pool.query(
+          'SELECT id, auth_uid, employee_code, email FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 1',
+          [id, id, id]
+        );
+        if (Array.isArray(empRows) && empRows.length > 0) {
+          linkedAuthUid = empRows[0].auth_uid || empRows[0].id || id;
+          linkedEmpCode = empRows[0].employee_code || id;
+          linkedEmpEmail = String(empRows[0].email || '').trim().toLowerCase();
+        }
+      } catch {}
+
       await this.pool.query(
         'UPDATE `solar_employee` SET `photo_url` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ?',
         [photoUrl, id, id, id]
       ).catch(() => {});
+
+      const uWhere = '`id` = ? OR `id` = ? OR `employee_id` = ? OR `employee_id` = ?' + (linkedEmpEmail ? ' OR LOWER(`email`) = ?' : '');
+      const uMatchParams = [id, linkedAuthUid, id, linkedEmpCode, ...(linkedEmpEmail ? [linkedEmpEmail] : [])];
       await this.pool.query(
-        'UPDATE `solar_users` SET `avatar` = ?, `photo_url` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `employee_id` = ?',
-        [photoUrl, photoUrl, id, id]
+        `UPDATE \`solar_users\` SET \`avatar\` = ?, \`photo_url\` = ?, \`updated_at\` = CURRENT_TIMESTAMP WHERE ${uWhere}`,
+        [photoUrl, photoUrl, ...uMatchParams]
       ).catch(() => {
         // Fallback if a legacy solar_users schema only has avatar
         this.pool?.query(
-          'UPDATE `solar_users` SET `avatar` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `employee_id` = ?',
-          [photoUrl, id, id]
+          'UPDATE `solar_users` SET `avatar` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? OR `id` = ? OR `employee_id` = ?',
+          [photoUrl, id, linkedAuthUid, linkedEmpCode]
         ).catch(() => {});
       });
     }
