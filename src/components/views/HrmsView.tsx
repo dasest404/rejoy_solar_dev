@@ -89,6 +89,7 @@ export const HrmsView: React.FC = () => {
   const [holidayToEdit, setHolidayToEdit] = useState<HolidayRecord | null>(null);
 
   // Delete dialog state
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
     type: 'EMPLOYEE' | 'ATTENDANCE' | 'PAYSLIP' | 'HOLIDAY';
@@ -105,14 +106,16 @@ export const HrmsView: React.FC = () => {
     details: []
   });
 
-  // Listen for storage updates across tabs or services
+  // Listen for storage and employee updates across tabs or services
   useEffect(() => {
     const handleStorageUpdate = () => {
       setLocalUpdateCounter(prev => prev + 1);
     };
     window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    window.addEventListener('solarpulse_employees_updated', handleStorageUpdate);
     return () => {
       window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+      window.removeEventListener('solarpulse_employees_updated', handleStorageUpdate);
     };
   }, []);
 
@@ -297,6 +300,7 @@ export const HrmsView: React.FC = () => {
   };
 
   const handleOpenDeleteEmployee = (emp: Employee) => {
+    setDeleteError(null);
     setDeleteDialog({
       isOpen: true,
       type: 'EMPLOYEE',
@@ -342,6 +346,7 @@ export const HrmsView: React.FC = () => {
   };
 
   const handleOpenDeleteAttendance = (rec: AttendanceRecord) => {
+    setDeleteError(null);
     setDeleteDialog({
       isOpen: true,
       type: 'ATTENDANCE',
@@ -360,11 +365,20 @@ export const HrmsView: React.FC = () => {
 
   // Confirm Delete Handler
   const handleConfirmDelete = async () => {
-    if (isDeleting) return;
+    if (isDeleting || !deleteDialog.id) return;
+    setDeleteError(null);
     setIsDeleting(true);
     try {
       if (deleteDialog.type === 'EMPLOYEE') {
-        await storageService.deleteEmployeeAsync(deleteDialog.id);
+        const deletedId = deleteDialog.id;
+        await storageService.deleteEmployeeAsync(deletedId);
+        if (employeeToEdit?.id === deletedId) {
+          setEmployeeToEdit(null);
+          setIsEmployeeModalOpen(false);
+        }
+        if (employeeForPayslip?.id === deletedId) {
+          setEmployeeForPayslip(null);
+        }
         showToast('Employee deleted from directory', 'success');
       } else if (deleteDialog.type === 'ATTENDANCE') {
         await storageService.deleteAttendanceRecordAsync(deleteDialog.id);
@@ -381,6 +395,7 @@ export const HrmsView: React.FC = () => {
       setLocalUpdateCounter(c => c + 1);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to delete record from MySQL.';
+      setDeleteError(msg);
       showToast(msg, 'error');
     } finally {
       setIsDeleting(false);
@@ -417,6 +432,7 @@ export const HrmsView: React.FC = () => {
   };
 
   const handleOpenDeleteHoliday = (holiday: HolidayRecord) => {
+    setDeleteError(null);
     setDeleteDialog({
       isOpen: true,
       type: 'HOLIDAY',
@@ -482,6 +498,7 @@ export const HrmsView: React.FC = () => {
   };
 
   const handleOpenDeletePayslip = (payslip: Payslip) => {
+    setDeleteError(null);
     setDeleteDialog({
       isOpen: true,
       type: 'PAYSLIP',
@@ -1453,9 +1470,13 @@ export const HrmsView: React.FC = () => {
         details={deleteDialog.details}
         confirmLabel="Delete Permanently"
         isProcessing={isDeleting}
+        error={deleteError}
         onConfirm={handleConfirmDelete}
         onCancel={() => {
-          if (!isDeleting) setDeleteDialog(prev => ({ ...prev, isOpen: false }));
+          if (!isDeleting) {
+            setDeleteError(null);
+            setDeleteDialog(prev => ({ ...prev, isOpen: false }));
+          }
         }}
       />
 

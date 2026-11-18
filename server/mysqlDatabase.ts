@@ -4048,51 +4048,183 @@ class MySqlDatabaseManager {
 
   public async deleteEmployee(id: string): Promise<boolean> {
     this.assertDbConnected();
-    if (this.pool) {
-      let empEmail = '';
-      let empCode = '';
-      try {
-        const [eRows]: any = await this.pool.query('SELECT employee_code, email FROM `solar_employee` WHERE `id` = ? LIMIT 1', [id]);
-        if (Array.isArray(eRows) && eRows.length > 0) {
-          empEmail = String(eRows[0].email || '').trim().toLowerCase();
-          empCode = String(eRows[0].employee_code || '').trim();
-        }
-      } catch {}
+    const matchedIds = new Set<string>([id]);
+    const matchedEmails = new Set<string>();
+    const matchedCodes = new Set<string>();
 
-      await this.pool.query('DELETE FROM `solar_employee_documents` WHERE `employee_id` = ?', [id]).catch(() => {});
-      await this.pool.query('DELETE FROM `solar_employee` WHERE `id` = ?', [id]);
-      await this.pool.query(
-        'DELETE FROM `solar_employees` WHERE `id` = ?' + (empCode ? ' OR `employee_code` = ?' : '') + (empEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, ...(empCode ? [empCode] : []), ...(empEmail ? [empEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_users` WHERE `id` = ? OR `employee_id` = ?' + (empCode ? ' OR `employee_id` = ?' : '') + (empEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, id, ...(empCode ? [empCode] : []), ...(empEmail ? [empEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_auth_credentials` WHERE `user_id` = ? OR `linked_entity_id` = ?' + (empEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, id, ...(empEmail ? [empEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_auth_sessions` WHERE `user_id` = ? OR `linked_entity_id` = ?' + (empEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, id, ...(empEmail ? [empEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_workforce_locations` WHERE `user_id` = ?' + (empEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, ...(empEmail ? [empEmail] : [])]
-      ).catch(() => {});
+    const collect = (val: any, target: Set<string>, lower = false) => {
+      const clean = String(val || '').trim();
+      if (!clean) return;
+      target.add(lower ? clean.toLowerCase() : clean);
+    };
+
+    if (this.pool) {
+      const getTableType = async (tbl: string): Promise<'NONE' | 'BASE TABLE' | 'VIEW'> => {
+        try {
+          const [rows]: any = await this.pool!.query(`SHOW FULL TABLES LIKE '${tbl}'`);
+          if (!Array.isArray(rows) || rows.length === 0) return 'NONE';
+          const type = String(Object.values(rows[0])[1] || '').toUpperCase();
+          return type === 'VIEW' ? 'VIEW' : 'BASE TABLE';
+        } catch {
+          return 'NONE';
+        }
+      };
+
+      const empBaseType = await getTableType('solar_employee');
+      const empAliasType = await getTableType('solar_employees');
+      const usersType = await getTableType('solar_users');
+
+      if (empBaseType !== 'NONE') {
+        try {
+          const [eRows]: any = await this.pool.query(
+            'SELECT id, auth_uid, employee_code, email FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 5',
+            [id, id, id]
+          );
+          for (const r of (eRows || [])) {
+            collect(r.id, matchedIds);
+            collect(r.auth_uid, matchedIds);
+            collect(r.employee_code, matchedCodes);
+            collect(r.email, matchedEmails, true);
+          }
+        } catch {}
+      }
+
+      if (usersType !== 'NONE') {
+        try {
+          const [uRows]: any = await this.pool.query(
+            'SELECT id, employee_id, email FROM `solar_users` WHERE `id` = ? OR `employee_id` = ? LIMIT 5',
+            [id, id]
+          );
+          for (const r of (uRows || [])) {
+            collect(r.id, matchedIds);
+            collect(r.employee_id, matchedCodes);
+            collect(r.email, matchedEmails, true);
+          }
+        } catch {}
+      }
+
+      const idList = Array.from(matchedIds);
+      const emailList = Array.from(matchedEmails);
+      const codeList = Array.from(matchedCodes);
+      const idPh = idList.map(() => '?').join(',');
+      const emailPh = emailList.map(() => '?').join(',');
+      const codePh = codeList.map(() => '?').join(',');
+
+      const conn = await this.pool.getConnection();
+      try {
+        await conn.beginTransaction();
+
+        await conn
+          .query(`DELETE FROM \`solar_employee_documents\` WHERE \`employee_id\` IN (${idPh})`, idList)
+          .catch(() => {});
+
+        await conn
+          .query(
+            `DELETE FROM \`solar_auth_sessions\` WHERE \`user_id\` IN (${idPh}) OR \`linked_entity_id\` IN (${idPh})` +
+              (emailList.length ? ` OR LOWER(\`email\`) IN (${emailPh})` : ''),
+            [...idList, ...idList, ...emailList]
+          )
+          .catch(() => {});
+
+        await conn
+          .query(
+            `DELETE FROM \`solar_auth_credentials\` WHERE \`user_id\` IN (${idPh}) OR \`linked_entity_id\` IN (${idPh})` +
+              (emailList.length ? ` OR LOWER(\`email\`) IN (${emailPh})` : ''),
+            [...idList, ...idList, ...emailList]
+          )
+          .catch(() => {});
+
+        await conn
+          .query(
+            `DELETE FROM \`solar_workforce_locations\` WHERE \`user_id\` IN (${idPh})` +
+              (emailList.length ? ` OR LOWER(\`email\`) IN (${emailPh})` : ''),
+            [...idList, ...emailList]
+          )
+          .catch(() => {});
+
+        await conn
+          .query(
+            `UPDATE \`solar_service_tickets\` SET \`assigned_technician_id\` = '', \`assigned_technician_name\` = '', \`assigned_to_name\` = 'Unassigned' WHERE \`assigned_technician_id\` IN (${idPh}) AND COALESCE(\`status\`, 'OPEN') NOT IN ('RESOLVED', 'CLOSED')`,
+            idList
+          )
+          .catch(() => {});
+
+        if (empBaseType === 'BASE TABLE') {
+          const eConds = [`\`id\` IN (${idPh})`, `\`auth_uid\` IN (${idPh})`];
+          const eParams: any[] = [...idList, ...idList];
+          if (codeList.length) {
+            eConds.push(`\`employee_code\` IN (${codePh})`);
+            eParams.push(...codeList);
+          }
+          if (emailList.length) {
+            eConds.push(`LOWER(\`email\`) IN (${emailPh})`);
+            eParams.push(...emailList);
+          }
+          await conn.query(`DELETE FROM \`solar_employee\` WHERE ${eConds.join(' OR ')}`, eParams);
+        }
+
+        if (empAliasType === 'BASE TABLE') {
+          const eConds = [`\`id\` IN (${idPh})`];
+          const eParams: any[] = [...idList];
+          if (codeList.length) {
+            eConds.push(`\`employee_code\` IN (${codePh})`);
+            eParams.push(...codeList);
+          }
+          if (emailList.length) {
+            eConds.push(`LOWER(\`email\`) IN (${emailPh})`);
+            eParams.push(...emailList);
+          }
+          await conn.query(`DELETE FROM \`solar_employees\` WHERE ${eConds.join(' OR ')}`, eParams);
+        }
+
+        if (usersType === 'BASE TABLE') {
+          const uConds = [`\`id\` IN (${idPh})`, `\`employee_id\` IN (${idPh})`];
+          const uParams: any[] = [...idList, ...idList];
+          if (codeList.length) {
+            uConds.push(`\`employee_id\` IN (${codePh})`);
+            uParams.push(...codeList);
+          }
+          if (emailList.length) {
+            uConds.push(`LOWER(\`email\`) IN (${emailPh})`);
+            uParams.push(...emailList);
+          }
+          await conn.query(`DELETE FROM \`solar_users\` WHERE ${uConds.join(' OR ')}`, uParams);
+        }
+
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback().catch(() => {});
+        throw err;
+      } finally {
+        conn.release();
+      }
 
       console.log('[Audit][solar_users]', JSON.stringify({
         timestamp: new Date().toISOString(),
         operation: 'DELETE',
         source: 'dbManager.deleteEmployee',
         targetUserId: id,
-        email: empEmail || undefined
+        email: Array.from(matchedEmails)[0] || undefined
       }));
     }
-    const items = this.getFallbackItems('employees').filter(e => e.id !== id);
+
+    const items = this.getFallbackItems('employees').filter(
+      e =>
+        e &&
+        !matchedIds.has(String(e.id)) &&
+        !matchedIds.has(String(e.authUid || '')) &&
+        (!e.employeeCode || !matchedCodes.has(String(e.employeeCode))) &&
+        (!e.email || !matchedEmails.has(String(e.email).trim().toLowerCase()))
+    );
     this.setFallbackItems('employees', items);
-    this.deleteFallback('users', id);
+    const fallbackUsers = this.getFallbackItems('users').filter(
+      u =>
+        u &&
+        !matchedIds.has(String(u.id)) &&
+        (!u.employeeId || (!matchedIds.has(String(u.employeeId)) && !matchedCodes.has(String(u.employeeId)))) &&
+        (!u.email || !matchedEmails.has(String(u.email).trim().toLowerCase()))
+    );
+    this.setFallbackItems('users', fallbackUsers);
     return true;
   }
 
@@ -8067,63 +8199,7 @@ class MySqlDatabaseManager {
   }
 
   public async deleteUser(id: string): Promise<boolean> {
-    this.assertDbConnected();
-    if (this.pool) {
-      let userEmail = '';
-      let empId = '';
-      try {
-        const [uRows]: any = await this.pool.query('SELECT email, employee_id FROM `solar_users` WHERE `id` = ? LIMIT 1', [id]);
-        if (Array.isArray(uRows) && uRows.length > 0) {
-          userEmail = String(uRows[0].email || '').trim().toLowerCase();
-          empId = String(uRows[0].employee_id || '').trim();
-        }
-        if (!userEmail) {
-          const [eRows]: any = await this.pool.query('SELECT email, employee_code FROM `solar_employee` WHERE `id` = ? LIMIT 1', [id]);
-          if (Array.isArray(eRows) && eRows.length > 0) {
-            userEmail = String(eRows[0].email || '').trim().toLowerCase();
-            empId = empId || String(eRows[0].employee_code || '').trim();
-          }
-        }
-      } catch {}
-
-      await this.pool.query(
-        'DELETE FROM `solar_users` WHERE `id` = ?' + (userEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, ...(userEmail ? [userEmail] : [])]
-      );
-      await this.pool.query('DELETE FROM `solar_employee_documents` WHERE `employee_id` = ?', [id]).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ?' + (empId ? ' OR `employee_code` = ?' : '') + (userEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, id, ...(empId ? [empId] : []), ...(userEmail ? [userEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_employees` WHERE `id` = ?' + (empId ? ' OR `employee_code` = ?' : '') + (userEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, ...(empId ? [empId] : []), ...(userEmail ? [userEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_auth_credentials` WHERE `user_id` = ? OR `linked_entity_id` = ?' + (userEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, id, ...(userEmail ? [userEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_auth_sessions` WHERE `user_id` = ? OR `linked_entity_id` = ?' + (userEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, id, ...(userEmail ? [userEmail] : [])]
-      ).catch(() => {});
-      await this.pool.query(
-        'DELETE FROM `solar_workforce_locations` WHERE `user_id` = ?' + (userEmail ? ' OR LOWER(`email`) = ?' : ''),
-        [id, ...(userEmail ? [userEmail] : [])]
-      ).catch(() => {});
-
-      console.log('[Audit][solar_users]', JSON.stringify({
-        timestamp: new Date().toISOString(),
-        operation: 'DELETE',
-        source: 'dbManager.deleteUser',
-        targetUserId: id,
-        email: userEmail || undefined
-      }));
-    }
-    const items = this.getFallbackItems('users').filter(u => u.id !== id);
-    this.setFallbackItems('users', items);
-    this.deleteFallback('employees', id);
-    return true;
+    return this.deleteEmployee(id);
   }
 
   public async updateUserPassword(id: string, newPass: string): Promise<boolean> {
@@ -8450,12 +8526,14 @@ class MySqlDatabaseManager {
     if (!id) return false;
     this.assertDbConnected();
 
-    switch (collection) {
+    switch (collection.toLowerCase()) {
       case 'customers': return this.deleteCustomer(id);
       case 'leads': return this.deleteLead(id);
       case 'projects': return this.deleteProject(id);
       case 'employee':
-      case 'employees': return this.deleteEmployee(id);
+      case 'employees':
+      case 'solar_employee':
+      case 'solar_employees': return this.deleteEmployee(id);
       case 'payments': return this.deletePayment(id);
       case 'expenses': return this.deleteExpense(id);
       case 'products': return this.deleteProduct(id);
@@ -8475,7 +8553,9 @@ class MySqlDatabaseManager {
       case 'service_tickets': return this.deleteServiceTicket(id);
       case 'amc_contracts': return this.deleteAMCContract(id);
       case 'notifications': return this.deleteNotification(id);
-      case 'users': return this.deleteUser(id);
+      case 'user':
+      case 'users':
+      case 'solar_users': return this.deleteUser(id);
       default: {
         throw new Error(`Collection "${collection}" is not supported for MySQL deletion.`);
       }

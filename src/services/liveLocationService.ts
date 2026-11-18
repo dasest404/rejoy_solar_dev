@@ -74,6 +74,28 @@ class LiveLocationService {
     }
   };
 
+  private handleEmployeesUpdated = (event: Event) => {
+    const detail = (event as CustomEvent)?.detail;
+    const removedIds: string[] = Array.isArray(detail?.removedIds)
+      ? detail.removedIds
+      : detail?.deletedId
+      ? [detail.deletedId]
+      : [];
+    if (removedIds.length > 0) {
+      removedIds.forEach((rawId) => {
+        const cleanId = String(rawId || '').trim();
+        if (!cleanId) return;
+        this.employeeLocations.delete(cleanId);
+        this.serverVerifiedIds.delete(cleanId);
+        this.alternateIdMap.delete(cleanId.toLowerCase());
+      });
+      this.notifyListeners();
+    }
+    if (this.trackingEnabled) {
+      this.initializeFieldWorkers();
+    }
+  };
+
   constructor() {
     // Purge any legacy persisted location caches from browser storage
     try {
@@ -94,6 +116,7 @@ class LiveLocationService {
     // 3. Re-sync field worker roster whenever employees/users/projects change in storageService
     if (typeof window !== 'undefined') {
       window.addEventListener('solarpulse_storage_updated', this.handleStorageUpdated);
+      window.addEventListener('solarpulse_employees_updated', this.handleEmployeesUpdated);
     }
   }
 

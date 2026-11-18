@@ -4466,60 +4466,232 @@ function deleteItemFromDb($pdo, $collection, $id, $actor = null) {
             $pdo->prepare('DELETE FROM `solar_service_ticket_history` WHERE `ticket_record_id` = ?')->execute([$id]);
         } catch (Exception $e) {}
     }
-    if ($collection === 'employees' || $collection === 'users') {
-        $targetEmail = '';
-        $empCode = '';
-        try {
-            $uStmt = $pdo->prepare('SELECT email, employee_id FROM `solar_users` WHERE `id` = ? LIMIT 1');
-            $uStmt->execute([$id]);
-            if ($row = $uStmt->fetch(PDO::FETCH_ASSOC)) {
-                $targetEmail = strtolower(trim((string)($row['email'] ?? '')));
-                $empCode = trim((string)($row['employee_id'] ?? ''));
+    $normCollection = strtolower(trim((string)$collection));
+    if (in_array($normCollection, ['employee', 'employees', 'solar_employee', 'solar_employees'], true)) {
+        $normCollection = 'employees';
+    } elseif (in_array($normCollection, ['user', 'users', 'solar_users'], true)) {
+        $normCollection = 'users';
+    }
+    if ($normCollection === 'employees' || $normCollection === 'users') {
+        $matchedIds = [$id];
+        $matchedEmails = [];
+        $matchedCodes = [];
+
+        $addUnique = static function (&$arr, $val, $lower = false) {
+            $clean = trim((string)$val);
+            if ($clean === '') return;
+            if ($lower) $clean = strtolower($clean);
+            if (!in_array($clean, $arr, true)) {
+                $arr[] = $clean;
             }
-        } catch (Exception $e) {}
-        try {
-            $eStmt = $pdo->prepare('SELECT email, employee_code FROM `solar_employees` WHERE `id` = ? LIMIT 1');
-            $eStmt->execute([$id]);
-            if ($row = $eStmt->fetch(PDO::FETCH_ASSOC)) {
-                if (empty($targetEmail)) $targetEmail = strtolower(trim((string)($row['email'] ?? '')));
-                if (empty($empCode)) $empCode = trim((string)($row['employee_code'] ?? ''));
+        };
+
+        $tableTypePhp = static function ($tblName) use ($pdo) {
+            try {
+                $rows = $pdo->query("SHOW FULL TABLES LIKE '$tblName'")->fetchAll(PDO::FETCH_NUM);
+                if (empty($rows)) return 'NONE';
+                $type = strtoupper((string)($rows[0][1] ?? 'BASE TABLE'));
+                return $type === 'VIEW' ? 'VIEW' : 'BASE TABLE';
+            } catch (Exception $e) {
+                return 'NONE';
             }
-        } catch (Exception $e) {}
+        };
+
+        $solarEmployeeType = $tableTypePhp('solar_employee');
+        $solarEmployeesType = $tableTypePhp('solar_employees');
+        $solarUsersType = $tableTypePhp('solar_users');
+
+        if ($solarUsersType !== 'NONE') {
+            try {
+                $uStmt = $pdo->prepare('SELECT id, email, employee_id FROM `solar_users` WHERE `id` = ? OR `employee_id` = ? LIMIT 5');
+                $uStmt->execute([$id, $id]);
+                while ($row = $uStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $addUnique($matchedIds, $row['id'] ?? '');
+                    $addUnique($matchedEmails, $row['email'] ?? '', true);
+                    $addUnique($matchedCodes, $row['employee_id'] ?? '');
+                }
+            } catch (Exception $e) {}
+        }
+
+        if ($solarEmployeeType !== 'NONE') {
+            try {
+                $eCols = $pdo->query("SHOW COLUMNS FROM `solar_employee`")->fetchAll(PDO::FETCH_COLUMN, 0) ?: [];
+                $hasAuthUid = in_array('auth_uid', array_map('strtolower', $eCols), true);
+                $sql = $hasAuthUid
+                    ? 'SELECT id, auth_uid, email, employee_code FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 5'
+                    : 'SELECT id, email, employee_code FROM `solar_employee` WHERE `id` = ? OR `employee_code` = ? LIMIT 5';
+                $e2Stmt = $pdo->prepare($sql);
+                $e2Stmt->execute($hasAuthUid ? [$id, $id, $id] : [$id, $id]);
+                while ($row = $e2Stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $addUnique($matchedIds, $row['id'] ?? '');
+                    if ($hasAuthUid) $addUnique($matchedIds, $row['auth_uid'] ?? '');
+                    $addUnique($matchedEmails, $row['email'] ?? '', true);
+                    $addUnique($matchedCodes, $row['employee_code'] ?? '');
+                }
+            } catch (Exception $e) {}
+        }
+
+        if ($solarEmployeesType === 'BASE TABLE') {
+            try {
+                $eCols = $pdo->query("SHOW COLUMNS FROM `solar_employees`")->fetchAll(PDO::FETCH_COLUMN, 0) ?: [];
+                $hasAuthUid = in_array('auth_uid', array_map('strtolower', $eCols), true);
+                $sql = $hasAuthUid
+                    ? 'SELECT id, auth_uid, email, employee_code FROM `solar_employees` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 5'
+                    : 'SELECT id, email, employee_code FROM `solar_employees` WHERE `id` = ? OR `employee_code` = ? LIMIT 5';
+                $eStmt = $pdo->prepare($sql);
+                $eStmt->execute($hasAuthUid ? [$id, $id, $id] : [$id, $id]);
+                while ($row = $eStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $addUnique($matchedIds, $row['id'] ?? '');
+                    if ($hasAuthUid) $addUnique($matchedIds, $row['auth_uid'] ?? '');
+                    $addUnique($matchedEmails, $row['email'] ?? '', true);
+                    $addUnique($matchedCodes, $row['employee_code'] ?? '');
+                }
+            } catch (Exception $e) {}
+        }
+
+        // Second pass: expand linked user/employee rows matching discovered email or code
+        if ($solarUsersType !== 'NONE' && (!empty($matchedEmails) || !empty($matchedCodes))) {
+            try {
+                $conds = [];
+                $params = [];
+                if (!empty($matchedEmails)) {
+                    $ph = implode(',', array_fill(0, count($matchedEmails), '?'));
+                    $conds[] = "LOWER(`email`) IN ($ph)";
+                    $params = array_merge($params, $matchedEmails);
+                }
+                if (!empty($matchedCodes)) {
+                    $ph = implode(',', array_fill(0, count($matchedCodes), '?'));
+                    $conds[] = "`employee_id` IN ($ph)";
+                    $params = array_merge($params, $matchedCodes);
+                }
+                if (!empty($conds)) {
+                    $u2 = $pdo->prepare('SELECT id, email, employee_id FROM `solar_users` WHERE ' . implode(' OR ', $conds));
+                    $u2->execute($params);
+                    while ($row = $u2->fetch(PDO::FETCH_ASSOC)) {
+                        $addUnique($matchedIds, $row['id'] ?? '');
+                        $addUnique($matchedEmails, $row['email'] ?? '', true);
+                        $addUnique($matchedCodes, $row['employee_id'] ?? '');
+                    }
+                }
+            } catch (Exception $e) {}
+        }
+
+        $idPlaceholders = implode(',', array_fill(0, count($matchedIds), '?'));
+        $emailPlaceholders = !empty($matchedEmails) ? implode(',', array_fill(0, count($matchedEmails), '?')) : '';
+        $codePlaceholders = !empty($matchedCodes) ? implode(',', array_fill(0, count($matchedCodes), '?')) : '';
+
+        $startedTx = !$pdo->inTransaction();
+        if ($startedTx) $pdo->beginTransaction();
+
         try {
-            $e2Stmt = $pdo->prepare('SELECT email, employee_code FROM `solar_employee` WHERE `id` = ? LIMIT 1');
-            $e2Stmt->execute([$id]);
-            if ($row = $e2Stmt->fetch(PDO::FETCH_ASSOC)) {
-                if (empty($targetEmail)) $targetEmail = strtolower(trim((string)($row['email'] ?? '')));
-                if (empty($empCode)) $empCode = trim((string)($row['employee_code'] ?? ''));
+            // 1. Delete dependent child rows cleanly before parent rows (prevents FK errors & orphaned data)
+            if ($tableTypePhp('solar_employee_documents') !== 'NONE') {
+                $pdo->prepare("DELETE FROM `solar_employee_documents` WHERE `employee_id` IN ($idPlaceholders)")->execute($matchedIds);
             }
-        } catch (Exception $e) {}
 
-        $uWhere = '`id` = ? OR `employee_id` = ?' . (!empty($empCode) ? ' OR `employee_id` = ?' : '') . (!empty($targetEmail) ? ' OR LOWER(`email`) = ?' : '');
-        $uParams = [$id, $id];
-        if (!empty($empCode)) $uParams[] = $empCode;
-        if (!empty($targetEmail)) $uParams[] = $targetEmail;
-        try { $pdo->prepare("DELETE FROM `solar_users` WHERE $uWhere")->execute($uParams); } catch (Exception $e) {}
+            if ($tableTypePhp('solar_auth_sessions') !== 'NONE') {
+                $sConds = ["`user_id` IN ($idPlaceholders)", "`linked_entity_id` IN ($idPlaceholders)"];
+                $sParams = array_merge($matchedIds, $matchedIds);
+                if (!empty($matchedEmails)) {
+                    $sConds[] = "LOWER(`email`) IN ($emailPlaceholders)";
+                    $sParams = array_merge($sParams, $matchedEmails);
+                }
+                $pdo->prepare('DELETE FROM `solar_auth_sessions` WHERE ' . implode(' OR ', $sConds))->execute($sParams);
+            }
 
-        $eWhere = '`id` = ?' . (!empty($empCode) ? ' OR `employee_code` = ?' : '') . (!empty($targetEmail) ? ' OR LOWER(`email`) = ?' : '');
-        $eParams = [$id];
-        if (!empty($empCode)) $eParams[] = $empCode;
-        if (!empty($targetEmail)) $eParams[] = $targetEmail;
-        try { $pdo->prepare("DELETE FROM `solar_employees` WHERE $eWhere")->execute($eParams); } catch (Exception $e) {}
-        try { $pdo->prepare("DELETE FROM `solar_employee` WHERE $eWhere OR `auth_uid` = ?")->execute(array_merge($eParams, [$id])); } catch (Exception $e) {}
-        try { $pdo->prepare('DELETE FROM `solar_employee_documents` WHERE `employee_id` = ?')->execute([$id]); } catch (Exception $e) {}
+            if ($tableTypePhp('solar_auth_credentials') !== 'NONE') {
+                $cConds = ["`user_id` IN ($idPlaceholders)", "`linked_entity_id` IN ($idPlaceholders)"];
+                $cParams = array_merge($matchedIds, $matchedIds);
+                if (!empty($matchedEmails)) {
+                    $cConds[] = "LOWER(`email`) IN ($emailPlaceholders)";
+                    $cParams = array_merge($cParams, $matchedEmails);
+                }
+                $pdo->prepare('DELETE FROM `solar_auth_credentials` WHERE ' . implode(' OR ', $cConds))->execute($cParams);
+            }
 
-        $cWhere = '`user_id` = ? OR `linked_entity_id` = ?' . (!empty($targetEmail) ? ' OR LOWER(`email`) = ?' : '');
-        $cParams = [$id, $id];
-        if (!empty($targetEmail)) $cParams[] = $targetEmail;
-        try { $pdo->prepare("DELETE FROM `solar_auth_credentials` WHERE $cWhere")->execute($cParams); } catch (Exception $e) {}
-        try { $pdo->prepare("DELETE FROM `solar_auth_sessions` WHERE $cWhere")->execute($cParams); } catch (Exception $e) {}
+            if ($tableTypePhp('solar_workforce_locations') !== 'NONE') {
+                $wConds = ["`user_id` IN ($idPlaceholders)"];
+                $wParams = $matchedIds;
+                if (!empty($matchedEmails)) {
+                    $wConds[] = "LOWER(`email`) IN ($emailPlaceholders)";
+                    $wParams = array_merge($wParams, $matchedEmails);
+                }
+                $pdo->prepare('DELETE FROM `solar_workforce_locations` WHERE ' . implode(' OR ', $wConds))->execute($wParams);
+            }
 
-        $wWhere = '`user_id` = ?' . (!empty($targetEmail) ? ' OR LOWER(`email`) = ?' : '');
-        $wParams = [$id];
-        if (!empty($targetEmail)) $wParams[] = $targetEmail;
-        try { $pdo->prepare("DELETE FROM `solar_workforce_locations` WHERE $wWhere")->execute($wParams); } catch (Exception $e) {}
+            // Unassign active open/in-progress service tickets pointing to deleted employee
+            if ($tableTypePhp('solar_service_tickets') !== 'NONE') {
+                try {
+                    $pdo->prepare("UPDATE `solar_service_tickets` SET `assigned_technician_id` = '', `assigned_technician_name` = '', `assigned_to_name` = 'Unassigned' WHERE `assigned_technician_id` IN ($idPlaceholders) AND COALESCE(`status`, 'OPEN') NOT IN ('RESOLVED', 'CLOSED')")
+                        ->execute($matchedIds);
+                } catch (Exception $e) {}
+            }
 
-        logSolarUsersAuditPhp('DELETE', "deleteItemFromDb($collection)", $id, $targetEmail, $actor);
+            // 2. Delete from authoritative employee table(s)
+            if ($solarEmployeeType === 'BASE TABLE') {
+                $eCols = $pdo->query("SHOW COLUMNS FROM `solar_employee`")->fetchAll(PDO::FETCH_COLUMN, 0) ?: [];
+                $hasAuthUid = in_array('auth_uid', array_map('strtolower', $eCols), true);
+                $eConds = ["`id` IN ($idPlaceholders)"];
+                $eParams = $matchedIds;
+                if ($hasAuthUid) {
+                    $eConds[] = "`auth_uid` IN ($idPlaceholders)";
+                    $eParams = array_merge($eParams, $matchedIds);
+                }
+                if (!empty($matchedCodes)) {
+                    $eConds[] = "`employee_code` IN ($codePlaceholders)";
+                    $eParams = array_merge($eParams, $matchedCodes);
+                }
+                if (!empty($matchedEmails)) {
+                    $eConds[] = "LOWER(`email`) IN ($emailPlaceholders)";
+                    $eParams = array_merge($eParams, $matchedEmails);
+                }
+                $pdo->prepare('DELETE FROM `solar_employee` WHERE ' . implode(' OR ', $eConds))->execute($eParams);
+            }
+
+            if ($solarEmployeesType === 'BASE TABLE') {
+                $eCols = $pdo->query("SHOW COLUMNS FROM `solar_employees`")->fetchAll(PDO::FETCH_COLUMN, 0) ?: [];
+                $hasAuthUid = in_array('auth_uid', array_map('strtolower', $eCols), true);
+                $eConds = ["`id` IN ($idPlaceholders)"];
+                $eParams = $matchedIds;
+                if ($hasAuthUid) {
+                    $eConds[] = "`auth_uid` IN ($idPlaceholders)";
+                    $eParams = array_merge($eParams, $matchedIds);
+                }
+                if (!empty($matchedCodes)) {
+                    $eConds[] = "`employee_code` IN ($codePlaceholders)";
+                    $eParams = array_merge($eParams, $matchedCodes);
+                }
+                if (!empty($matchedEmails)) {
+                    $eConds[] = "LOWER(`email`) IN ($emailPlaceholders)";
+                    $eParams = array_merge($eParams, $matchedEmails);
+                }
+                $pdo->prepare('DELETE FROM `solar_employees` WHERE ' . implode(' OR ', $eConds))->execute($eParams);
+            }
+
+            // 3. Delete linked ERP user record(s) so deleted employee is never re-synthesized by /bootstrap
+            if ($solarUsersType === 'BASE TABLE') {
+                $uConds = ["`id` IN ($idPlaceholders)", "`employee_id` IN ($idPlaceholders)"];
+                $uParams = array_merge($matchedIds, $matchedIds);
+                if (!empty($matchedCodes)) {
+                    $uConds[] = "`employee_id` IN ($codePlaceholders)";
+                    $uParams = array_merge($uParams, $matchedCodes);
+                }
+                if (!empty($matchedEmails)) {
+                    $uConds[] = "LOWER(`email`) IN ($emailPlaceholders)";
+                    $uParams = array_merge($uParams, $matchedEmails);
+                }
+                $pdo->prepare('DELETE FROM `solar_users` WHERE ' . implode(' OR ', $uConds))->execute($uParams);
+            }
+
+            if ($startedTx) $pdo->commit();
+        } catch (Exception $e) {
+            if ($startedTx && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        logSolarUsersAuditPhp('DELETE', "deleteItemFromDb($normCollection)", $id, $matchedEmails[0] ?? '', $actor);
     } elseif ($collection === 'customers') {
         $custEmail = '';
         try {
@@ -5391,10 +5563,18 @@ if ($method === 'PUT' && preg_match('#^/users/([^/]+)/?$#', $cleanPath, $matches
 if ($method === 'DELETE' && preg_match('#^/users/([^/]+)/?$#', $cleanPath, $matches)) {
     $userId = urldecode($matches[1]);
     $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
     $actor = requireAdminUserPhp($pdo);
-    deleteItemFromDb($pdo, 'users', $userId, $actor);
-    http_response_code(200);
-    echo json_encode(['success' => true, 'message' => 'User deleted from MySQL successfully.']);
+    try {
+        deleteItemFromDb($pdo, 'users', $userId, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'deletedId' => $userId, 'message' => 'User deleted from MySQL successfully.']);
+    } catch (Exception $e) {
+        $exCode = intval($e->getCode());
+        $statusCode = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+        http_response_code($statusCode);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+    }
     exit;
 }
 
@@ -5838,9 +6018,16 @@ if (preg_match('#^/(?:employees|employee)/([^/]+)/?$#', $cleanPath, $matches)) {
         }
         if ($method === 'DELETE') {
             $actor = requireAdminOrHrUserPhp($pdo);
-            deleteItemFromDb($pdo, 'employees', $empId, $actor);
-            http_response_code(200);
-            echo json_encode(['success' => true, 'message' => 'Employee deleted from MySQL.']);
+            try {
+                deleteItemFromDb($pdo, 'employees', $empId, $actor);
+                http_response_code(200);
+                echo json_encode(['success' => true, 'deletedId' => $empId, 'message' => 'Employee deleted from MySQL.']);
+            } catch (Exception $e) {
+                $exCode = intval($e->getCode());
+                $statusCode = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+                http_response_code($statusCode);
+                echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+            }
             exit;
         }
     }
@@ -7493,9 +7680,9 @@ if ($method === 'POST' && in_array($cleanPath, ['/sync/push', '/sync/push/'])) {
         // Handle delete
         $deleteId = $item['id'] ?? ($body['id'] ?? (is_string($item) ? $item : null));
         if ($deleteId && $action === 'delete') {
-            deleteItemFromDb($pdo, $collection, $deleteId, $actor);
+            deleteItemFromDb($pdo, $normCol, $deleteId, $actor);
             http_response_code(200);
-            echo json_encode(['success' => true, 'message' => "Deleted record $deleteId from $collection in MySQL"]);
+            echo json_encode(['success' => true, 'deletedId' => $deleteId, 'message' => "Deleted record $deleteId from $collection in MySQL"]);
             exit;
         }
 

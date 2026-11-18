@@ -15,6 +15,7 @@ interface DeleteConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   isProcessing?: boolean;
+  error?: string | null;
 }
 
 export const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
@@ -25,7 +26,8 @@ export const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
   confirmLabel = 'Delete Permanently',
   onConfirm,
   onCancel,
-  isProcessing = false
+  isProcessing = false,
+  error = null
 }) => {
   if (!isOpen) return null;
 
@@ -71,6 +73,15 @@ export const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
                     </span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {error && (
+              <div
+                role="alert"
+                className="mt-3 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-medium text-rose-700"
+              >
+                {error}
               </div>
             )}
           </div>

@@ -129,6 +129,7 @@ export const UserManagementView: React.FC = () => {
   // Delete User Confirmation states
   const [deleteConfirmUser, setDeleteConfirmUser] = useState<Employee | null>(null);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [deleteUserError, setDeleteUserError] = useState<string | null>(null);
 
   // Available employee roles (excludes Customer role)
   const employeeRoleDefinitions = useMemo(() => {
@@ -179,8 +180,10 @@ export const UserManagementView: React.FC = () => {
     };
 
     window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    window.addEventListener('solarpulse_employees_updated', handleStorageUpdate);
     return () => {
       window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+      window.removeEventListener('solarpulse_employees_updated', handleStorageUpdate);
     };
   }, []);
 
@@ -356,17 +359,27 @@ export const UserManagementView: React.FC = () => {
 
   // Delete User permanently from MySQL across coupled tables
   const handleConfirmDeleteUser = async () => {
-    if (!deleteConfirmUser) return;
+    if (!deleteConfirmUser || isDeletingUser) return;
+    const targetUser = deleteConfirmUser;
+    setDeleteUserError(null);
     setIsDeletingUser(true);
     try {
-      await apiClient.deleteUser(deleteConfirmUser.id);
-      await storageService.hydrateFromBackend();
+      await storageService.deleteUserAsync(targetUser.id);
       setEmployees(loadMergedPersonnel());
+      if (editingEmployee?.id === targetUser.id) {
+        setEditingEmployee(null);
+        setIsModalOpen(false);
+      }
+      if (resetModalUser?.id === targetUser.id) {
+        setResetModalUser(null);
+      }
       triggerRefresh();
-      showToast(`User ${deleteConfirmUser.name} permanently deleted from MySQL.`, 'success');
+      showToast(`User ${targetUser.name} permanently deleted from MySQL.`, 'success');
       setDeleteConfirmUser(null);
     } catch (err: any) {
-      showToast(err?.message || 'Failed to delete user from MySQL.', 'error');
+      const msg = err?.message || 'Failed to delete user from MySQL.';
+      setDeleteUserError(msg);
+      showToast(msg, 'error');
     } finally {
       setIsDeletingUser(false);
     }
@@ -827,7 +840,10 @@ export const UserManagementView: React.FC = () => {
                             </button>
                             <button
                               type="button"
-                              onClick={() => setDeleteConfirmUser(emp)}
+                              onClick={() => {
+                                setDeleteUserError(null);
+                                setDeleteConfirmUser(emp);
+                              }}
                               disabled={isRootAdmin || emp.id === currentUser?.id}
                               className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
                                 isRootAdmin || emp.id === currentUser?.id
@@ -1175,10 +1191,24 @@ export const UserManagementView: React.FC = () => {
               </div>
             </div>
 
+            {deleteUserError && (
+              <div
+                role="alert"
+                className="mb-3 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-medium text-rose-700"
+              >
+                {deleteUserError}
+              </div>
+            )}
+
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setDeleteConfirmUser(null)}
+                onClick={() => {
+                  if (!isDeletingUser) {
+                    setDeleteUserError(null);
+                    setDeleteConfirmUser(null);
+                  }
+                }}
                 disabled={isDeletingUser}
                 className="px-3.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
               >

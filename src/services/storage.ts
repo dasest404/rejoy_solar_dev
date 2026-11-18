@@ -269,6 +269,7 @@ class StorageService {
       this.bootstrapError = null;
       this.lastSyncError = null;
       window.dispatchEvent(new Event('solarpulse_storage_updated'));
+      this.notifyEmployeesUpdated({ action: 'hydrate' });
     } catch (e: any) {
       const errMsg = e?.message || 'Failed to load data from MySQL backend';
       console.error('[Storage] Backend MySQL bootstrap failed:', errMsg);
@@ -352,6 +353,116 @@ class StorageService {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('solarpulse_storage_updated'));
     }
+  }
+
+  private notifyEmployeesUpdated(detail?: Record<string, any>): void {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('solarpulse_employees_updated', { detail: detail || {} }));
+    }
+  }
+
+  private removePersonnelFromMemStore(
+    id: string,
+    extraIdentifiers?: { authUid?: string; employeeCode?: string; email?: string }
+  ): { removedIds: string[] } {
+    const rawEmployees = this.get<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees);
+    const mergedEmployees = this.getEmployees();
+    const rawUsers = this.getUsers();
+
+    const idSet = new Set<string>();
+    const emailSet = new Set<string>();
+
+    const collectId = (val?: any) => {
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        idSet.add(String(val).trim());
+      }
+    };
+    const collectEmail = (val?: any) => {
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        emailSet.add(String(val).trim().toLowerCase());
+      }
+    };
+
+    collectId(id);
+    if (extraIdentifiers?.authUid) collectId(extraIdentifiers.authUid);
+    if (extraIdentifiers?.employeeCode) collectId(extraIdentifiers.employeeCode);
+    if (extraIdentifiers?.email) collectEmail(extraIdentifiers.email);
+
+    // First pass: find matching records across rawEmployees, mergedEmployees, and rawUsers
+    const matchesAny = (rec: any): boolean => {
+      if (!rec) return false;
+      const recEmail = (rec.email || '').trim().toLowerCase();
+      return (
+        (rec.id && idSet.has(String(rec.id).trim())) ||
+        (rec.authUid && idSet.has(String(rec.authUid).trim())) ||
+        (rec.employeeCode && idSet.has(String(rec.employeeCode).trim())) ||
+        (rec.employeeId && idSet.has(String(rec.employeeId).trim())) ||
+        (recEmail !== '' && emailSet.has(recEmail))
+      );
+    };
+
+    [...rawEmployees, ...mergedEmployees, ...rawUsers].forEach(rec => {
+      if (matchesAny(rec)) {
+        collectId(rec.id);
+        collectId(rec.authUid);
+        collectId(rec.employeeCode);
+        collectId(rec.employeeId);
+        collectEmail(rec.email);
+      }
+    });
+
+    // Second pass in case linked user/employee had a different email/authUid discovered in first pass
+    [...rawEmployees, ...mergedEmployees, ...rawUsers].forEach(rec => {
+      if (matchesAny(rec)) {
+        collectId(rec.id);
+        collectId(rec.authUid);
+        collectId(rec.employeeCode);
+        collectId(rec.employeeId);
+        collectEmail(rec.email);
+      }
+    });
+
+    this.memStore.set(
+      STORAGE_KEYS.EMPLOYEES,
+      rawEmployees.filter(e => !matchesAny(e))
+    );
+
+    this.memStore.set(
+      STORAGE_KEYS.USERS,
+      rawUsers.filter(u => !matchesAny(u))
+    );
+
+    // Unassign active open/in-progress service tickets tied to deleted personnel
+    const rawTickets = this.get<ServiceTicket[]>(STORAGE_KEYS.SERVICE_TICKETS, initialServiceTickets);
+    if (Array.isArray(rawTickets) && rawTickets.length > 0) {
+      let ticketsChanged = false;
+      const updatedTickets = rawTickets.map(ticket => {
+        if (!ticket) return ticket;
+        const ticketStatus = String(ticket.status || '').toUpperCase();
+        if (ticketStatus === 'RESOLVED' || ticketStatus === 'CLOSED' || ticketStatus === 'CANCELLED') {
+          return ticket;
+        }
+        const techId = ticket.assignedTechnicianId ? String(ticket.assignedTechnicianId).trim() : '';
+        const altId = (ticket as any).assignedToId ? String((ticket as any).assignedToId).trim() : '';
+        if ((techId && idSet.has(techId)) || (altId && idSet.has(altId))) {
+          ticketsChanged = true;
+          return {
+            ...ticket,
+            assignedTechnicianId: undefined,
+            assignedTechnicianName: undefined,
+            assignedToId: undefined,
+            assignedToName: 'Unassigned',
+            status: ticketStatus === 'ASSIGNED' ? 'OPEN' : ticket.status
+          } as ServiceTicket;
+        }
+        return ticket;
+      });
+      if (ticketsChanged) {
+        this.memStore.set(STORAGE_KEYS.SERVICE_TICKETS, updatedTickets);
+      }
+    }
+
+    return { removedIds: Array.from(idSet) };
   }
 
   private async confirmSyncPush<T = any>(collection: string, item: T): Promise<T> {
@@ -1779,6 +1890,7 @@ class StorageService {
     }
 
     this.notifyStorageUpdated();
+    this.notifyEmployeesUpdated({ action: 'upsert', employeeId: saved.id });
     return saved;
   }
 
@@ -1794,19 +1906,37 @@ class StorageService {
   }
 
   async deleteEmployeeAsync(id: string): Promise<void> {
-    await this.confirmSyncDelete('employees', id);
-    const rawEmployees = this.get<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees);
-    const target = rawEmployees.find(e => e.id === id);
-    const targetEmail = (target?.email || '').trim().toLowerCase();
-    this.memStore.set(
-      STORAGE_KEYS.EMPLOYEES,
-      rawEmployees.filter(e => e.id !== id)
+    const targetEmp = this.getEmployees().find(
+      e => e.id === id || e.authUid === id || e.employeeCode === id
     );
-    const users = this.getUsers().filter(
-      u => u && u.id !== id && (!targetEmail || (u.email || '').trim().toLowerCase() !== targetEmail)
+    const targetUser = this.getUsers().find(
+      u => u && (u.id === id || u.authUid === id || u.employeeId === id)
     );
-    this.memStore.set(STORAGE_KEYS.USERS, users);
+
+    try {
+      await apiClient.deleteEmployee(id);
+      this.lastSyncError = null;
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      const isRouteMissing =
+        msg.includes('API endpoint not found') ||
+        msg.includes('Cannot DELETE') ||
+        msg.includes('HTTP 405');
+      if (isRouteMissing) {
+        await this.confirmSyncDelete('employees', id);
+      } else {
+        throw err;
+      }
+    }
+
+    const { removedIds } = this.removePersonnelFromMemStore(id, {
+      authUid: targetEmp?.authUid,
+      employeeCode: targetEmp?.employeeCode,
+      email: targetEmp?.email || targetUser?.email
+    });
+
     this.notifyStorageUpdated();
+    this.notifyEmployeesUpdated({ action: 'delete', deletedId: id, removedIds });
   }
 
   async importEmployees(employees: any[]): Promise<{
@@ -1848,6 +1978,27 @@ class StorageService {
     const users = snapshot.filter(u => u.id !== id);
     this.memStore.set(STORAGE_KEYS.USERS, users);
     this.deleteSync('users', id, snapshot);
+  }
+
+  async deleteUserAsync(id: string): Promise<void> {
+    const targetUser = this.getUsers().find(
+      u => u && (u.id === id || u.authUid === id || u.employeeId === id)
+    );
+    const targetEmp = this.getEmployees().find(
+      e => e.id === id || e.authUid === id || e.employeeCode === id
+    );
+
+    await apiClient.deleteUser(id);
+    this.lastSyncError = null;
+
+    const { removedIds } = this.removePersonnelFromMemStore(id, {
+      authUid: targetEmp?.authUid,
+      employeeCode: targetEmp?.employeeCode,
+      email: targetUser?.email || targetEmp?.email
+    });
+
+    this.notifyStorageUpdated();
+    this.notifyEmployeesUpdated({ action: 'delete', deletedId: id, removedIds });
   }
 
   // --- Attendance ---

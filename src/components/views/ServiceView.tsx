@@ -129,6 +129,28 @@ export const ServiceView: React.FC = () => {
     loadTechnicians();
   }, [loadTechnicians]);
 
+  // Immediately sync eligible technician dropdown & open ticket assignment views when employees change
+  useEffect(() => {
+    const handleEmployeesUpdated = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      const removedIds: string[] = Array.isArray(detail?.removedIds)
+        ? detail.removedIds
+        : detail?.deletedId
+        ? [detail.deletedId]
+        : [];
+      if (removedIds.length > 0) {
+        const removedSet = new Set(removedIds.map(id => String(id)));
+        setEligibleTechnicians(prev => prev.filter(t => !removedSet.has(String(t.id))));
+        setLocalVersion(v => v + 1);
+      }
+      loadTechnicians();
+    };
+    window.addEventListener('solarpulse_employees_updated', handleEmployeesUpdated);
+    return () => {
+      window.removeEventListener('solarpulse_employees_updated', handleEmployeesUpdated);
+    };
+  }, [loadTechnicians]);
+
   const tickets = useMemo(() => {
     const all = storageService.getServiceTickets();
     if (isCustomer && currentCustomer) {

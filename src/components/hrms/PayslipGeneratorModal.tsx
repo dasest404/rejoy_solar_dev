@@ -342,6 +342,14 @@ export const PayslipGeneratorModal: React.FC<PayslipGeneratorModalProps> = ({
     }
   }, [isOpen, existingPayslip, initialEmployee, allEmployees]);
 
+  // Keep selectedEmployeeId valid if allEmployees changes while modal is open
+  useEffect(() => {
+    if (!isOpen || existingPayslip) return;
+    if (selectedEmployeeId && !allEmployees.some(e => e.id === selectedEmployeeId)) {
+      setSelectedEmployeeId(allEmployees[0]?.id || '');
+    }
+  }, [isOpen, existingPayslip, allEmployees, selectedEmployeeId]);
+
   // Automatically sync verified daily fuel logs into additionalExpenses whenever available
   useEffect(() => {
     if (!isOpen || !currentEmployee) return;
