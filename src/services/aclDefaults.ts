@@ -746,13 +746,22 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     riskLevel: 'CRITICAL'
   },
   {
-    id: 'hrms.holidays',
+    id: 'hrms.leave_apply',
     domain: 'hrms',
     domainLabel: 'HRMS, Attendance & Payroll',
-    name: 'Manage Holiday Calendar & Rules',
-    description: 'Add, edit, delete, and reset official company holiday schedules',
-    actions: ['view', 'create', 'edit', 'delete'],
-    riskLevel: 'MEDIUM'
+    name: 'Apply & Track Own Leaves',
+    description: 'Submit leave applications, check remaining leave balances, and cancel pending requests',
+    actions: ['view', 'create'],
+    riskLevel: 'LOW'
+  },
+  {
+    id: 'hrms.leave_review',
+    domain: 'hrms',
+    domainLabel: 'HRMS, Attendance & Payroll',
+    name: 'Review, Approve & Reject Leaves',
+    description: 'Review team leave applications, approve or reject requests with remarks, and audit team balances',
+    actions: ['view', 'approve'],
+    riskLevel: 'HIGH'
   },
   {
     id: 'hrms.delete',
@@ -1041,7 +1050,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'inventory.hub_view', 'inventory.view', 'inventory.products_manage', 'inventory.bom_edit', 'inventory.bom_manage',
     'inventory.vendors_view', 'inventory.purchase_orders', 'inventory.sales_returns', 'inventory.purchase_returns',
     'finance.view', 'finance.expenses', 'finance.budgets', 'finance.project_costing', 'finance.reports',
-    'hrms.view', 'hrms.attendance_punch',
+    'hrms.view', 'hrms.attendance_punch', 'hrms.leave_apply',
     'service.tickets_view', 'service.tickets_create',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'
@@ -1052,7 +1061,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'crm.leads.view',
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'survey.view', 'survey.submit',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1061,7 +1070,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'survey.view', 'survey.submit',
     'service.tickets_view', 'service.tickets_resolve',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1074,7 +1083,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'survey.view',
     'inventory.hub_view', 'inventory.view', 'inventory.bom_manage', 'inventory.vendors_view', 'inventory.sales_returns',
     'finance.view', 'finance.reports',
-    'hrms.view', 'hrms.attendance_punch',
+    'hrms.view', 'hrms.attendance_punch', 'hrms.leave_apply',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
@@ -1087,7 +1096,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'projects.view', 'projects.workflows_view',
     'survey.view',
     'inventory.hub_view', 'inventory.view', 'inventory.sales_returns',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1095,7 +1104,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view',
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1103,7 +1112,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view',
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1111,7 +1120,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view',
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1119,7 +1128,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view',
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'settings.view'
   ]),
 
@@ -1127,7 +1136,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view',
     'projects.view', 'projects.stage_checklist', 'projects.stage_photos', 'projects.workflows_view',
     'inventory.view',
-    'hrms.attendance_punch',
+    'hrms.attendance_punch', 'hrms.leave_apply',
     'service.tickets_view', 'service.tickets_resolve',
     'settings.view'
   ]),
@@ -1136,7 +1145,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view', 'control_center.view',
     'projects.view', 'projects.workflows_view',
     'inventory.hub_view', 'inventory.view',
-    'hrms.view', 'hrms.attendance_punch',
+    'hrms.view', 'hrms.attendance_punch', 'hrms.leave_apply',
     'service.tickets_view', 'service.tickets_create', 'service.tickets_resolve', 'service.amc_manage',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'
@@ -1150,7 +1159,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'finance.view', 'finance.invoices', 'finance.receipts', 'finance.tally_sync', 'finance.audit', 'finance.expenses',
     'finance.ledger', 'finance.vendors', 'finance.banking', 'finance.tax', 'finance.budgets', 'finance.assets',
     'finance.project_costing', 'finance.reports', 'finance.settings',
-    'hrms.view', 'hrms.attendance_punch', 'hrms.payroll',
+    'hrms.view', 'hrms.attendance_punch', 'hrms.leave_apply', 'hrms.payroll',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),
@@ -1158,7 +1167,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
   'HR Manager': createPermissions([
     'dashboard.view',
     'projects.view', 'projects.workflows_view',
-    'hrms.view', 'hrms.attendance_punch', 'hrms.manage', 'hrms.payroll', 'hrms.holidays', 'hrms.delete',
+    'hrms.view', 'hrms.attendance_punch', 'hrms.leave_apply', 'hrms.leave_review', 'hrms.manage', 'hrms.payroll', 'hrms.delete',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'
   ]),

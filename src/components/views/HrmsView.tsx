@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
 import { apiClient } from '../../services/apiClient';
-import { Employee, AttendanceRecord, Payslip, HolidayRecord } from '../../types/solar';
+import { Employee, AttendanceRecord, Payslip } from '../../types/solar';
 import { attendanceBelongsToEmployee } from '../../utils/employeeMatching';
 import { getCurrentGPSPosition } from '../../services/gps';
 import { EmployeeModal } from '../hrms/EmployeeModal';
@@ -11,14 +11,13 @@ import { AttendanceModal } from '../hrms/AttendanceModal';
 import { DeleteConfirmDialog } from '../hrms/DeleteConfirmDialog';
 import { PayslipGeneratorModal } from '../hrms/PayslipGeneratorModal';
 import { PayslipViewModal } from '../hrms/PayslipViewModal';
-import { HolidayModal } from '../hrms/HolidayModal';
-import { HolidayCalendarView } from '../hrms/HolidayCalendarView';
-import { HolidayManagementView } from '../hrms/HolidayManagementView';
+import { LeaveManagementView } from '../hrms/LeaveManagementView';
 import { getCurrentSalaryMonth, getYearGroupedSalaryPeriods } from '../../utils/payrollPeriods';
 import {
   MapPin,
   Clock,
   Calendar,
+  CalendarPlus,
   Plus,
   FileSpreadsheet,
   Phone,
@@ -38,8 +37,9 @@ import {
   MinusCircle,
   Sparkles,
   CheckCircle2,
-  ShieldCheck,
-  Key
+  Key,
+  Landmark,
+  HeartPulse
 } from 'lucide-react';
 
 const formatINR = (val: number | string | undefined | null): string => {
@@ -54,19 +54,22 @@ export const HrmsView: React.FC = () => {
   const { currentUser, hasPermission } = useAuth();
 
   const canManageHr = hasPermission('hrms.manage');
+  const canViewDirectory = hasPermission('hrms.view') || canManageHr;
   const canProcessPayroll = hasPermission('hrms.payroll');
-  const canManageHolidays = hasPermission('hrms.holidays');
   const canDeleteHr = hasPermission('hrms.delete');
   const canPunchAttendance = hasPermission('hrms.attendance_punch') || canManageHr;
+  const canApplyLeave = hasPermission('hrms.leave_apply') || canManageHr || currentUser?.role !== 'Customer';
+  const canReviewLeaves = hasPermission('hrms.leave_review') || canManageHr;
 
   const [activeTab, setActiveTab] = useState<
-    'EMPLOYEES' | 'ATTENDANCE' | 'PAYROLL' | 'HOLIDAYS' | 'HOLIDAY_MANAGEMENT'
-  >('EMPLOYEES');
+    'EMPLOYEES' | 'ATTENDANCE' | 'PAYROLL' | 'LEAVES'
+  >(() => (hasPermission('hrms.view') || hasPermission('hrms.manage') ? 'EMPLOYEES' : 'LEAVES'));
   const [searchTerm, setSearchTerm] = useState('');
   const [isPunching, setIsPunching] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [updatingFuelId, setUpdatingFuelId] = useState<string | null>(null);
   const [localUpdateCounter, setLocalUpdateCounter] = useState(0);
+  const [leaveApplySignal, setLeaveApplySignal] = useState(0);
 
   // Modal states
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
@@ -84,15 +87,11 @@ export const HrmsView: React.FC = () => {
   const [payslipToEdit, setPayslipToEdit] = useState<Payslip | null>(null);
   const [payslipToView, setPayslipToView] = useState<Payslip | null>(null);
 
-  // Holiday states
-  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
-  const [holidayToEdit, setHolidayToEdit] = useState<HolidayRecord | null>(null);
-
   // Delete dialog state
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
-    type: 'EMPLOYEE' | 'ATTENDANCE' | 'PAYSLIP' | 'HOLIDAY';
+    type: 'EMPLOYEE' | 'ATTENDANCE' | 'PAYSLIP';
     id: string;
     title: string;
     description: string;
@@ -129,10 +128,6 @@ export const HrmsView: React.FC = () => {
 
   const payslips = useMemo(() => {
     return storageService.getPayslips();
-  }, [refreshTrigger, localUpdateCounter]);
-
-  const holidays = useMemo(() => {
-    return storageService.getHolidays();
   }, [refreshTrigger, localUpdateCounter]);
 
   // Map each employee to their payslip for the selectedCycle
@@ -386,9 +381,6 @@ export const HrmsView: React.FC = () => {
       } else if (deleteDialog.type === 'PAYSLIP') {
         await storageService.deletePayslipAsync(deleteDialog.id);
         showToast('Payslip record deleted successfully', 'success');
-      } else if (deleteDialog.type === 'HOLIDAY') {
-        await storageService.deleteHolidayAsync(deleteDialog.id);
-        showToast('Holiday record deleted successfully', 'success');
       }
       setDeleteDialog(prev => ({ ...prev, isOpen: false }));
       triggerRefresh();
@@ -399,65 +391,6 @@ export const HrmsView: React.FC = () => {
       showToast(msg, 'error');
     } finally {
       setIsDeleting(false);
-    }
-  };
-
-  // Holiday Handlers
-  const handleOpenAddHoliday = () => {
-    setHolidayToEdit(null);
-    setIsHolidayModalOpen(true);
-  };
-
-  const handleOpenEditHoliday = (holiday: HolidayRecord) => {
-    setHolidayToEdit(holiday);
-    setIsHolidayModalOpen(true);
-  };
-
-  const handleSaveHoliday = async (holiday: HolidayRecord) => {
-    try {
-      await storageService.saveHolidayAsync(holiday);
-      setLocalUpdateCounter(c => c + 1);
-      triggerRefresh();
-      showToast(
-        holidayToEdit
-          ? `Holiday "${holiday.name}" updated successfully.`
-          : `Holiday "${holiday.name}" added to official calendar.`,
-        'success'
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to save holiday to MySQL.';
-      showToast(msg, 'error');
-      throw err;
-    }
-  };
-
-  const handleOpenDeleteHoliday = (holiday: HolidayRecord) => {
-    setDeleteError(null);
-    setDeleteDialog({
-      isOpen: true,
-      type: 'HOLIDAY',
-      id: holiday.id,
-      title: `Delete Holiday "${holiday.name}"?`,
-      description: `Are you sure you want to permanently remove this holiday from the schedule?`,
-      details: [
-        { label: 'Holiday Name', value: holiday.name },
-        { label: 'Date', value: holiday.date },
-        { label: 'Classification', value: holiday.type },
-        { label: 'Rule', value: holiday.isOptional ? 'Optional / Floating' : 'Mandatory Paid' }
-      ]
-    });
-  };
-
-  const handleResetStandardHolidays = async () => {
-    try {
-      await storageService.resetStandardHolidaysAsync();
-      setLocalUpdateCounter(c => c + 1);
-      triggerRefresh();
-      showToast('Holiday schedule reset successfully.', 'success');
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to reset holidays in MySQL.';
-      showToast(msg, 'error');
-      throw err;
     }
   };
 
@@ -621,15 +554,18 @@ export const HrmsView: React.FC = () => {
             </button>
           )}
 
-          {/* Add Holiday button if authorized and on holiday tabs */}
-          {canManageHolidays && (activeTab === 'HOLIDAYS' || activeTab === 'HOLIDAY_MANAGEMENT') && (
+          {/* Quick Apply Leave CTA */}
+          {canApplyLeave && (
             <button
               type="button"
-              onClick={handleOpenAddHoliday}
+              onClick={() => {
+                setActiveTab('LEAVES');
+                setLeaveApplySignal(s => s + 1);
+              }}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-800 bg-amber-100/80 hover:bg-amber-200/80 border border-amber-300/80 rounded-xl transition-all shadow-2xs cursor-pointer"
             >
-              <Plus className="w-4 h-4 text-amber-800" />
-              <span>Add Holiday</span>
+              <CalendarPlus className="w-4 h-4 text-amber-800" />
+              <span>Apply Leave</span>
             </button>
           )}
 
@@ -648,53 +584,49 @@ export const HrmsView: React.FC = () => {
       {/* Navigation Tabs and Search */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
         <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl">
-          <button
-            type="button"
-            onClick={() => setActiveTab('EMPLOYEES')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'EMPLOYEES' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Team Directory ({employees.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('ATTENDANCE')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'ATTENDANCE' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Daily GPS Attendance ({attendance.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('PAYROLL')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'PAYROLL' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Monthly Salary Register
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('HOLIDAYS')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-              activeTab === 'HOLIDAYS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5 text-amber-700" />
-            <span>Holiday Calendar</span>
-          </button>
-          {canManageHolidays && (
+          {canViewDirectory && (
             <button
               type="button"
-              onClick={() => setActiveTab('HOLIDAY_MANAGEMENT')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'HOLIDAY_MANAGEMENT' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              onClick={() => setActiveTab('EMPLOYEES')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'EMPLOYEES' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <ShieldCheck className="w-3.5 h-3.5 text-indigo-700" />
-              <span>Manage Holidays</span>
+              Team Directory ({employees.length})
+            </button>
+          )}
+          {(canPunchAttendance || canViewDirectory) && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('ATTENDANCE')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'ATTENDANCE' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Daily GPS Attendance ({attendance.length})
+            </button>
+          )}
+          {(canProcessPayroll || canManageHr) && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('PAYROLL')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'PAYROLL' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Monthly Salary Register
+            </button>
+          )}
+          {(canApplyLeave || canReviewLeaves) && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('LEAVES')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'LEAVES' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5 text-amber-700" />
+              <span>Leave Management</span>
             </button>
           )}
         </div>
@@ -849,6 +781,27 @@ export const HrmsView: React.FC = () => {
                         <p className="flex items-center gap-2 truncate text-slate-700 font-medium">
                           <MapPin className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                           <span className="truncate">{e.currentSiteLocation}</span>
+                        </p>
+                      )}
+                      {(e.bankName || e.bankAccountNumber || e.esicNumber) && (
+                        <p className="flex items-center gap-2 truncate text-[11px] text-slate-600">
+                          <Landmark className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="truncate">
+                            {[
+                              e.bankName,
+                              e.bankAccountNumber ? `A/c ${e.bankAccountNumber}` : '',
+                              e.ifscCode ? `(${e.ifscCode})` : '',
+                              e.esicNumber ? `ESIC: ${e.esicNumber}` : ''
+                            ].filter(Boolean).join(' • ')}
+                          </span>
+                        </p>
+                      )}
+                      {(e.emergencyContactPerson || e.emergencyContactNumber) && (
+                        <p className="flex items-center gap-2 truncate text-[11px] text-slate-600">
+                          <HeartPulse className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                          <span className="truncate">
+                            Emergency: {[e.emergencyContactPerson, e.emergencyContactNumber].filter(Boolean).join(' — ')}
+                          </span>
                         </p>
                       )}
                       <div className="pt-1 flex items-center gap-1.5 flex-wrap">
@@ -1408,25 +1361,12 @@ export const HrmsView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 4: HOLIDAY CALENDAR */}
-      {activeTab === 'HOLIDAYS' && (
-        <HolidayCalendarView
-          holidays={holidays}
-          userDepartment={currentUser?.department}
-          isAdmin={canManageHolidays}
-          onNavigateToManagement={() => setActiveTab('HOLIDAY_MANAGEMENT')}
-        />
-      )}
-
-      {/* TAB 5: MANAGE HOLIDAYS */}
-      {activeTab === 'HOLIDAY_MANAGEMENT' && canManageHolidays && (
-        <HolidayManagementView
-          holidays={holidays}
-          isAdmin={canManageHolidays}
-          onAddHoliday={handleOpenAddHoliday}
-          onEditHoliday={handleOpenEditHoliday}
-          onDeleteHoliday={handleOpenDeleteHoliday}
-          onResetStandardHolidays={handleResetStandardHolidays}
+      {/* TAB 4: EMPLOYEE LEAVE MANAGEMENT */}
+      {activeTab === 'LEAVES' && (
+        <LeaveManagementView
+          employees={employees}
+          searchTerm={searchTerm}
+          openApplySignal={leaveApplySignal}
         />
       )}
 
@@ -1447,20 +1387,6 @@ export const HrmsView: React.FC = () => {
         recordToEdit={attendanceToEdit}
         employees={employees}
       />
-
-      {/* Add / Edit Holiday Modal */}
-      {isHolidayModalOpen && (
-        <HolidayModal
-          isOpen={isHolidayModalOpen}
-          onClose={() => {
-            setIsHolidayModalOpen(false);
-            setHolidayToEdit(null);
-          }}
-          onSave={handleSaveHoliday}
-          holidayToEdit={holidayToEdit}
-          currentUserName={currentUser?.name || 'HR Administrator'}
-        />
-      )}
 
       {/* Delete Confirmation Dialog */}
       <DeleteConfirmDialog

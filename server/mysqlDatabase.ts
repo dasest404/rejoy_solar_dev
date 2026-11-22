@@ -391,6 +391,12 @@ class MySqlDatabaseManager {
             \`salary_monthly\` DECIMAL(12,2) DEFAULT 0.00,
             \`status\` VARCHAR(32) DEFAULT 'ACTIVE',
             \`current_site_location\` VARCHAR(255) DEFAULT '',
+            \`esic_number\` VARCHAR(64) DEFAULT '',
+            \`bank_account_number\` VARCHAR(64) DEFAULT '',
+            \`bank_name\` VARCHAR(150) DEFAULT '',
+            \`ifsc_code\` VARCHAR(32) DEFAULT '',
+            \`emergency_contact_person\` VARCHAR(150) DEFAULT '',
+            \`emergency_contact_number\` VARCHAR(40) DEFAULT '',
             \`login_enabled\` TINYINT(1) DEFAULT 1,
             \`auth_uid\` VARCHAR(64) DEFAULT NULL,
             \`system_role\` VARCHAR(64) DEFAULT 'Super Admin',
@@ -493,6 +499,30 @@ class MySqlDatabaseManager {
 
         if (!existingEmpCols.has('current_site_location')) {
           await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `current_site_location` VARCHAR(255) DEFAULT ''").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('esic_number')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `esic_number` VARCHAR(64) DEFAULT '' AFTER `current_site_location`").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('bank_account_number')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `bank_account_number` VARCHAR(64) DEFAULT '' AFTER `esic_number`").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('bank_name')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `bank_name` VARCHAR(150) DEFAULT '' AFTER `bank_account_number`").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('ifsc_code')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `ifsc_code` VARCHAR(32) DEFAULT '' AFTER `bank_name`").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('emergency_contact_person')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `emergency_contact_person` VARCHAR(150) DEFAULT '' AFTER `ifsc_code`").catch(() => {});
+        }
+
+        if (!existingEmpCols.has('emergency_contact_number')) {
+          await this.pool.query("ALTER TABLE `solar_employee` ADD COLUMN `emergency_contact_number` VARCHAR(40) DEFAULT '' AFTER `emergency_contact_person`").catch(() => {});
         }
 
         if (!existingEmpCols.has('login_enabled')) {
@@ -647,6 +677,60 @@ class MySqlDatabaseManager {
         `);
       } catch (err: any) {
         console.warn('[MySQL Migration] Notice ensuring solar_service_tickets / history schema:', err.message);
+      }
+
+      // Ensure Employee Leave Management tables exist
+      try {
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_leave_requests\` (
+            \`id\` VARCHAR(64) PRIMARY KEY,
+            \`employee_id\` VARCHAR(64) NOT NULL,
+            \`employee_code\` VARCHAR(64) DEFAULT '',
+            \`employee_name\` VARCHAR(255) NOT NULL,
+            \`department\` VARCHAR(100) DEFAULT '',
+            \`designation\` VARCHAR(128) DEFAULT '',
+            \`leave_type\` VARCHAR(32) NOT NULL,
+            \`start_date\` DATE NOT NULL,
+            \`end_date\` DATE NOT NULL,
+            \`total_days\` DECIMAL(5,2) NOT NULL DEFAULT 1.00,
+            \`is_half_day\` TINYINT(1) NOT NULL DEFAULT 0,
+            \`half_day_session\` VARCHAR(24) DEFAULT '',
+            \`reason\` TEXT NOT NULL,
+            \`status\` VARCHAR(24) NOT NULL DEFAULT 'PENDING',
+            \`leave_year\` INT NOT NULL,
+            \`applied_at\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            \`reviewed_by\` VARCHAR(255) DEFAULT NULL,
+            \`reviewer_id\` VARCHAR(64) DEFAULT NULL,
+            \`reviewed_at\` DATETIME DEFAULT NULL,
+            \`admin_remarks\` TEXT DEFAULT NULL,
+            \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX \`idx_leave_emp\` (\`employee_id\`),
+            INDEX \`idx_leave_status\` (\`status\`),
+            INDEX \`idx_leave_dates\` (\`start_date\`, \`end_date\`),
+            INDEX \`idx_leave_year\` (\`leave_year\`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS \`solar_leave_balances\` (
+            \`id\` VARCHAR(96) PRIMARY KEY,
+            \`employee_id\` VARCHAR(64) NOT NULL,
+            \`leave_year\` INT NOT NULL,
+            \`casual_total\` DECIMAL(5,2) NOT NULL DEFAULT 12.00,
+            \`casual_used\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`sick_total\` DECIMAL(5,2) NOT NULL DEFAULT 8.00,
+            \`sick_used\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`earned_total\` DECIMAL(5,2) NOT NULL DEFAULT 15.00,
+            \`earned_used\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`unpaid_used\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY \`uq_emp_leave_year\` (\`employee_id\`, \`leave_year\`),
+            INDEX \`idx_leave_bal_emp\` (\`employee_id\`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+      } catch (err: any) {
+        console.warn('[MySQL Migration] Notice ensuring leave management tables:', err.message);
       }
 
       // Ensure normalized Vendor Sales Invoices tables exist
@@ -3955,6 +4039,12 @@ class MySqlDatabaseManager {
         salaryMonthly: Number(r.salary_monthly ?? r.salaryMonthly) || 0,
         status: r.status || 'ACTIVE',
         currentSiteLocation: r.current_site_location || r.currentSiteLocation || '',
+        esicNumber: r.esic_number || r.esicNumber || '',
+        bankAccountNumber: r.bank_account_number || r.bankAccountNumber || '',
+        bankName: r.bank_name || r.bankName || '',
+        ifscCode: r.ifsc_code || r.ifscCode || '',
+        emergencyContactPerson: r.emergency_contact_person || r.emergencyContactPerson || '',
+        emergencyContactNumber: r.emergency_contact_number || r.emergencyContactNumber || '',
         loginEnabled: Boolean(r.login_enabled ?? r.loginEnabled ?? true),
         authUid: r.auth_uid || r.authUid || r.id,
         systemRole: r.system_role || r.systemRole || 'Staff',
@@ -4004,6 +4094,12 @@ class MySqlDatabaseManager {
     const salaryMonthly = Number(item.salaryMonthly ?? item.salary_monthly ?? item.salary ?? existing?.salary_monthly ?? existing?.salary) || 0;
     const status = item.status ?? existing?.status ?? 'ACTIVE';
     const currentSiteLocation = item.currentSiteLocation ?? item.current_site_location ?? existing?.current_site_location ?? '';
+    const esicNumber = String(item.esicNumber ?? item.esic_number ?? existing?.esic_number ?? '').trim();
+    const bankAccountNumber = String(item.bankAccountNumber ?? item.bank_account_number ?? existing?.bank_account_number ?? '').trim();
+    const bankName = String(item.bankName ?? item.bank_name ?? existing?.bank_name ?? '').trim();
+    const ifscCode = String(item.ifscCode ?? item.ifsc_code ?? existing?.ifsc_code ?? '').trim().toUpperCase();
+    const emergencyContactPerson = String(item.emergencyContactPerson ?? item.emergency_contact_person ?? existing?.emergency_contact_person ?? '').trim();
+    const emergencyContactNumber = String(item.emergencyContactNumber ?? item.emergency_contact_number ?? existing?.emergency_contact_number ?? '').trim();
     const loginEnabled = this.parseBoolFlag(
       item.loginEnabled !== undefined ? item.loginEnabled : item.login_enabled,
       existing?.login_enabled !== undefined ? Boolean(existing.login_enabled) : true
@@ -4048,9 +4144,12 @@ class MySqlDatabaseManager {
       INSERT INTO \`solar_employee\` (
         \`id\`, \`employee_code\`, \`name\`, \`photo_url\`, \`documents_json\`, \`department\`,
         \`designation\`, \`phone\`, \`email\`, \`joining_date\`, \`salary_monthly\`,
-        \`status\`, \`current_site_location\`, \`login_enabled\`, \`auth_uid\`, \`system_role\`,
+        \`status\`, \`current_site_location\`,
+        \`esic_number\`, \`bank_account_number\`, \`bank_name\`, \`ifsc_code\`,
+        \`emergency_contact_person\`, \`emergency_contact_number\`,
+        \`login_enabled\`, \`auth_uid\`, \`system_role\`,
         \`assigned_role\`, \`is_field_worker\`, \`account_status\`, \`account_created_at\`, \`account_created_by\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`employee_code\` = VALUES(\`employee_code\`),
         \`name\` = VALUES(\`name\`),
@@ -4064,6 +4163,12 @@ class MySqlDatabaseManager {
         \`salary_monthly\` = VALUES(\`salary_monthly\`),
         \`status\` = VALUES(\`status\`),
         \`current_site_location\` = VALUES(\`current_site_location\`),
+        \`esic_number\` = VALUES(\`esic_number\`),
+        \`bank_account_number\` = VALUES(\`bank_account_number\`),
+        \`bank_name\` = VALUES(\`bank_name\`),
+        \`ifsc_code\` = VALUES(\`ifsc_code\`),
+        \`emergency_contact_person\` = VALUES(\`emergency_contact_person\`),
+        \`emergency_contact_number\` = VALUES(\`emergency_contact_number\`),
         \`login_enabled\` = VALUES(\`login_enabled\`),
         \`auth_uid\` = VALUES(\`auth_uid\`),
         \`system_role\` = VALUES(\`system_role\`),
@@ -4088,6 +4193,12 @@ class MySqlDatabaseManager {
       salaryMonthly,
       status,
       currentSiteLocation,
+      esicNumber,
+      bankAccountNumber,
+      bankName,
+      ifscCode,
+      emergencyContactPerson,
+      emergencyContactNumber,
       loginEnabled,
       authUid,
       systemRole,
@@ -4271,6 +4382,12 @@ class MySqlDatabaseManager {
       ...item,
       authUid,
       salaryMonthly,
+      esicNumber,
+      bankAccountNumber,
+      bankName,
+      ifscCode,
+      emergencyContactPerson,
+      emergencyContactNumber,
       isFieldWorker: Boolean(isFieldWorker),
       photoUrl,
       documents
@@ -7317,6 +7434,552 @@ class MySqlDatabaseManager {
     const items = this.getFallbackItems('holidays').filter(h => h.id !== id);
     this.setFallbackItems('holidays', items);
     return true;
+  }
+
+  // ==========================================================
+  // CRUD: EMPLOYEE LEAVE MANAGEMENT
+  // ==========================================================
+  private mapLeaveRow(r: any) {
+    const fmtDate = (v: any) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v || '').slice(0, 10));
+    const fmtIso = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)) : null);
+    return {
+      id: r.id,
+      employeeId: r.employee_id,
+      employeeCode: r.employee_code || '',
+      employeeName: r.employee_name || '',
+      department: r.department || '',
+      designation: r.designation || '',
+      leaveType: r.leave_type || 'CASUAL',
+      startDate: fmtDate(r.start_date),
+      endDate: fmtDate(r.end_date),
+      totalDays: Number(r.total_days) || 0,
+      isHalfDay: Boolean(r.is_half_day),
+      halfDaySession: r.half_day_session || '',
+      reason: r.reason || '',
+      status: r.status || 'PENDING',
+      leaveYear: Number(r.leave_year) || new Date().getFullYear(),
+      appliedAt: fmtIso(r.applied_at || r.created_at) || new Date().toISOString(),
+      reviewedBy: r.reviewed_by || null,
+      reviewerId: r.reviewer_id || null,
+      reviewedAt: fmtIso(r.reviewed_at),
+      adminRemarks: r.admin_remarks || null,
+      createdAt: fmtIso(r.created_at),
+      updatedAt: fmtIso(r.updated_at)
+    };
+  }
+
+  private async resolveEmployeeForLeave(actor: any, requestedEmployeeId?: string) {
+    this.assertDbConnected();
+    const roleUpper = String(actor?.role || '').trim().toUpperCase();
+    const isAdminOrHr = roleUpper === 'ADMIN' || roleUpper === 'SUPER ADMIN' || roleUpper === 'HR MANAGER';
+
+    if (isAdminOrHr && requestedEmployeeId && requestedEmployeeId.trim()) {
+      const targetId = requestedEmployeeId.trim();
+      const [rows]: any = await this.pool!.query(
+        'SELECT * FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 1',
+        [targetId, targetId, targetId]
+      );
+      if (Array.isArray(rows) && rows.length > 0) {
+        const e = rows[0];
+        return {
+          employeeId: e.id,
+          employeeCode: e.employee_code || e.id,
+          employeeName: e.name,
+          department: e.department || 'Operations',
+          designation: e.designation || ''
+        };
+      }
+      const [uRows]: any = await this.pool!.query(
+        'SELECT * FROM `solar_users` WHERE `id` = ? OR `employee_id` = ? LIMIT 1',
+        [targetId, targetId]
+      );
+      if (Array.isArray(uRows) && uRows.length > 0) {
+        const u = uRows[0];
+        return {
+          employeeId: u.id,
+          employeeCode: u.employee_id || u.id,
+          employeeName: u.name,
+          department: u.department || 'Operations',
+          designation: u.designation || u.role || ''
+        };
+      }
+      const err: any = new Error('Selected employee not found in MySQL.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    // Non-admin (or admin applying for self without override): strictly resolve caller
+    const actorId = String(actor?.id || '').trim();
+    const actorEmpId = String(actor?.employeeId || '').trim();
+    const actorEmail = String(actor?.email || '').trim().toLowerCase();
+
+    const [empRows]: any = await this.pool!.query(
+      'SELECT * FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR (`employee_code` != "" AND `employee_code` = ?) OR (`email` != "" AND LOWER(`email`) = ?) LIMIT 1',
+      [actorId, actorId, actorEmpId, actorEmail]
+    );
+    if (Array.isArray(empRows) && empRows.length > 0) {
+      const e = empRows[0];
+      return {
+        employeeId: e.id,
+        employeeCode: e.employee_code || e.id,
+        employeeName: e.name,
+        department: e.department || 'Operations',
+        designation: e.designation || ''
+      };
+    }
+
+    return {
+      employeeId: actorId,
+      employeeCode: actorEmpId || `EMP-${actorId.slice(-4).toUpperCase()}`,
+      employeeName: actor?.name || 'Employee',
+      department: actor?.department || 'Operations',
+      designation: actor?.designation || actor?.role || ''
+    };
+  }
+
+  private async ensureLeaveBalanceRow(connOrPool: any, employeeId: string, leaveYear: number) {
+    const balId = `lbal-${employeeId}-${leaveYear}`;
+    await connOrPool.query(
+      `INSERT IGNORE INTO \`solar_leave_balances\` (\`id\`, \`employee_id\`, \`leave_year\`, \`casual_total\`, \`casual_used\`, \`sick_total\`, \`sick_used\`, \`earned_total\`, \`earned_used\`, \`unpaid_used\`)
+       VALUES (?, ?, ?, 12.00, 0.00, 8.00, 0.00, 15.00, 0.00, 0.00)`,
+      [balId, employeeId, leaveYear]
+    );
+  }
+
+  public async getLeaveData(actor: any, year?: number) {
+    this.assertDbConnected();
+    const leaveYear = Number.isFinite(Number(year)) && Number(year) >= 2000 ? Number(year) : new Date().getFullYear();
+    const roleUpper = String(actor?.role || '').trim().toUpperCase();
+    const isAdminOrHr = roleUpper === 'ADMIN' || roleUpper === 'SUPER ADMIN' || roleUpper === 'HR MANAGER';
+    const myProfile = await this.resolveEmployeeForLeave(actor);
+
+    const allEmployees = await this.getEmployees();
+    const targetEmployees = isAdminOrHr
+      ? allEmployees.filter((e: any) => String(e.status || '').toUpperCase() !== 'TERMINATED')
+      : allEmployees.filter((e: any) =>
+          e.id === myProfile.employeeId ||
+          e.authUid === actor?.id ||
+          (myProfile.employeeCode && e.employeeCode === myProfile.employeeCode) ||
+          (actor?.email && String(e.email || '').toLowerCase() === String(actor.email).toLowerCase())
+        );
+
+    const empListForBalances = targetEmployees.length > 0 ? targetEmployees : [
+      {
+        id: myProfile.employeeId,
+        employeeCode: myProfile.employeeCode,
+        name: myProfile.employeeName,
+        department: myProfile.department,
+        designation: myProfile.designation
+      }
+    ];
+
+    for (const emp of empListForBalances) {
+      await this.ensureLeaveBalanceRow(this.pool!, emp.id, leaveYear);
+    }
+
+    const myIdVariants = Array.from(new Set([
+      myProfile.employeeId,
+      String(actor?.id || '').trim(),
+      String(actor?.employeeId || '').trim()
+    ].filter(Boolean)));
+
+    let leaveRows: any[] = [];
+    if (isAdminOrHr) {
+      const [rows]: any = await this.pool!.query(
+        'SELECT * FROM `solar_leave_requests` WHERE `leave_year` = ? ORDER BY FIELD(`status`, "PENDING", "APPROVED", "REJECTED", "CANCELLED"), `applied_at` DESC',
+        [leaveYear]
+      );
+      leaveRows = rows || [];
+    } else {
+      const ph = myIdVariants.map(() => '?').join(',');
+      const [rows]: any = await this.pool!.query(
+        `SELECT * FROM \`solar_leave_requests\` WHERE \`leave_year\` = ? AND \`employee_id\` IN (${ph}) ORDER BY \`applied_at\` DESC`,
+        [leaveYear, ...myIdVariants]
+      );
+      leaveRows = rows || [];
+    }
+
+    const leaves = leaveRows.map(r => this.mapLeaveRow(r));
+
+    let balRows: any[] = [];
+    if (isAdminOrHr) {
+      const [rows]: any = await this.pool!.query(
+        'SELECT * FROM `solar_leave_balances` WHERE `leave_year` = ?',
+        [leaveYear]
+      );
+      balRows = rows || [];
+    } else {
+      const ph = myIdVariants.map(() => '?').join(',');
+      const [rows]: any = await this.pool!.query(
+        `SELECT * FROM \`solar_leave_balances\` WHERE \`leave_year\` = ? AND \`employee_id\` IN (${ph})`,
+        [leaveYear, ...myIdVariants]
+      );
+      balRows = rows || [];
+    }
+
+    const balByEmp = new Map<string, any>();
+    for (const b of balRows) {
+      balByEmp.set(b.employee_id, b);
+    }
+
+    const pendingMap = new Map<string, { CASUAL: number; SICK: number; EARNED: number }>();
+    for (const lv of leaves) {
+      if (lv.status === 'PENDING') {
+        const cur = pendingMap.get(lv.employeeId) || { CASUAL: 0, SICK: 0, EARNED: 0 };
+        if (lv.leaveType === 'CASUAL') cur.CASUAL += lv.totalDays;
+        else if (lv.leaveType === 'SICK') cur.SICK += lv.totalDays;
+        else if (lv.leaveType === 'EARNED') cur.EARNED += lv.totalDays;
+        pendingMap.set(lv.employeeId, cur);
+      }
+    }
+
+    const balances = empListForBalances.map((emp: any) => {
+      const b = balByEmp.get(emp.id) || {};
+      const pend = pendingMap.get(emp.id) || { CASUAL: 0, SICK: 0, EARNED: 0 };
+      const casualTotal = b.casual_total !== undefined ? Number(b.casual_total) : 12;
+      const casualUsed = Number(b.casual_used) || 0;
+      const sickTotal = b.sick_total !== undefined ? Number(b.sick_total) : 8;
+      const sickUsed = Number(b.sick_used) || 0;
+      const earnedTotal = b.earned_total !== undefined ? Number(b.earned_total) : 15;
+      const earnedUsed = Number(b.earned_used) || 0;
+      const unpaidUsed = Number(b.unpaid_used) || 0;
+      const totalAllocated = casualTotal + sickTotal + earnedTotal;
+      const totalUsed = casualUsed + sickUsed + earnedUsed;
+      return {
+        id: b.id || `lbal-${emp.id}-${leaveYear}`,
+        employeeId: emp.id,
+        employeeCode: emp.employeeCode || '',
+        employeeName: emp.name || '',
+        department: emp.department || '',
+        designation: emp.designation || '',
+        leaveYear,
+        casualTotal,
+        casualUsed,
+        casualPending: pend.CASUAL,
+        casualRemaining: Math.max(0, Number((casualTotal - casualUsed).toFixed(2))),
+        sickTotal,
+        sickUsed,
+        sickPending: pend.SICK,
+        sickRemaining: Math.max(0, Number((sickTotal - sickUsed).toFixed(2))),
+        earnedTotal,
+        earnedUsed,
+        earnedPending: pend.EARNED,
+        earnedRemaining: Math.max(0, Number((earnedTotal - earnedUsed).toFixed(2))),
+        unpaidUsed,
+        totalAllocated,
+        totalUsed,
+        totalRemaining: Math.max(0, Number((totalAllocated - totalUsed).toFixed(2))),
+        updatedAt: b.updated_at ? new Date(b.updated_at).toISOString() : undefined
+      };
+    });
+
+    return {
+      leaveYear,
+      canReview: isAdminOrHr,
+      myEmployee: myProfile,
+      leaves,
+      balances
+    };
+  }
+
+  public async applyLeave(actor: any, payload: any) {
+    this.assertDbConnected();
+    const targetEmp = await this.resolveEmployeeForLeave(actor, payload?.employeeId);
+    const leaveType = String(payload?.leaveType || 'CASUAL').trim().toUpperCase();
+    if (!['CASUAL', 'SICK', 'EARNED', 'UNPAID'].includes(leaveType)) {
+      const err: any = new Error('Invalid leave type. Choose CASUAL, SICK, EARNED, or UNPAID.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const startDate = String(payload?.startDate || '').trim().slice(0, 10);
+    const endDate = String(payload?.endDate || startDate).trim().slice(0, 10);
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRe.test(startDate) || !dateRe.test(endDate)) {
+      const err: any = new Error('Valid start date and end date (YYYY-MM-DD) are required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (endDate < startDate) {
+      const err: any = new Error('End date cannot be earlier than start date.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const isHalfDay = Boolean(payload?.isHalfDay);
+    if (isHalfDay && startDate !== endDate) {
+      const err: any = new Error('Half-day leave can only be applied for a single date (start date = end date).');
+      err.statusCode = 400;
+      throw err;
+    }
+    const halfDaySession = isHalfDay ? String(payload?.halfDaySession || 'FIRST_HALF').trim() : '';
+
+    const sMs = Date.parse(`${startDate}T00:00:00Z`);
+    const eMs = Date.parse(`${endDate}T00:00:00Z`);
+    const totalDays = isHalfDay ? 0.5 : Math.round((eMs - sMs) / 86400000) + 1;
+    if (totalDays <= 0 || totalDays > 180) {
+      const err: any = new Error('Leave duration must be between 0.5 and 180 days.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const reason = String(payload?.reason || '').trim();
+    if (reason.length < 3) {
+      const err: any = new Error('Please enter a valid reason for leave (minimum 3 characters).');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const leaveYear = Number(startDate.slice(0, 4));
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      await this.ensureLeaveBalanceRow(conn, targetEmp.employeeId, leaveYear);
+
+      // Prevent overlapping PENDING/APPROVED applications
+      const [overlapRows]: any = await conn.query(
+        `SELECT id, start_date, end_date, status FROM \`solar_leave_requests\`
+         WHERE \`employee_id\` = ? AND \`status\` IN ('PENDING', 'APPROVED')
+           AND \`start_date\` <= ? AND \`end_date\` >= ?
+         LIMIT 1 FOR UPDATE`,
+        [targetEmp.employeeId, endDate, startDate]
+      );
+      if (Array.isArray(overlapRows) && overlapRows.length > 0) {
+        const err: any = new Error(`Leave dates overlap with an existing ${overlapRows[0].status} application (${String(overlapRows[0].start_date).slice(0, 10)} to ${String(overlapRows[0].end_date).slice(0, 10)}).`);
+        err.statusCode = 409;
+        throw err;
+      }
+
+      // Enforce paid leave balance check
+      if (leaveType !== 'UNPAID') {
+        const [balRows]: any = await conn.query(
+          'SELECT * FROM `solar_leave_balances` WHERE `employee_id` = ? AND `leave_year` = ? LIMIT 1 FOR UPDATE',
+          [targetEmp.employeeId, leaveYear]
+        );
+        const bal = balRows?.[0] || {};
+        const [pendRows]: any = await conn.query(
+          `SELECT COALESCE(SUM(\`total_days\`), 0) AS pend_days FROM \`solar_leave_requests\`
+           WHERE \`employee_id\` = ? AND \`leave_year\` = ? AND \`leave_type\` = ? AND \`status\` = 'PENDING'`,
+          [targetEmp.employeeId, leaveYear, leaveType]
+        );
+        const pendDays = Number(pendRows?.[0]?.pend_days) || 0;
+        const totalQuota = leaveType === 'CASUAL'
+          ? Number(bal.casual_total ?? 12)
+          : leaveType === 'SICK'
+            ? Number(bal.sick_total ?? 8)
+            : Number(bal.earned_total ?? 15);
+        const usedDays = leaveType === 'CASUAL'
+          ? Number(bal.casual_used ?? 0)
+          : leaveType === 'SICK'
+            ? Number(bal.sick_used ?? 0)
+            : Number(bal.earned_used ?? 0);
+        const available = totalQuota - usedDays - pendDays;
+        if (totalDays > available + 0.001) {
+          const err: any = new Error(`Insufficient ${leaveType} leave balance. Available (after pending): ${Math.max(0, available)} day(s). Select UNPAID leave if exhausted.`);
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+
+      const id = `lv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      await conn.query(
+        `INSERT INTO \`solar_leave_requests\` (
+          \`id\`, \`employee_id\`, \`employee_code\`, \`employee_name\`, \`department\`, \`designation\`,
+          \`leave_type\`, \`start_date\`, \`end_date\`, \`total_days\`, \`is_half_day\`, \`half_day_session\`,
+          \`reason\`, \`status\`, \`leave_year\`, \`applied_at\`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, NOW())`,
+        [
+          id,
+          targetEmp.employeeId,
+          targetEmp.employeeCode,
+          targetEmp.employeeName,
+          targetEmp.department,
+          targetEmp.designation,
+          leaveType,
+          startDate,
+          endDate,
+          totalDays,
+          isHalfDay ? 1 : 0,
+          halfDaySession,
+          reason,
+          leaveYear
+        ]
+      );
+
+      const [savedRows]: any = await conn.query('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1', [id]);
+      await conn.commit();
+      return this.mapLeaveRow(savedRows[0]);
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async reviewLeave(actor: any, leaveId: string, action: string, remarks?: string) {
+    this.assertDbConnected();
+    const nextAction = String(action || '').trim().toUpperCase();
+    const targetStatus = nextAction === 'APPROVE' || nextAction === 'APPROVED'
+      ? 'APPROVED'
+      : nextAction === 'REJECT' || nextAction === 'REJECTED'
+        ? 'REJECTED'
+        : '';
+    if (!targetStatus) {
+      const err: any = new Error('Invalid review action. Must be APPROVE or REJECT.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const cleanRemarks = String(remarks || '').trim();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query(
+        'SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1 FOR UPDATE',
+        [leaveId]
+      );
+      if (!Array.isArray(rows) || rows.length === 0) {
+        const err: any = new Error('Leave application not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const lv = rows[0];
+      const prevStatus = String(lv.status || 'PENDING').toUpperCase();
+      if (prevStatus === 'CANCELLED') {
+        const err: any = new Error('Cannot review a cancelled leave application.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const empId = lv.employee_id;
+      const leaveYear = Number(lv.leave_year) || new Date().getFullYear();
+      const totalDays = Number(lv.total_days) || 0;
+      const lType = String(lv.leave_type || 'CASUAL').toUpperCase();
+      const usedCol = lType === 'CASUAL'
+        ? 'casual_used'
+        : lType === 'SICK'
+          ? 'sick_used'
+          : lType === 'EARNED'
+            ? 'earned_used'
+            : 'unpaid_used';
+
+      await this.ensureLeaveBalanceRow(conn, empId, leaveYear);
+      const [balRows]: any = await conn.query(
+        'SELECT * FROM `solar_leave_balances` WHERE `employee_id` = ? AND `leave_year` = ? LIMIT 1 FOR UPDATE',
+        [empId, leaveYear]
+      );
+      const bal = balRows?.[0] || {};
+
+      if (targetStatus === 'APPROVED' && prevStatus !== 'APPROVED') {
+        if (lType !== 'UNPAID') {
+          const totalCol = lType === 'CASUAL' ? 'casual_total' : lType === 'SICK' ? 'sick_total' : 'earned_total';
+          const quota = Number(bal[totalCol] ?? (lType === 'CASUAL' ? 12 : lType === 'SICK' ? 8 : 15));
+          const used = Number(bal[usedCol] ?? 0);
+          if (used + totalDays > quota + 0.001) {
+            const err: any = new Error(`Cannot approve: ${lType} balance insufficient (Remaining: ${Math.max(0, quota - used)} day(s), Requested: ${totalDays} day(s)).`);
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+        await conn.query(
+          `UPDATE \`solar_leave_balances\` SET \`${usedCol}\` = \`${usedCol}\` + ? WHERE \`employee_id\` = ? AND \`leave_year\` = ?`,
+          [totalDays, empId, leaveYear]
+        );
+      } else if (targetStatus === 'REJECTED' && prevStatus === 'APPROVED') {
+        await conn.query(
+          `UPDATE \`solar_leave_balances\` SET \`${usedCol}\` = GREATEST(0, \`${usedCol}\` - ?) WHERE \`employee_id\` = ? AND \`leave_year\` = ?`,
+          [totalDays, empId, leaveYear]
+        );
+      }
+
+      await conn.query(
+        `UPDATE \`solar_leave_requests\`
+         SET \`status\` = ?, \`reviewed_by\` = ?, \`reviewer_id\` = ?, \`reviewed_at\` = NOW(), \`admin_remarks\` = ?, \`updated_at\` = CURRENT_TIMESTAMP
+         WHERE \`id\` = ?`,
+        [targetStatus, actor?.name || 'Administrator', actor?.id || '', cleanRemarks || null, leaveId]
+      );
+
+      const [updatedRows]: any = await conn.query('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1', [leaveId]);
+      await conn.commit();
+      return this.mapLeaveRow(updatedRows[0]);
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async cancelLeave(actor: any, leaveId: string, remarks?: string) {
+    this.assertDbConnected();
+    const roleUpper = String(actor?.role || '').trim().toUpperCase();
+    const isAdminOrHr = roleUpper === 'ADMIN' || roleUpper === 'SUPER ADMIN' || roleUpper === 'HR MANAGER';
+    const myProfile = await this.resolveEmployeeForLeave(actor);
+    const myIdVariants = new Set([
+      myProfile.employeeId,
+      String(actor?.id || '').trim(),
+      String(actor?.employeeId || '').trim()
+    ].filter(Boolean));
+
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query(
+        'SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1 FOR UPDATE',
+        [leaveId]
+      );
+      if (!Array.isArray(rows) || rows.length === 0) {
+        const err: any = new Error('Leave application not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const lv = rows[0];
+      if (!isAdminOrHr && !myIdVariants.has(String(lv.employee_id))) {
+        const err: any = new Error('Access denied: You can only cancel your own leave requests.');
+        err.statusCode = 403;
+        throw err;
+      }
+      const prevStatus = String(lv.status || 'PENDING').toUpperCase();
+      if (!isAdminOrHr && prevStatus !== 'PENDING') {
+        const err: any = new Error('Only pending leave applications can be cancelled by an employee.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      if (prevStatus === 'APPROVED') {
+        const lType = String(lv.leave_type || 'CASUAL').toUpperCase();
+        const usedCol = lType === 'CASUAL'
+          ? 'casual_used'
+          : lType === 'SICK'
+            ? 'sick_used'
+            : lType === 'EARNED'
+              ? 'earned_used'
+              : 'unpaid_used';
+        await conn.query(
+          `UPDATE \`solar_leave_balances\` SET \`${usedCol}\` = GREATEST(0, \`${usedCol}\` - ?) WHERE \`employee_id\` = ? AND \`leave_year\` = ?`,
+          [Number(lv.total_days) || 0, lv.employee_id, Number(lv.leave_year) || new Date().getFullYear()]
+        );
+      }
+
+      await conn.query(
+        `UPDATE \`solar_leave_requests\`
+         SET \`status\` = 'CANCELLED', \`admin_remarks\` = COALESCE(?, \`admin_remarks\`), \`updated_at\` = CURRENT_TIMESTAMP
+         WHERE \`id\` = ?`,
+        [remarks ? String(remarks).trim() : null, leaveId]
+      );
+
+      const [updatedRows]: any = await conn.query('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1', [leaveId]);
+      await conn.commit();
+      return this.mapLeaveRow(updatedRows[0]);
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   // ==========================================================

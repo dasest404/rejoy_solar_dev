@@ -394,6 +394,12 @@ function ensureRequiredTables($pdo) {
             'email' => "VARCHAR(191) NOT NULL DEFAULT ''",
             'joining_date' => 'DATE DEFAULT NULL',
             'salary_monthly' => 'DECIMAL(12,2) NOT NULL DEFAULT 0.00',
+            'esic_number' => "VARCHAR(64) DEFAULT ''",
+            'bank_account_number' => "VARCHAR(64) DEFAULT ''",
+            'bank_name' => "VARCHAR(128) DEFAULT ''",
+            'ifsc_code' => "VARCHAR(32) DEFAULT ''",
+            'emergency_contact_person' => "VARCHAR(128) DEFAULT ''",
+            'emergency_contact_number' => "VARCHAR(32) DEFAULT ''",
             'status' => "VARCHAR(32) DEFAULT 'ACTIVE'",
             'current_site_location' => "VARCHAR(255) DEFAULT ''",
             'login_enabled' => 'TINYINT(1) DEFAULT 1',
@@ -718,6 +724,57 @@ function ensureRequiredTables($pdo) {
         ");
     } catch (Exception $e) {
         error_log('Notice ensuring vendor sales invoice schema: ' . $e->getMessage());
+    }
+
+    // Ensure Employee Leave Management tables exist
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_leave_requests` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `employee_id` VARCHAR(64) NOT NULL,
+              `employee_code` VARCHAR(32) DEFAULT '',
+              `employee_name` VARCHAR(255) NOT NULL,
+              `department` VARCHAR(64) DEFAULT 'Operations',
+              `designation` VARCHAR(128) DEFAULT '',
+              `leave_type` ENUM('CASUAL', 'SICK', 'EARNED', 'UNPAID') NOT NULL DEFAULT 'CASUAL',
+              `start_date` DATE NOT NULL,
+              `end_date` DATE NOT NULL,
+              `total_days` DECIMAL(5,2) NOT NULL DEFAULT 1.00,
+              `is_half_day` TINYINT(1) NOT NULL DEFAULT 0,
+              `half_day_session` VARCHAR(24) DEFAULT '',
+              `reason` TEXT NOT NULL,
+              `status` ENUM('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED') NOT NULL DEFAULT 'PENDING',
+              `leave_year` INT NOT NULL DEFAULT 2026,
+              `applied_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              `reviewed_by` VARCHAR(255) DEFAULT NULL,
+              `reviewer_id` VARCHAR(64) DEFAULT NULL,
+              `reviewed_at` DATETIME DEFAULT NULL,
+              `admin_remarks` TEXT DEFAULT NULL,
+              `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX `idx_leave_emp` (`employee_id`),
+              INDEX `idx_leave_status` (`status`),
+              INDEX `idx_leave_year` (`leave_year`),
+              INDEX `idx_leave_dates` (`start_date`, `end_date`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `solar_leave_balances` (
+              `id` VARCHAR(64) PRIMARY KEY,
+              `employee_id` VARCHAR(64) NOT NULL,
+              `leave_year` INT NOT NULL,
+              `casual_total` DECIMAL(5,2) NOT NULL DEFAULT 12.00,
+              `casual_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `sick_total` DECIMAL(5,2) NOT NULL DEFAULT 8.00,
+              `sick_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `earned_total` DECIMAL(5,2) NOT NULL DEFAULT 15.00,
+              `earned_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `unpaid_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              UNIQUE KEY `uniq_emp_leave_year` (`employee_id`, `leave_year`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    } catch (Exception $e) {
+        error_log('Notice ensuring solar_leave_requests / solar_leave_balances schema: ' . $e->getMessage());
     }
 
     require_once __DIR__ . '/accounting.php';
@@ -1454,6 +1511,12 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
         ? substr((string)($item['joiningDate'] ?? $item['joining_date']), 0, 10)
         : (!empty($existingEmp['joining_date']) ? substr((string)$existingEmp['joining_date'], 0, 10) : date('Y-m-d'));
     $salary = floatval($item['salaryMonthly'] ?? $item['salary_monthly'] ?? $item['salary'] ?? ($existingEmp['salary_monthly'] ?? ($existingEmp['salary'] ?? 0)));
+    $esicNumber = trim((string)($item['esicNumber'] ?? $item['esic_number'] ?? ($existingEmp['esic_number'] ?? '')));
+    $bankAccountNumber = trim((string)($item['bankAccountNumber'] ?? $item['bank_account_number'] ?? ($existingEmp['bank_account_number'] ?? '')));
+    $bankName = trim((string)($item['bankName'] ?? $item['bank_name'] ?? ($existingEmp['bank_name'] ?? '')));
+    $ifscCode = strtoupper(trim((string)($item['ifscCode'] ?? $item['ifsc_code'] ?? ($existingEmp['ifsc_code'] ?? ''))));
+    $emergencyContactPerson = trim((string)($item['emergencyContactPerson'] ?? $item['emergency_contact_person'] ?? ($existingEmp['emergency_contact_person'] ?? '')));
+    $emergencyContactNumber = trim((string)($item['emergencyContactNumber'] ?? $item['emergency_contact_number'] ?? ($existingEmp['emergency_contact_number'] ?? '')));
     $status = $item['status'] ?? ($existingEmp['status'] ?? 'ACTIVE');
     $siteLoc = $item['currentSiteLocation'] ?? $item['current_site_location'] ?? ($existingEmp['current_site_location'] ?? '');
 
@@ -1495,9 +1558,11 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
             INSERT INTO `solar_employees` (
                 `id`, `employee_code`, `name`, `photo_url`, `documents_json`, `department`,
                 `designation`, `phone`, `email`, `joining_date`, `salary_monthly`,
+                `esic_number`, `bank_account_number`, `bank_name`, `ifsc_code`,
+                `emergency_contact_person`, `emergency_contact_number`,
                 `status`, `current_site_location`, `login_enabled`, `auth_uid`, `system_role`,
                 `assigned_role`, `is_field_worker`, `account_status`, `account_created_at`, `account_created_by`
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
                 `employee_code` = VALUES(`employee_code`),
                 `name` = VALUES(`name`),
@@ -1509,6 +1574,12 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
                 `email` = VALUES(`email`),
                 `joining_date` = VALUES(`joining_date`),
                 `salary_monthly` = VALUES(`salary_monthly`),
+                `esic_number` = VALUES(`esic_number`),
+                `bank_account_number` = VALUES(`bank_account_number`),
+                `bank_name` = VALUES(`bank_name`),
+                `ifsc_code` = VALUES(`ifsc_code`),
+                `emergency_contact_person` = VALUES(`emergency_contact_person`),
+                `emergency_contact_number` = VALUES(`emergency_contact_number`),
                 `status` = VALUES(`status`),
                 `current_site_location` = VALUES(`current_site_location`),
                 `login_enabled` = VALUES(`login_enabled`),
@@ -1523,6 +1594,8 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
         $stmt->execute([
             $item['id'], $code, $name, $photoUrl, $documentsJson, $dept,
             $desig, $phone, $email, $joiningDate, $salary,
+            $esicNumber, $bankAccountNumber, $bankName, $ifscCode,
+            $emergencyContactPerson, $emergencyContactNumber,
             $status, $siteLoc, $loginEnabled, $authUid, $systemRole,
             $assignedRole, $isFieldWorker, $accountStatus, $accountCreatedAt, $accountCreatedBy
         ]);
@@ -1677,6 +1750,12 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
     unset($item['password'], $item['tempPassword']);
     $item['authUid'] = $authUid;
     $item['salaryMonthly'] = $salary;
+    $item['esicNumber'] = $esicNumber;
+    $item['bankAccountNumber'] = $bankAccountNumber;
+    $item['bankName'] = $bankName;
+    $item['ifscCode'] = $ifscCode;
+    $item['emergencyContactPerson'] = $emergencyContactPerson;
+    $item['emergencyContactNumber'] = $emergencyContactNumber;
     $item['isFieldWorker'] = (bool)$isFieldWorker;
     $item['photoUrl'] = $photoUrl;
     $item['documents'] = array_values($documents);
@@ -6085,6 +6164,12 @@ if (in_array($cleanPath, ['/employees', '/employee'])) {
                 'email' => $r['email'] ?? '',
                 'joiningDate' => !empty($r['joining_date']) ? substr((string)$r['joining_date'], 0, 10) : '',
                 'salaryMonthly' => floatval($r['salary_monthly'] ?? 0),
+                'esicNumber' => $r['esic_number'] ?? '',
+                'bankAccountNumber' => $r['bank_account_number'] ?? '',
+                'bankName' => $r['bank_name'] ?? '',
+                'ifscCode' => $r['ifsc_code'] ?? '',
+                'emergencyContactPerson' => $r['emergency_contact_person'] ?? '',
+                'emergencyContactNumber' => $r['emergency_contact_number'] ?? '',
                 'status' => $r['status'] ?? 'ACTIVE',
                 'currentSiteLocation' => $r['current_site_location'] ?? '',
                 'loginEnabled' => (bool)($r['login_enabled'] ?? 1),
@@ -8359,6 +8444,12 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                         'email' => $u['email'],
                         'joining_date' => $u['created_at'],
                         'salary_monthly' => 0.00,
+                        'esic_number' => '',
+                        'bank_account_number' => '',
+                        'bank_name' => '',
+                        'ifsc_code' => '',
+                        'emergency_contact_person' => '',
+                        'emergency_contact_number' => '',
                         'status' => $u['status'] ?: 'ACTIVE',
                         'current_site_location' => '',
                         'login_enabled' => ($u['status'] !== 'DISABLED') ? 1 : 0,
@@ -8411,6 +8502,12 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'email' => $r['email'],
                 'joiningDate' => !empty($r['joining_date']) ? substr((string)$r['joining_date'], 0, 10) : '',
                 'salaryMonthly' => floatval($r['salary_monthly'] ?? 0),
+                'esicNumber' => $r['esic_number'] ?? '',
+                'bankAccountNumber' => $r['bank_account_number'] ?? '',
+                'bankName' => $r['bank_name'] ?? '',
+                'ifscCode' => $r['ifsc_code'] ?? '',
+                'emergencyContactPerson' => $r['emergency_contact_person'] ?? '',
+                'emergencyContactNumber' => $r['emergency_contact_number'] ?? '',
                 'status' => $r['status'] ?? 'ACTIVE',
                 'currentSiteLocation' => $r['current_site_location'] ?? '',
                 'loginEnabled' => (bool)($r['login_enabled'] ?? 1),
@@ -11430,6 +11527,553 @@ if (preg_match('#^/holidays/([^/]+)/?$#', $cleanPath, $matches)) {
         echo json_encode(['success' => true, 'message' => 'Holiday deleted from MySQL.']);
         exit;
     }
+}
+
+// ==========================================================
+// EMPLOYEE LEAVE MANAGEMENT HELPERS & ROUTES
+// ==========================================================
+function isCustomerUserPhp($user) {
+    if (!$user) return false;
+    $acct = strtoupper(trim((string)($user['accountType'] ?? ($user['account_type'] ?? ''))));
+    $role = strtoupper(trim((string)($user['role'] ?? '')));
+    return $acct === 'CUSTOMER' || $role === 'CUSTOMER' || $role === 'CLIENT';
+}
+
+function mapLeaveRowPhp($r) {
+    return [
+        'id' => $r['id'],
+        'employeeId' => $r['employee_id'],
+        'employeeCode' => $r['employee_code'] ?? '',
+        'employeeName' => $r['employee_name'] ?? '',
+        'department' => $r['department'] ?? 'Operations',
+        'designation' => $r['designation'] ?? '',
+        'leaveType' => strtoupper((string)($r['leave_type'] ?? 'CASUAL')),
+        'startDate' => !empty($r['start_date']) ? substr((string)$r['start_date'], 0, 10) : '',
+        'endDate' => !empty($r['end_date']) ? substr((string)$r['end_date'], 0, 10) : '',
+        'totalDays' => floatval($r['total_days'] ?? 0),
+        'isHalfDay' => (bool)($r['is_half_day'] ?? 0),
+        'halfDaySession' => $r['half_day_session'] ?? '',
+        'reason' => $r['reason'] ?? '',
+        'status' => strtoupper((string)($r['status'] ?? 'PENDING')),
+        'leaveYear' => intval($r['leave_year'] ?? date('Y')),
+        'appliedAt' => !empty($r['applied_at']) ? date('c', strtotime((string)$r['applied_at'])) : date('c'),
+        'reviewedBy' => $r['reviewed_by'] ?? null,
+        'reviewerId' => $r['reviewer_id'] ?? null,
+        'reviewedAt' => !empty($r['reviewed_at']) ? date('c', strtotime((string)$r['reviewed_at'])) : null,
+        'adminRemarks' => $r['admin_remarks'] ?? null,
+        'updatedAt' => !empty($r['updated_at']) ? date('c', strtotime((string)$r['updated_at'])) : null
+    ];
+}
+
+function ensureLeaveBalanceRowPhp($pdo, $employeeId, $leaveYear) {
+    $balId = 'lbal-' . $employeeId . '-' . $leaveYear;
+    $stmt = $pdo->prepare("
+        INSERT IGNORE INTO `solar_leave_balances`
+        (`id`, `employee_id`, `leave_year`, `casual_total`, `casual_used`, `sick_total`, `sick_used`, `earned_total`, `earned_used`, `unpaid_used`)
+        VALUES (?, ?, ?, 12.00, 0.00, 8.00, 0.00, 15.00, 0.00, 0.00)
+    ");
+    $stmt->execute([$balId, $employeeId, $leaveYear]);
+}
+
+function resolveEmployeeForLeavePhp($pdo, $actor, $requestedEmpId = null) {
+    $roleUpper = strtoupper(trim((string)($actor['role'] ?? '')));
+    $isAdminOrHr = in_array($roleUpper, ['ADMIN', 'SUPER ADMIN', 'HR MANAGER'], true);
+
+    if ($isAdminOrHr && !empty($requestedEmpId)) {
+        $reqId = trim((string)$requestedEmpId);
+        $s1 = $pdo->prepare('SELECT * FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR `employee_code` = ? LIMIT 1');
+        $s1->execute([$reqId, $reqId, $reqId]);
+        if ($e = $s1->fetch(PDO::FETCH_ASSOC)) {
+            return [
+                'employeeId' => $e['id'],
+                'employeeCode' => $e['employee_code'] ?: $e['id'],
+                'employeeName' => $e['name'],
+                'department' => $e['department'] ?: 'Operations',
+                'designation' => $e['designation'] ?: ''
+            ];
+        }
+        $s2 = $pdo->prepare("SELECT * FROM `solar_users` WHERE `id` = ? AND `role` != 'Customer' LIMIT 1");
+        $s2->execute([$reqId]);
+        if ($u = $s2->fetch(PDO::FETCH_ASSOC)) {
+            return [
+                'employeeId' => $u['id'],
+                'employeeCode' => $u['employee_id'] ?: $u['id'],
+                'employeeName' => $u['name'],
+                'department' => $u['department'] ?: 'Operations',
+                'designation' => $u['designation'] ?: ($u['role'] ?: '')
+            ];
+        }
+        throw new Exception('Selected employee not found in MySQL.', 404);
+    }
+
+    $actorId = trim((string)($actor['id'] ?? ''));
+    $actorEmpId = trim((string)($actor['employeeId'] ?? ($actor['employee_id'] ?? '')));
+    $actorEmail = strtolower(trim((string)($actor['email'] ?? '')));
+
+    $s3 = $pdo->prepare('SELECT * FROM `solar_employee` WHERE `id` = ? OR `auth_uid` = ? OR (`employee_code` != "" AND `employee_code` = ?) OR (`email` != "" AND LOWER(`email`) = ?) LIMIT 1');
+    $s3->execute([$actorId, $actorId, $actorEmpId, $actorEmail]);
+    if ($e = $s3->fetch(PDO::FETCH_ASSOC)) {
+        return [
+            'employeeId' => $e['id'],
+            'employeeCode' => $e['employee_code'] ?: $e['id'],
+            'employeeName' => $e['name'],
+            'department' => $e['department'] ?: 'Operations',
+            'designation' => $e['designation'] ?: ''
+        ];
+    }
+
+    return [
+        'employeeId' => $actorId,
+        'employeeCode' => $actorEmpId ?: ('EMP-' . strtoupper(substr($actorId, -4))),
+        'employeeName' => $actor['name'] ?? 'Employee',
+        'department' => $actor['department'] ?? 'Operations',
+        'designation' => $actor['designation'] ?? ($actor['role'] ?? '')
+    ];
+}
+
+// GET|POST /api/leaves
+if (in_array($cleanPath, ['/leaves', '/leaves/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied: Leave management is only available for staff members.']);
+        exit;
+    }
+
+    $roleUpper = strtoupper(trim((string)($actor['role'] ?? '')));
+    $isAdminOrHr = in_array($roleUpper, ['ADMIN', 'SUPER ADMIN', 'HR MANAGER'], true);
+
+    if ($method === 'GET') {
+        $yearParam = isset($_GET['year']) ? intval($_GET['year']) : 0;
+        $leaveYear = ($yearParam >= 2000) ? $yearParam : intval(date('Y'));
+        $myProfile = resolveEmployeeForLeavePhp($pdo, $actor);
+
+        // Fetch active staff directory (from solar_employees merged with solar_users non-Customer)
+        $empRows = $pdo->query('SELECT * FROM `solar_employees` ORDER BY `created_at` ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $seenEmpIds = [];
+        $seenEmails = [];
+        foreach ($empRows as $er) {
+            $seenEmpIds[$er['id']] = true;
+            if (!empty($er['email'])) $seenEmails[strtolower($er['email'])] = true;
+        }
+        $uStmt = $pdo->query("SELECT * FROM `solar_users` WHERE `role` != 'Customer'");
+        while ($u = $uStmt->fetch(PDO::FETCH_ASSOC)) {
+            $uEmail = strtolower($u['email'] ?? '');
+            if (empty($seenEmpIds[$u['id']]) && (empty($uEmail) || empty($seenEmails[$uEmail]))) {
+                $empRows[] = [
+                    'id' => $u['id'],
+                    'auth_uid' => $u['id'],
+                    'employee_code' => $u['employee_id'] ?: ('EMP-' . substr($u['id'], -4)),
+                    'name' => $u['name'],
+                    'email' => $u['email'] ?? '',
+                    'department' => $u['department'] ?: 'Operations',
+                    'designation' => $u['designation'] ?: ($u['role'] ?: ''),
+                    'status' => $u['status'] ?: 'ACTIVE'
+                ];
+                $seenEmpIds[$u['id']] = true;
+                if (!empty($uEmail)) $seenEmails[$uEmail] = true;
+            }
+        }
+
+        $targetEmployees = [];
+        foreach ($empRows as $er) {
+            if ($isAdminOrHr) {
+                if (strtoupper((string)($er['status'] ?? '')) !== 'TERMINATED') {
+                    $targetEmployees[] = $er;
+                }
+            } else {
+                $erEmail = strtolower((string)($er['email'] ?? ''));
+                $actorEmail = strtolower((string)($actor['email'] ?? ''));
+                if (
+                    $er['id'] === $myProfile['employeeId'] ||
+                    ($er['auth_uid'] ?? '') === ($actor['id'] ?? '') ||
+                    (!empty($myProfile['employeeCode']) && ($er['employee_code'] ?? '') === $myProfile['employeeCode']) ||
+                    (!empty($actorEmail) && $erEmail === $actorEmail)
+                ) {
+                    $targetEmployees[] = $er;
+                }
+            }
+        }
+        if (empty($targetEmployees)) {
+            $targetEmployees[] = [
+                'id' => $myProfile['employeeId'],
+                'employee_code' => $myProfile['employeeCode'],
+                'name' => $myProfile['employeeName'],
+                'department' => $myProfile['department'],
+                'designation' => $myProfile['designation']
+            ];
+        }
+
+        foreach ($targetEmployees as $emp) {
+            ensureLeaveBalanceRowPhp($pdo, $emp['id'], $leaveYear);
+        }
+
+        $myIdVariants = array_values(array_unique(array_filter([
+            $myProfile['employeeId'],
+            trim((string)($actor['id'] ?? '')),
+            trim((string)($actor['employeeId'] ?? ($actor['employee_id'] ?? '')))
+        ])));
+
+        if ($isAdminOrHr) {
+            $lStmt = $pdo->prepare('SELECT * FROM `solar_leave_requests` WHERE `leave_year` = ? ORDER BY FIELD(`status`, "PENDING", "APPROVED", "REJECTED", "CANCELLED"), `applied_at` DESC');
+            $lStmt->execute([$leaveYear]);
+            $leaveRows = $lStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $bStmt = $pdo->prepare('SELECT * FROM `solar_leave_balances` WHERE `leave_year` = ?');
+            $bStmt->execute([$leaveYear]);
+            $balRows = $bStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } else {
+            $ph = implode(',', array_fill(0, count($myIdVariants), '?'));
+            $lStmt = $pdo->prepare("SELECT * FROM `solar_leave_requests` WHERE `leave_year` = ? AND `employee_id` IN ($ph) ORDER BY `applied_at` DESC");
+            $lStmt->execute(array_merge([$leaveYear], $myIdVariants));
+            $leaveRows = $lStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $bStmt = $pdo->prepare("SELECT * FROM `solar_leave_balances` WHERE `leave_year` = ? AND `employee_id` IN ($ph)");
+            $bStmt->execute(array_merge([$leaveYear], $myIdVariants));
+            $balRows = $bStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        }
+
+        $leaves = array_map('mapLeaveRowPhp', $leaveRows);
+        $balByEmp = [];
+        foreach ($balRows as $b) {
+            $balByEmp[$b['employee_id']] = $b;
+        }
+
+        $pendingMap = [];
+        foreach ($leaves as $lv) {
+            if ($lv['status'] === 'PENDING') {
+                $eid = $lv['employeeId'];
+                if (!isset($pendingMap[$eid])) $pendingMap[$eid] = ['CASUAL' => 0.0, 'SICK' => 0.0, 'EARNED' => 0.0];
+                if (isset($pendingMap[$eid][$lv['leaveType']])) {
+                    $pendingMap[$eid][$lv['leaveType']] += floatval($lv['totalDays']);
+                }
+            }
+        }
+
+        $balances = [];
+        foreach ($targetEmployees as $emp) {
+            $eid = $emp['id'];
+            $b = $balByEmp[$eid] ?? [];
+            $pend = $pendingMap[$eid] ?? ['CASUAL' => 0.0, 'SICK' => 0.0, 'EARNED' => 0.0];
+            $casualTotal = isset($b['casual_total']) ? floatval($b['casual_total']) : 12.0;
+            $casualUsed = floatval($b['casual_used'] ?? 0);
+            $sickTotal = isset($b['sick_total']) ? floatval($b['sick_total']) : 8.0;
+            $sickUsed = floatval($b['sick_used'] ?? 0);
+            $earnedTotal = isset($b['earned_total']) ? floatval($b['earned_total']) : 15.0;
+            $earnedUsed = floatval($b['earned_used'] ?? 0);
+            $unpaidUsed = floatval($b['unpaid_used'] ?? 0);
+            $totalAllocated = $casualTotal + $sickTotal + $earnedTotal;
+            $totalUsed = $casualUsed + $sickUsed + $earnedUsed;
+            $balances[] = [
+                'id' => $b['id'] ?? ('lbal-' . $eid . '-' . $leaveYear),
+                'employeeId' => $eid,
+                'employeeCode' => $emp['employee_code'] ?? '',
+                'employeeName' => $emp['name'] ?? '',
+                'department' => $emp['department'] ?? '',
+                'designation' => $emp['designation'] ?? '',
+                'leaveYear' => $leaveYear,
+                'casualTotal' => $casualTotal,
+                'casualUsed' => $casualUsed,
+                'casualPending' => $pend['CASUAL'],
+                'casualRemaining' => max(0, round($casualTotal - $casualUsed, 2)),
+                'sickTotal' => $sickTotal,
+                'sickUsed' => $sickUsed,
+                'sickPending' => $pend['SICK'],
+                'sickRemaining' => max(0, round($sickTotal - $sickUsed, 2)),
+                'earnedTotal' => $earnedTotal,
+                'earnedUsed' => $earnedUsed,
+                'earnedPending' => $pend['EARNED'],
+                'earnedRemaining' => max(0, round($earnedTotal - $earnedUsed, 2)),
+                'unpaidUsed' => $unpaidUsed,
+                'totalAllocated' => $totalAllocated,
+                'totalUsed' => $totalUsed,
+                'totalRemaining' => max(0, round($totalAllocated - $totalUsed, 2)),
+                'updatedAt' => !empty($b['updated_at']) ? date('c', strtotime((string)$b['updated_at'])) : null
+            ];
+        }
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'data' => [
+                'leaveYear' => $leaveYear,
+                'canReview' => $isAdminOrHr,
+                'myEmployee' => $myProfile,
+                'leaves' => $leaves,
+                'balances' => $balances
+            ]
+        ]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        try {
+            $targetEmp = resolveEmployeeForLeavePhp($pdo, $actor, $body['employeeId'] ?? null);
+            $leaveType = strtoupper(trim((string)($body['leaveType'] ?? 'CASUAL')));
+            if (!in_array($leaveType, ['CASUAL', 'SICK', 'EARNED', 'UNPAID'], true)) {
+                throw new Exception('Invalid leave type. Choose CASUAL, SICK, EARNED, or UNPAID.', 400);
+            }
+            $startDate = substr(trim((string)($body['startDate'] ?? '')), 0, 10);
+            $endDate = substr(trim((string)($body['endDate'] ?? $startDate)), 0, 10);
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) {
+                throw new Exception('Valid start date and end date (YYYY-MM-DD) are required.', 400);
+            }
+            if ($endDate < $startDate) {
+                throw new Exception('End date cannot be earlier than start date.', 400);
+            }
+            $isHalfDay = parseBoolFlagPhp($body['isHalfDay'] ?? false, false);
+            if ($isHalfDay && $startDate !== $endDate) {
+                throw new Exception('Half-day leave can only be applied for a single date (start date = end date).', 400);
+            }
+            $halfDaySession = $isHalfDay ? trim((string)($body['halfDaySession'] ?? 'FIRST_HALF')) : '';
+            $sTs = strtotime($startDate . ' 00:00:00 UTC');
+            $eTs = strtotime($endDate . ' 00:00:00 UTC');
+            $totalDays = $isHalfDay ? 0.5 : (round(($eTs - $sTs) / 86400) + 1);
+            if ($totalDays <= 0 || $totalDays > 180) {
+                throw new Exception('Leave duration must be between 0.5 and 180 days.', 400);
+            }
+            $reason = trim((string)($body['reason'] ?? ''));
+            if (strlen($reason) < 3) {
+                throw new Exception('Please enter a valid reason for leave (minimum 3 characters).', 400);
+            }
+
+            $leaveYear = intval(substr($startDate, 0, 4));
+            $pdo->beginTransaction();
+            try {
+                ensureLeaveBalanceRowPhp($pdo, $targetEmp['employeeId'], $leaveYear);
+
+                $ovStmt = $pdo->prepare("
+                    SELECT id, start_date, end_date, status FROM `solar_leave_requests`
+                    WHERE `employee_id` = ? AND `status` IN ('PENDING', 'APPROVED')
+                      AND `start_date` <= ? AND `end_date` >= ?
+                    LIMIT 1 FOR UPDATE
+                ");
+                $ovStmt->execute([$targetEmp['employeeId'], $endDate, $startDate]);
+                if ($ov = $ovStmt->fetch(PDO::FETCH_ASSOC)) {
+                    throw new Exception("Leave dates overlap with an existing {$ov['status']} application (" . substr((string)$ov['start_date'], 0, 10) . " to " . substr((string)$ov['end_date'], 0, 10) . ").", 409);
+                }
+
+                if ($leaveType !== 'UNPAID') {
+                    $bStmt = $pdo->prepare('SELECT * FROM `solar_leave_balances` WHERE `employee_id` = ? AND `leave_year` = ? LIMIT 1 FOR UPDATE');
+                    $bStmt->execute([$targetEmp['employeeId'], $leaveYear]);
+                    $bal = $bStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+                    $pStmt = $pdo->prepare("SELECT COALESCE(SUM(`total_days`), 0) AS pend_days FROM `solar_leave_requests` WHERE `employee_id` = ? AND `leave_year` = ? AND `leave_type` = ? AND `status` = 'PENDING'");
+                    $pStmt->execute([$targetEmp['employeeId'], $leaveYear, $leaveType]);
+                    $pendDays = floatval($pStmt->fetchColumn() ?: 0);
+
+                    $totalQuota = ($leaveType === 'CASUAL') ? floatval($bal['casual_total'] ?? 12) : (($leaveType === 'SICK') ? floatval($bal['sick_total'] ?? 8) : floatval($bal['earned_total'] ?? 15));
+                    $usedDays = ($leaveType === 'CASUAL') ? floatval($bal['casual_used'] ?? 0) : (($leaveType === 'SICK') ? floatval($bal['sick_used'] ?? 0) : floatval($bal['earned_used'] ?? 0));
+                    $available = $totalQuota - $usedDays - $pendDays;
+                    if ($totalDays > $available + 0.001) {
+                        throw new Exception("Insufficient {$leaveType} leave balance. Available (after pending): " . max(0, $available) . " day(s). Select UNPAID leave if exhausted.", 400);
+                    }
+                }
+
+                $id = 'lv-' . round(microtime(true) * 1000) . '-' . bin2hex(random_bytes(2));
+                $ins = $pdo->prepare("
+                    INSERT INTO `solar_leave_requests` (
+                        `id`, `employee_id`, `employee_code`, `employee_name`, `department`, `designation`,
+                        `leave_type`, `start_date`, `end_date`, `total_days`, `is_half_day`, `half_day_session`,
+                        `reason`, `status`, `leave_year`, `applied_at`
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, NOW())
+                ");
+                $ins->execute([
+                    $id,
+                    $targetEmp['employeeId'],
+                    $targetEmp['employeeCode'],
+                    $targetEmp['employeeName'],
+                    $targetEmp['department'],
+                    $targetEmp['designation'],
+                    $leaveType,
+                    $startDate,
+                    $endDate,
+                    $totalDays,
+                    $isHalfDay ? 1 : 0,
+                    $halfDaySession,
+                    $reason,
+                    $leaveYear
+                ]);
+
+                $getStmt = $pdo->prepare('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1');
+                $getStmt->execute([$id]);
+                $savedRow = $getStmt->fetch(PDO::FETCH_ASSOC);
+                $pdo->commit();
+
+                http_response_code(201);
+                echo json_encode(['success' => true, 'data' => mapLeaveRowPhp($savedRow), 'message' => 'Leave application submitted successfully.']);
+            } catch (Exception $inner) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $inner;
+            }
+        } catch (Exception $e) {
+            $exCode = intval($e->getCode());
+            $statusCode = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+            http_response_code($statusCode);
+            echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+}
+
+// PUT|POST /api/leaves/{id}/review
+if (preg_match('#^/leaves/([^/]+)/review/?$#', $cleanPath, $matches) && in_array($method, ['PUT', 'POST'], true)) {
+    $leaveId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminOrHrUserPhp($pdo);
+
+    try {
+        $rawAction = strtoupper(trim((string)($body['action'] ?? ($body['status'] ?? ''))));
+        $targetStatus = in_array($rawAction, ['APPROVE', 'APPROVED'], true)
+            ? 'APPROVED'
+            : (in_array($rawAction, ['REJECT', 'REJECTED'], true) ? 'REJECTED' : '');
+        if (empty($targetStatus)) {
+            throw new Exception('Invalid review action. Must be APPROVE or REJECT.', 400);
+        }
+        $cleanRemarks = trim((string)($body['remarks'] ?? ($body['adminRemarks'] ?? '')));
+
+        $pdo->beginTransaction();
+        try {
+            $lStmt = $pdo->prepare('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1 FOR UPDATE');
+            $lStmt->execute([$leaveId]);
+            $lv = $lStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$lv) {
+                throw new Exception('Leave application not found.', 404);
+            }
+            $prevStatus = strtoupper((string)($lv['status'] ?? 'PENDING'));
+            if ($prevStatus === 'CANCELLED') {
+                throw new Exception('Cannot review a cancelled leave application.', 400);
+            }
+
+            $empId = $lv['employee_id'];
+            $leaveYear = intval($lv['leave_year'] ?? date('Y'));
+            $totalDays = floatval($lv['total_days'] ?? 0);
+            $lType = strtoupper((string)($lv['leave_type'] ?? 'CASUAL'));
+            $usedCol = ($lType === 'CASUAL') ? 'casual_used' : (($lType === 'SICK') ? 'sick_used' : (($lType === 'EARNED') ? 'earned_used' : 'unpaid_used'));
+
+            ensureLeaveBalanceRowPhp($pdo, $empId, $leaveYear);
+            $bStmt = $pdo->prepare('SELECT * FROM `solar_leave_balances` WHERE `employee_id` = ? AND `leave_year` = ? LIMIT 1 FOR UPDATE');
+            $bStmt->execute([$empId, $leaveYear]);
+            $bal = $bStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+            if ($targetStatus === 'APPROVED' && $prevStatus !== 'APPROVED') {
+                if ($lType !== 'UNPAID') {
+                    $totalCol = ($lType === 'CASUAL') ? 'casual_total' : (($lType === 'SICK') ? 'sick_total' : 'earned_total');
+                    $defaultQuota = ($lType === 'CASUAL') ? 12.0 : (($lType === 'SICK') ? 8.0 : 15.0);
+                    $quota = isset($bal[$totalCol]) ? floatval($bal[$totalCol]) : $defaultQuota;
+                    $used = floatval($bal[$usedCol] ?? 0);
+                    if ($used + $totalDays > $quota + 0.001) {
+                        throw new Exception("Cannot approve: {$lType} balance insufficient (Remaining: " . max(0, $quota - $used) . " day(s), Requested: {$totalDays} day(s)).", 400);
+                    }
+                }
+                $pdo->prepare("UPDATE `solar_leave_balances` SET `$usedCol` = `$usedCol` + ? WHERE `employee_id` = ? AND `leave_year` = ?")
+                    ->execute([$totalDays, $empId, $leaveYear]);
+            } elseif ($targetStatus === 'REJECTED' && $prevStatus === 'APPROVED') {
+                $pdo->prepare("UPDATE `solar_leave_balances` SET `$usedCol` = GREATEST(0, `$usedCol` - ?) WHERE `employee_id` = ? AND `leave_year` = ?")
+                    ->execute([$totalDays, $empId, $leaveYear]);
+            }
+
+            $pdo->prepare("
+                UPDATE `solar_leave_requests`
+                SET `status` = ?, `reviewed_by` = ?, `reviewer_id` = ?, `reviewed_at` = NOW(), `admin_remarks` = ?, `updated_at` = CURRENT_TIMESTAMP
+                WHERE `id` = ?
+            ")->execute([$targetStatus, $actor['name'] ?? 'Administrator', $actor['id'] ?? '', ($cleanRemarks !== '' ? $cleanRemarks : null), $leaveId]);
+
+            $uStmt = $pdo->prepare('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1');
+            $uStmt->execute([$leaveId]);
+            $updatedRow = $uStmt->fetch(PDO::FETCH_ASSOC);
+            $pdo->commit();
+
+            http_response_code(200);
+            echo json_encode([
+                'success' => true,
+                'data' => mapLeaveRowPhp($updatedRow),
+                'message' => 'Leave application ' . ($targetStatus === 'APPROVED' ? 'approved' : 'rejected') . ' successfully.'
+            ]);
+        } catch (Exception $inner) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $inner;
+        }
+    } catch (Exception $e) {
+        $exCode = intval($e->getCode());
+        $statusCode = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+        http_response_code($statusCode);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/leaves/{id}/cancel OR DELETE /api/leaves/{id}
+if ((preg_match('#^/leaves/([^/]+)/cancel/?$#', $cleanPath, $matches) && $method === 'POST') ||
+    (preg_match('#^/leaves/([^/]+)/?$#', $cleanPath, $matches) && $method === 'DELETE')) {
+    $leaveId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied.']);
+        exit;
+    }
+
+    try {
+        $roleUpper = strtoupper(trim((string)($actor['role'] ?? '')));
+        $isAdminOrHr = in_array($roleUpper, ['ADMIN', 'SUPER ADMIN', 'HR MANAGER'], true);
+        $myProfile = resolveEmployeeForLeavePhp($pdo, $actor);
+        $myIdVariants = array_values(array_unique(array_filter([
+            $myProfile['employeeId'],
+            trim((string)($actor['id'] ?? '')),
+            trim((string)($actor['employeeId'] ?? ($actor['employee_id'] ?? '')))
+        ])));
+
+        $pdo->beginTransaction();
+        try {
+            $lStmt = $pdo->prepare('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1 FOR UPDATE');
+            $lStmt->execute([$leaveId]);
+            $lv = $lStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$lv) {
+                throw new Exception('Leave application not found.', 404);
+            }
+            if (!$isAdminOrHr && !in_array((string)$lv['employee_id'], $myIdVariants, true)) {
+                throw new Exception('Access denied: You can only cancel your own leave requests.', 403);
+            }
+            $prevStatus = strtoupper((string)($lv['status'] ?? 'PENDING'));
+            if (!$isAdminOrHr && $prevStatus !== 'PENDING') {
+                throw new Exception('Only pending leave applications can be cancelled by an employee.', 400);
+            }
+
+            if ($prevStatus === 'APPROVED') {
+                $lType = strtoupper((string)($lv['leave_type'] ?? 'CASUAL'));
+                $usedCol = ($lType === 'CASUAL') ? 'casual_used' : (($lType === 'SICK') ? 'sick_used' : (($lType === 'EARNED') ? 'earned_used' : 'unpaid_used'));
+                $pdo->prepare("UPDATE `solar_leave_balances` SET `$usedCol` = GREATEST(0, `$usedCol` - ?) WHERE `employee_id` = ? AND `leave_year` = ?")
+                    ->execute([floatval($lv['total_days'] ?? 0), $lv['employee_id'], intval($lv['leave_year'] ?? date('Y'))]);
+            }
+
+            $cancelRemarks = trim((string)($body['remarks'] ?? ($body['adminRemarks'] ?? '')));
+            $pdo->prepare("UPDATE `solar_leave_requests` SET `status` = 'CANCELLED', `admin_remarks` = COALESCE(?, `admin_remarks`), `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ?")
+                ->execute([($cancelRemarks !== '' ? $cancelRemarks : null), $leaveId]);
+
+            $uStmt = $pdo->prepare('SELECT * FROM `solar_leave_requests` WHERE `id` = ? LIMIT 1');
+            $uStmt->execute([$leaveId]);
+            $updatedRow = $uStmt->fetch(PDO::FETCH_ASSOC);
+            $pdo->commit();
+
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => mapLeaveRowPhp($updatedRow), 'message' => 'Leave application cancelled.']);
+        } catch (Exception $inner) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $inner;
+        }
+    } catch (Exception $e) {
+        $exCode = intval($e->getCode());
+        $statusCode = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+        http_response_code($statusCode);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+    }
+    exit;
 }
 
 // GET|POST /api/expenses

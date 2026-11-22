@@ -673,7 +673,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           hasPermission('hrms.view') ||
           hasPermission('hrms.manage') ||
           hasPermission('hrms.payroll') ||
-          hasPermission('hrms.holidays')
+          hasPermission('hrms.attendance_punch') ||
+          hasPermission('hrms.leave_apply') ||
+          hasPermission('hrms.leave_review')
         );
       case 'service':
       case 'amc':

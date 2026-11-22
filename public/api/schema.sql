@@ -281,6 +281,12 @@ CREATE TABLE IF NOT EXISTS `solar_employees` (
   `salary_monthly` DECIMAL(12,2) DEFAULT 0.00,
   `status` VARCHAR(32) DEFAULT 'ACTIVE',
   `current_site_location` VARCHAR(255) DEFAULT '',
+  `esic_number` VARCHAR(64) DEFAULT '',
+  `bank_account_number` VARCHAR(64) DEFAULT '',
+  `bank_name` VARCHAR(150) DEFAULT '',
+  `ifsc_code` VARCHAR(32) DEFAULT '',
+  `emergency_contact_person` VARCHAR(150) DEFAULT '',
+  `emergency_contact_number` VARCHAR(40) DEFAULT '',
   `login_enabled` TINYINT(1) DEFAULT 1,
   `auth_uid` VARCHAR(64) DEFAULT NULL,
   `system_role` VARCHAR(64) DEFAULT 'Super Admin',
@@ -1059,6 +1065,57 @@ CREATE TABLE IF NOT EXISTS `solar_purchase_return_items` (
   `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   INDEX `idx_pri_return` (`return_id`),
   CONSTRAINT `fk_pri_return` FOREIGN KEY (`return_id`) REFERENCES `solar_purchase_returns` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `solar_leave_requests`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_leave_requests` (
+  `id` VARCHAR(64) PRIMARY KEY,
+  `employee_id` VARCHAR(64) NOT NULL,
+  `employee_code` VARCHAR(64) DEFAULT '',
+  `employee_name` VARCHAR(255) NOT NULL,
+  `department` VARCHAR(100) DEFAULT '',
+  `designation` VARCHAR(128) DEFAULT '',
+  `leave_type` VARCHAR(32) NOT NULL,
+  `start_date` DATE NOT NULL,
+  `end_date` DATE NOT NULL,
+  `total_days` DECIMAL(5,2) NOT NULL DEFAULT 1.00,
+  `is_half_day` TINYINT(1) NOT NULL DEFAULT 0,
+  `half_day_session` VARCHAR(24) DEFAULT '',
+  `reason` TEXT NOT NULL,
+  `status` VARCHAR(24) NOT NULL DEFAULT 'PENDING',
+  `leave_year` INT NOT NULL,
+  `applied_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `reviewed_by` VARCHAR(255) DEFAULT NULL,
+  `reviewer_id` VARCHAR(64) DEFAULT NULL,
+  `reviewed_at` DATETIME DEFAULT NULL,
+  `admin_remarks` TEXT DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_leave_emp` (`employee_id`),
+  INDEX `idx_leave_status` (`status`),
+  INDEX `idx_leave_dates` (`start_date`, `end_date`),
+  INDEX `idx_leave_year` (`leave_year`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `solar_leave_balances`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `solar_leave_balances` (
+  `id` VARCHAR(96) PRIMARY KEY,
+  `employee_id` VARCHAR(64) NOT NULL,
+  `leave_year` INT NOT NULL,
+  `casual_total` DECIMAL(5,2) NOT NULL DEFAULT 12.00,
+  `casual_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `sick_total` DECIMAL(5,2) NOT NULL DEFAULT 8.00,
+  `sick_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `earned_total` DECIMAL(5,2) NOT NULL DEFAULT 15.00,
+  `earned_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `unpaid_used` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_emp_leave_year` (`employee_id`, `leave_year`),
+  INDEX `idx_leave_bal_emp` (`employee_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

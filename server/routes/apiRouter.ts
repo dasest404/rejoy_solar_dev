@@ -228,7 +228,7 @@ apiRouter.get('/db/status', (_req: Request, res: Response) => {
         'solar_users', 'solar_customers', 'solar_leads', 'solar_projects',
         'solar_project_stages', 'solar_site_surveys', 'solar_quotations',
         'solar_payments', 'solar_expenses', 'solar_employees', 'solar_attendance',
-        'solar_payslips', 'solar_holidays', 'solar_service_tickets', 'solar_amc_contracts',
+        'solar_payslips', 'solar_holidays', 'solar_leave_requests', 'solar_leave_balances', 'solar_service_tickets', 'solar_amc_contracts',
         'solar_notifications', 'solar_products', 'solar_vendors', 'solar_purchase_orders',
         'solar_boms', 'solar_sales_invoices', 'solar_vendor_sales_invoices', 'solar_vendor_sales_invoice_items', 'solar_vendor_sales_payments',
         'solar_sales_returns', 'solar_sales_return_items', 'solar_purchase_returns', 'solar_purchase_return_items',
@@ -1629,6 +1629,106 @@ apiRouter.delete('/holidays/:id', async (req: Request, res: Response) => {
     res.json({ success: true, message: 'Holiday deleted from MySQL.' });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to delete holiday');
+  }
+});
+
+// ==========================================================
+// 7B. EMPLOYEE LEAVE MANAGEMENT APIS
+// ==========================================================
+apiRouter.get('/leaves', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(user)) {
+      return res.status(403).json({ success: false, message: 'Access denied: Leave management is only available for staff members.' });
+    }
+    const yearParam = req.query.year ? Number(req.query.year) : undefined;
+    const data = await dbManager.getLeaveData(user, yearParam);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch leave records');
+  }
+});
+
+apiRouter.post('/leaves', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(user)) {
+      return res.status(403).json({ success: false, message: 'Access denied: Customers cannot apply for employee leave.' });
+    }
+    const saved = await dbManager.applyLeave(user, req.body || {});
+    res.status(201).json({ success: true, data: saved, message: 'Leave application submitted successfully.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to submit leave application');
+  }
+});
+
+apiRouter.put('/leaves/:id/review', requireRole(['Admin', 'Super Admin', 'HR Manager']), async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const action = req.body?.action || req.body?.status;
+    const remarks = req.body?.remarks ?? req.body?.adminRemarks ?? '';
+    const updated = await dbManager.reviewLeave(user, req.params.id, action, remarks);
+    res.json({
+      success: true,
+      data: updated,
+      message: `Leave application ${updated.status === 'APPROVED' ? 'approved' : 'rejected'} successfully.`
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to review leave application');
+  }
+});
+
+apiRouter.post('/leaves/:id/review', requireRole(['Admin', 'Super Admin', 'HR Manager']), async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const action = req.body?.action || req.body?.status;
+    const remarks = req.body?.remarks ?? req.body?.adminRemarks ?? '';
+    const updated = await dbManager.reviewLeave(user, req.params.id, action, remarks);
+    res.json({
+      success: true,
+      data: updated,
+      message: `Leave application ${updated.status === 'APPROVED' ? 'approved' : 'rejected'} successfully.`
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to review leave application');
+  }
+});
+
+apiRouter.post('/leaves/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(user)) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+    const updated = await dbManager.cancelLeave(user, req.params.id, req.body?.remarks ?? req.body?.adminRemarks);
+    res.json({ success: true, data: updated, message: 'Leave application cancelled.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to cancel leave application');
+  }
+});
+
+apiRouter.delete('/leaves/:id', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(user)) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+    const updated = await dbManager.cancelLeave(user, req.params.id, req.body?.remarks ?? req.body?.adminRemarks);
+    res.json({ success: true, data: updated, message: 'Leave application cancelled.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to cancel leave application');
   }
 });
 

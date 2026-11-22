@@ -26,7 +26,11 @@ import {
   Download,
   ExternalLink,
   Trash2,
-  FileCheck
+  FileCheck,
+  Landmark,
+  CreditCard,
+  HeartPulse,
+  UserCheck
 } from 'lucide-react';
 import { validateEmployee, DuplicateRecordError } from '../../services/validation';
 import { useAuth } from '../../context/AuthContext';
@@ -241,7 +245,13 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     salaryMonthly: 0,
     status: 'ACTIVE' as Employee['status'],
     photoUrl: '',
-    currentSiteLocation: ''
+    currentSiteLocation: '',
+    esicNumber: '',
+    bankAccountNumber: '',
+    bankName: '',
+    ifscCode: '',
+    emergencyContactPerson: '',
+    emergencyContactNumber: ''
   });
 
   // Stable authoritative Employee ID for new employee uploads & MySQL row consistency
@@ -305,7 +315,13 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         salaryMonthly: Number(employeeToEdit.salaryMonthly) || 0,
         status: employeeToEdit.status || 'ACTIVE',
         photoUrl: employeeToEdit.photoUrl || '',
-        currentSiteLocation: employeeToEdit.currentSiteLocation || ''
+        currentSiteLocation: employeeToEdit.currentSiteLocation || '',
+        esicNumber: employeeToEdit.esicNumber || '',
+        bankAccountNumber: employeeToEdit.bankAccountNumber || '',
+        bankName: employeeToEdit.bankName || '',
+        ifscCode: employeeToEdit.ifscCode || '',
+        emergencyContactPerson: employeeToEdit.emergencyContactPerson || '',
+        emergencyContactNumber: employeeToEdit.emergencyContactNumber || ''
       });
 
       const resolvedRole = (employeeToEdit.systemRole ||
@@ -343,7 +359,13 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         salaryMonthly: 0,
         status: 'ACTIVE',
         photoUrl: '',
-        currentSiteLocation: ''
+        currentSiteLocation: '',
+        esicNumber: '',
+        bankAccountNumber: '',
+        bankName: '',
+        ifscCode: '',
+        emergencyContactPerson: '',
+        emergencyContactNumber: ''
       });
 
       setLoginEnabled(true);
@@ -638,6 +660,21 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
       newErrors.salaryMonthly = 'Salary must be a non-negative number.';
     }
 
+    const cleanIfsc = formData.ifscCode.trim().toUpperCase();
+    if (cleanIfsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
+      newErrors.ifscCode = 'IFSC Code must be 11 characters (e.g. SBIN0001234).';
+    }
+
+    const cleanBankAcc = formData.bankAccountNumber.replace(/\s+/g, '');
+    if (cleanBankAcc && (cleanBankAcc.length < 6 || !/^[A-Za-z0-9-]+$/.test(cleanBankAcc))) {
+      newErrors.bankAccountNumber = 'Bank Account Number must be at least 6 valid characters.';
+    }
+
+    const cleanEmergencyPhone = formData.emergencyContactNumber.trim();
+    if (cleanEmergencyPhone && cleanEmergencyPhone.replace(/\D/g, '').length < 8) {
+      newErrors.emergencyContactNumber = 'Emergency Contact Number must contain at least 8 digits.';
+    }
+
     // ERP Account Validation
     if (loginEnabled) {
       const cleanLoginEmail = (loginEmail || formData.email).trim();
@@ -718,6 +755,12 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         status: formData.status,
         photoUrl: formData.photoUrl.trim() || undefined,
         currentSiteLocation: formData.currentSiteLocation.trim() || undefined,
+        esicNumber: formData.esicNumber.trim(),
+        bankAccountNumber: formData.bankAccountNumber.trim(),
+        bankName: formData.bankName.trim(),
+        ifscCode: formData.ifscCode.trim().toUpperCase(),
+        emergencyContactPerson: formData.emergencyContactPerson.trim(),
+        emergencyContactNumber: formData.emergencyContactNumber.trim(),
 
         // Safe account linkage & Field Worker fields
         loginEnabled: loginEnabled,
@@ -969,6 +1012,131 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                   </option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* SECTION: Statutory, Banking & Emergency Contact Details                  */}
+          {/* ========================================================================= */}
+          <div className="mt-4 pt-4 border-t border-slate-200">
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-slate-800 text-amber-400 flex items-center justify-center shrink-0 shadow-2xs">
+                  <Landmark className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900">
+                    Statutory, Bank & Emergency Contact Details
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    Payroll disbursement bank account, ESIC statutory registration & emergency contact
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
+                    <span>ESIC Number</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.esicNumber}
+                    onChange={e => setFormData({ ...formData, esicNumber: e.target.value })}
+                    placeholder="e.g. 31-00-123456-000-0001"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 bg-white font-mono focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <Landmark className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Bank Name</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.bankName}
+                    onChange={e => setFormData({ ...formData, bankName: e.target.value })}
+                    placeholder="e.g. State Bank of India / HDFC Bank"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Bank Account Number</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.bankAccountNumber}
+                    onChange={e => setFormData({ ...formData, bankAccountNumber: e.target.value })}
+                    placeholder="e.g. 50100234567890"
+                    className={`w-full text-xs border rounded-xl p-2.5 bg-white font-mono focus:outline-hidden focus:ring-2 focus:ring-amber-500 ${
+                      errors.bankAccountNumber ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                    }`}
+                  />
+                  {errors.bankAccountNumber && (
+                    <p className="text-[11px] text-rose-600 mt-1">{errors.bankAccountNumber}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-slate-400" />
+                    <span>IFSC Code</span>
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={11}
+                    value={formData.ifscCode}
+                    onChange={e => setFormData({ ...formData, ifscCode: e.target.value.toUpperCase() })}
+                    placeholder="e.g. HDFC0001234"
+                    className={`w-full text-xs border rounded-xl p-2.5 bg-white font-mono uppercase focus:outline-hidden focus:ring-2 focus:ring-amber-500 ${
+                      errors.ifscCode ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                    }`}
+                  />
+                  {errors.ifscCode && <p className="text-[11px] text-rose-600 mt-1">{errors.ifscCode}</p>}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Emergency Contact Person</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.emergencyContactPerson}
+                    onChange={e => setFormData({ ...formData, emergencyContactPerson: e.target.value })}
+                    placeholder="e.g. Ramesh Patel (Father)"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <HeartPulse className="w-3.5 h-3.5 text-rose-500" />
+                    <span>Emergency Contact Number</span>
+                  </label>
+                  <input
+                    type="tel"
+                    value={formData.emergencyContactNumber}
+                    onChange={e => setFormData({ ...formData, emergencyContactNumber: e.target.value })}
+                    placeholder="+91 98765 43210"
+                    className={`w-full text-xs border rounded-xl p-2.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500 ${
+                      errors.emergencyContactNumber ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                    }`}
+                  />
+                  {errors.emergencyContactNumber && (
+                    <p className="text-[11px] text-rose-600 mt-1">{errors.emergencyContactNumber}</p>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 

@@ -505,6 +505,12 @@ export interface Employee {
   salaryMonthly: number;
   status: 'ACTIVE' | 'ON LEAVE' | 'IN FIELD' | 'TERMINATED' | 'INACTIVE';
   currentSiteLocation?: string;
+  esicNumber?: string;
+  bankAccountNumber?: string;
+  bankName?: string;
+  ifscCode?: string;
+  emergencyContactPerson?: string;
+  emergencyContactNumber?: string;
 
   // ERP account linkage — no plaintext password
   loginEnabled: boolean;
@@ -657,6 +663,62 @@ export interface HolidayRecord {
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
+}
+
+export type LeaveType = 'CASUAL' | 'SICK' | 'EARNED' | 'UNPAID';
+
+export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+
+export interface LeaveApplication {
+  id: string;
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  department: string;
+  designation: string;
+  leaveType: LeaveType;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  totalDays: number;
+  isHalfDay: boolean;
+  halfDaySession?: 'FIRST_HALF' | 'SECOND_HALF' | '';
+  reason: string;
+  status: LeaveStatus;
+  leaveYear: number;
+  appliedAt: string;
+  reviewedBy?: string | null;
+  reviewerId?: string | null;
+  reviewedAt?: string | null;
+  adminRemarks?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface EmployeeLeaveBalance {
+  id?: string;
+  employeeId: string;
+  employeeCode?: string;
+  employeeName?: string;
+  department?: string;
+  designation?: string;
+  leaveYear: number;
+  casualTotal: number;
+  casualUsed: number;
+  casualPending: number;
+  casualRemaining: number;
+  sickTotal: number;
+  sickUsed: number;
+  sickPending: number;
+  sickRemaining: number;
+  earnedTotal: number;
+  earnedUsed: number;
+  earnedPending: number;
+  earnedRemaining: number;
+  unpaidUsed: number;
+  totalAllocated: number;
+  totalUsed: number;
+  totalRemaining: number;
+  updatedAt?: string;
 }
 
 export interface ServiceTicketHistoryEntry {

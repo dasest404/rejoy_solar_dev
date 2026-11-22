@@ -700,6 +700,62 @@ class ApiClient {
     return true;
   }
 
+  // --- Employee Leave Management ---
+  async getLeaves(year?: number): Promise<{
+    leaveYear: number;
+    canReview: boolean;
+    myEmployee: {
+      employeeId: string;
+      employeeCode: string;
+      employeeName: string;
+      department: string;
+      designation: string;
+    };
+    leaves: any[];
+    balances: any[];
+  }> {
+    const query = year ? `?year=${encodeURIComponent(String(year))}` : '';
+    const res = await this.request(`${this.baseUrl}/leaves${query}`, {
+      headers: this.getAuthHeaders()
+    });
+    return await this.handleResponse(res);
+  }
+
+  async applyLeave(payload: {
+    employeeId?: string;
+    leaveType: 'CASUAL' | 'SICK' | 'EARNED' | 'UNPAID';
+    startDate: string;
+    endDate: string;
+    isHalfDay?: boolean;
+    halfDaySession?: 'FIRST_HALF' | 'SECOND_HALF';
+    reason: string;
+  }): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/leaves`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async reviewLeave(id: string, action: 'APPROVE' | 'REJECT', remarks?: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/leaves/${encodeURIComponent(id)}/review`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ action, remarks })
+    });
+    return await this.handleResponse(res);
+  }
+
+  async cancelLeave(id: string, remarks?: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/leaves/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ remarks })
+    });
+    return await this.handleResponse(res);
+  }
+
   // --- Products ---
   async getProducts(): Promise<any[]> {
     const res = await this.request(`${this.baseUrl}/products`);
