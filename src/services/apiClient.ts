@@ -414,8 +414,36 @@ class ApiClient {
   async saveProject(proj: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/projects`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(proj)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async updateProject(id: string, proj: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/projects/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(proj)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async updateProjectControlCenter(
+    id: string,
+    payload: {
+      capacityKw?: number;
+      totalValue?: number;
+      receivedInflow?: number;
+      city?: string;
+      siteAddress?: string;
+      location?: string;
+    }
+  ): Promise<{ project: any; customer: any | null; payments: any[] }> {
+    const res = await this.request(`${this.baseUrl}/projects/${encodeURIComponent(id)}/control-center`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
     });
     return await this.handleResponse(res);
   }

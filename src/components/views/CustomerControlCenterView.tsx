@@ -8,6 +8,7 @@ import { StageCard } from '../workflow/StageCard';
 import { StatusBadge } from '../common/StatusBadge';
 import { ProjectTeamPanel } from '../control_center/ProjectTeamPanel';
 import { attemptTallySync, generateTallyReceiptXML } from '../../services/tally';
+import { getProjectReceivedInflow } from '../finance/accountingUtils';
 import {
   SunMedium,
   Building2,
@@ -31,8 +32,17 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Users
+  Users,
+  Pencil,
+  Save,
+  X,
+  Loader2
 } from 'lucide-react';
+
+const formatLakhCompact = (amount: number): string => {
+  const num = (Number(amount || 0) / 100000).toFixed(2).replace(/\.?0+$/, '');
+  return num || '0';
+};
 
 export const CustomerControlCenterView: React.FC = () => {
   const {
@@ -45,13 +55,30 @@ export const CustomerControlCenterView: React.FC = () => {
     triggerRefresh,
     refreshTrigger
   } = useApp();
-  const { currentUser, isCustomer } = useAuth();
+  const { currentUser, isCustomer, isAdmin, hasPermission, canEditFinancials } = useAuth();
+
+  const canEditOverview =
+    !isCustomer &&
+    (isAdmin ||
+      hasPermission('projects.edit_specs') ||
+      canEditFinancials() ||
+      hasPermission('crm.customers.manage'));
 
   const [activeTab, setActiveTab] = useState<'STAGES' | 'TEAM' | 'FINANCES' | 'DOCS' | 'PHOTOS' | 'SERVICE'>('STAGES');
   const [expandedStageKey, setExpandedStageKey] = useState<string | null>('panel_installation');
   const [tallySyncingId, setTallySyncingId] = useState<string | null>(null);
   const [activeXmlModal, setActiveXmlModal] = useState<string | null>(null);
   const [localUpdateCounter, setLocalUpdateCounter] = useState(0);
+
+  // Control Center Editable Overview State (Total Contract Value, Received Inflow, Site Location)
+  const [isEditingOverview, setIsEditingOverview] = useState(false);
+  const [overviewFocusField, setOverviewFocusField] = useState<'totalValue' | 'receivedInflow' | 'city' | null>(null);
+  const [editTotalValue, setEditTotalValue] = useState('');
+  const [editReceivedInflow, setEditReceivedInflow] = useState('');
+  const [editCity, setEditCity] = useState('');
+  const [editSiteAddress, setEditSiteAddress] = useState('');
+  const [isSavingOverview, setIsSavingOverview] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleStorageUpdate = () => {
@@ -112,17 +139,86 @@ export const CustomerControlCenterView: React.FC = () => {
     return projects.find(item => item.customerId === currentCustomer?.id) || projects[0] || null;
   }, [projects, selectedProjectId, currentCustomer, isCustomer]);
 
+  useEffect(() => {
+    setIsEditingOverview(false);
+    setOverviewFocusField(null);
+    setOverviewError(null);
+  }, [currentProject?.id]);
+
   // Project financials
   const payments = useMemo(() => {
     if (!currentProject?.id) return [];
     return storageService.getPayments().filter(p => p.projectId === currentProject.id);
   }, [currentProject?.id, refreshTrigger, localUpdateCounter]);
 
-  const totalCollected = payments
-    .filter(p => p.status === 'PAID')
-    .reduce((sum, p) => sum + p.amount, 0);
+  const totalCollected = useMemo(
+    () => getProjectReceivedInflow(currentProject, payments),
+    [currentProject, payments]
+  );
 
-  const balanceDue = (currentProject?.totalValue || 0) - totalCollected;
+  const balanceDue = Math.round(((currentProject?.totalValue || 0) - totalCollected) * 100) / 100;
+
+  const displayCity =
+    currentProject?.city || currentProject?.location || currentCustomer?.city || 'Not specified';
+  const displaySiteAddress =
+    currentProject?.siteAddress || currentCustomer?.siteAddress || 'Not specified';
+
+  const openOverviewEditor = (focusField: 'totalValue' | 'receivedInflow' | 'city' | null = null) => {
+    if (!canEditOverview || !currentProject || !currentCustomer) return;
+    setEditTotalValue(String(currentProject.totalValue ?? 0));
+    setEditReceivedInflow(String(totalCollected ?? 0));
+    setEditCity(currentProject.city || currentProject.location || currentCustomer.city || '');
+    setEditSiteAddress(currentProject.siteAddress || currentCustomer.siteAddress || '');
+    setOverviewFocusField(focusField);
+    setOverviewError(null);
+    setIsEditingOverview(true);
+  };
+
+  const handleSaveOverview = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!currentProject) return;
+
+    const parsedTotalValue = Number(editTotalValue);
+    const parsedReceivedInflow = Number(editReceivedInflow);
+    const trimmedCity = editCity.trim();
+    const trimmedSiteAddress = editSiteAddress.trim();
+
+    if (!Number.isFinite(parsedTotalValue) || parsedTotalValue < 0) {
+      setOverviewError('Total Contract Value cannot be negative.');
+      return;
+    }
+    if (!Number.isFinite(parsedReceivedInflow) || parsedReceivedInflow < 0) {
+      setOverviewError('Received Inflow cannot be negative.');
+      return;
+    }
+    if (!trimmedCity) {
+      setOverviewError('Site Location cannot be empty.');
+      return;
+    }
+
+    setIsSavingOverview(true);
+    setOverviewError(null);
+    try {
+      await storageService.updateControlCenterDetailsAsync(currentProject.id, {
+        totalValue: Math.round(parsedTotalValue * 100) / 100,
+        receivedInflow: Math.round(parsedReceivedInflow * 100) / 100,
+        city: trimmedCity,
+        location: trimmedCity,
+        siteAddress: trimmedSiteAddress
+      });
+      setIsEditingOverview(false);
+      setOverviewFocusField(null);
+      setLocalUpdateCounter(prev => prev + 1);
+      triggerRefresh();
+      showToast('Contract value, received inflow & site location saved to MySQL', 'success');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to save Control Center updates to MySQL.';
+      setOverviewError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsSavingOverview(false);
+    }
+  };
 
   // Project documents & photos
   const allPhotos = useMemo(() => {
@@ -188,7 +284,7 @@ SOLARPULSE EPC - COMPREHENSIVE PROJECT BRIEF
 =============================================
 Project: ${currentProject.title} (${currentProject.projectCode})
 Customer: ${currentCustomer.name} (${currentCustomer.companyName || ''})
-Site Address: ${currentCustomer.siteAddress || 'N/A'}, ${currentCustomer.city || 'N/A'}
+Site Address: ${displaySiteAddress}, ${displayCity}
 Capacity: ${currentProject.capacityKw} kW Rooftop Solar Power Plant
 Sanctioned Load: ${currentCustomer.sanctionedLoadKw || 'N/A'} kW
 Total Contract Value: INR ${currentProject.totalValue.toLocaleString('en-IN')}
@@ -345,65 +441,251 @@ Generated by SolarPulse EPC ERP on ${new Date().toLocaleString()}
           </div>
         </div>
 
-        {/* Vital Metadata Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
-          <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase">Total Contract Value</span>
-            <div className="text-base font-black text-slate-900 mt-0.5">
-              ₹{(currentProject.totalValue / 100000).toFixed(1)} <span className="text-xs font-bold text-slate-500">Lakh</span>
+        {/* Vital Metadata Grid & Inline Editor */}
+        {isEditingOverview ? (
+          <form
+            onSubmit={handleSaveOverview}
+            className="p-4 sm:p-5 rounded-2xl bg-amber-50/60 border border-amber-200 space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                  Edit Contract Value, Inflow & Site Location
+                </span>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Updates persist immediately in MySQL and synchronize across Dashboards, Projects, and Accounting.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={isSavingOverview}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs disabled:opacity-50 cursor-pointer"
+                >
+                  {isSavingOverview ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Save className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isSavingOverview ? 'Saving...' : 'Save Changes'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !isSavingOverview && setIsEditingOverview(false)}
+                  disabled={isSavingOverview}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Cancel</span>
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase">Received Inflow</span>
-            <div className="text-base font-black text-emerald-700 mt-0.5">
-              ₹{(totalCollected / 100000).toFixed(1)} <span className="text-xs font-bold text-emerald-600">Lakh</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Total Contract Value (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  autoFocus={overviewFocusField === 'totalValue'}
+                  value={editTotalValue}
+                  onChange={(e) => setEditTotalValue(e.target.value)}
+                  disabled={isSavingOverview}
+                  aria-label="Total Contract Value (INR)"
+                  className="w-full px-3 py-2 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                />
+                <span className="text-[11px] text-slate-500 mt-1 block">
+                  ₹{formatLakhCompact(Number(editTotalValue || 0))} Lakh
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Received Inflow (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  autoFocus={overviewFocusField === 'receivedInflow'}
+                  value={editReceivedInflow}
+                  onChange={(e) => setEditReceivedInflow(e.target.value)}
+                  disabled={isSavingOverview}
+                  aria-label="Received Inflow (INR)"
+                  className="w-full px-3 py-2 text-xs font-bold text-emerald-800 bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                />
+                <span className="text-[11px] text-emerald-700 mt-1 block">
+                  ₹{formatLakhCompact(Number(editReceivedInflow || 0))} Lakh • Milestone Due: ₹
+                  {(Math.round((Number(editTotalValue || 0) - Number(editReceivedInflow || 0)) * 100) / 100).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Site Location (City / Area)
+                </label>
+                <input
+                  type="text"
+                  autoFocus={overviewFocusField === 'city'}
+                  value={editCity}
+                  onChange={(e) => setEditCity(e.target.value)}
+                  disabled={isSavingOverview}
+                  placeholder="e.g. Ahmedabad, Sanand GIDC"
+                  aria-label="Site Location"
+                  className="w-full px-3 py-2 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Site Address
+                </label>
+                <input
+                  type="text"
+                  value={editSiteAddress}
+                  onChange={(e) => setEditSiteAddress(e.target.value)}
+                  disabled={isSavingOverview}
+                  placeholder="Full site street / industrial estate address"
+                  aria-label="Site Address"
+                  className="w-full px-3 py-2 text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
             </div>
-          </div>
 
-          <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase">Milestone Due</span>
-            <div className="text-base font-black text-amber-700 mt-0.5">
-              ₹{(balanceDue / 100000).toFixed(1)} <span className="text-xs font-bold text-amber-600">Lakh</span>
-            </div>
-          </div>
+            {overviewError && (
+              <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-2 rounded-xl">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{overviewError}</span>
+              </div>
+            )}
+          </form>
+        ) : (
+          <div className="space-y-2">
+            {canEditOverview && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => openOverviewEditor('totalValue')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors cursor-pointer"
+                >
+                  <Pencil className="w-3 h-3" />
+                  <span>Edit Contract Value, Inflow & Site Location</span>
+                </button>
+              </div>
+            )}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+              <div className="group/tile">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">Total Contract Value</span>
+                  {canEditOverview && (
+                    <button
+                      type="button"
+                      onClick={() => openOverviewEditor('totalValue')}
+                      title="Edit Total Contract Value"
+                      className="p-0.5 text-slate-400 hover:text-amber-700 rounded transition-colors cursor-pointer"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <div className="text-base font-black text-slate-900 mt-0.5">
+                  ₹{formatLakhCompact(currentProject.totalValue)}{' '}
+                  <span className="text-xs font-bold text-slate-500">Lakh</span>
+                </div>
+                <span className="text-[10px] text-slate-500 font-medium block">
+                  ₹{Number(currentProject.totalValue || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
 
-          <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase">Overall Progress</span>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-base font-black text-slate-900">{currentProject.progressPercentage}%</span>
-              <div className="w-12 bg-slate-200 h-2 rounded-full overflow-hidden">
-                <div className="bg-amber-500 h-full rounded-full" style={{ width: `${currentProject.progressPercentage}%` }} />
+              <div className="group/tile">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">Received Inflow</span>
+                  {canEditOverview && (
+                    <button
+                      type="button"
+                      onClick={() => openOverviewEditor('receivedInflow')}
+                      title="Edit Received Inflow"
+                      className="p-0.5 text-slate-400 hover:text-amber-700 rounded transition-colors cursor-pointer"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <div className="text-base font-black text-emerald-700 mt-0.5">
+                  ₹{formatLakhCompact(totalCollected)}{' '}
+                  <span className="text-xs font-bold text-emerald-600">Lakh</span>
+                </div>
+                <span className="text-[10px] text-emerald-700/80 font-medium block">
+                  ₹{Number(totalCollected || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase">Milestone Due</span>
+                <div className="text-base font-black text-amber-700 mt-0.5">
+                  ₹{formatLakhCompact(balanceDue)}{' '}
+                  <span className="text-xs font-bold text-amber-600">Lakh</span>
+                </div>
+                <span className="text-[10px] text-amber-700/80 font-medium block">
+                  ₹{Number(balanceDue || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase">Overall Progress</span>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-base font-black text-slate-900">{currentProject.progressPercentage}%</span>
+                  <div className="w-12 bg-slate-200 h-2 rounded-full overflow-hidden">
+                    <div className="bg-amber-500 h-full rounded-full" style={{ width: `${currentProject.progressPercentage}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="group/tile">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">Site Location</span>
+                  {canEditOverview && (
+                    <button
+                      type="button"
+                      onClick={() => openOverviewEditor('city')}
+                      title="Edit Site Location"
+                      className="p-0.5 text-slate-400 hover:text-amber-700 rounded transition-colors cursor-pointer"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs font-semibold text-slate-800 mt-0.5 truncate" title={displayCity}>
+                  {displayCity}
+                </p>
+              </div>
+
+              <div
+                onClick={() => setActiveTab('TEAM')}
+                className="cursor-pointer group"
+                title="Click to view assigned project specialists"
+              >
+                <span className="text-[11px] font-bold text-slate-400 uppercase group-hover:text-amber-700 transition-colors">
+                  Assigned Team
+                </span>
+                <p className="text-xs font-semibold text-slate-800 mt-0.5 flex items-center gap-1.5 group-hover:text-amber-700 transition-colors">
+                  <Users className="w-3.5 h-3.5 text-amber-600" />
+                  <span>{currentProject.assignedUsers?.length || 0} Specialists</span>
+                </p>
               </div>
             </div>
           </div>
-
-          <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase">Site Location</span>
-            <p className="text-xs font-semibold text-slate-800 mt-0.5 truncate">{currentCustomer.city}</p>
-          </div>
-
-          <div
-            onClick={() => setActiveTab('TEAM')}
-            className="cursor-pointer group"
-            title="Click to view assigned project specialists"
-          >
-            <span className="text-[11px] font-bold text-slate-400 uppercase group-hover:text-amber-700 transition-colors">
-              Assigned Team
-            </span>
-            <p className="text-xs font-semibold text-slate-800 mt-0.5 flex items-center gap-1.5 group-hover:text-amber-700 transition-colors">
-              <Users className="w-3.5 h-3.5 text-amber-600" />
-              <span>{currentProject.assignedUsers?.length || 0} Specialists</span>
-            </p>
-          </div>
-        </div>
+        )}
 
         {/* Assigned Team & Technical Specs Strip */}
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 pt-2 border-t border-slate-100">
           <div className="flex flex-wrap items-center gap-4">
             <span className="flex items-center gap-1.5 font-medium">
               <Building2 className="w-3.5 h-3.5 text-slate-400" />
-              <span>Site: {currentCustomer.siteAddress}</span>
+              <span>Site: {displaySiteAddress}</span>
             </span>
             <span className="flex items-center gap-1.5 font-medium">
               <Mail className="w-3.5 h-3.5 text-slate-400" />

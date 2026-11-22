@@ -251,6 +251,7 @@ export interface SolarProject {
   title: string;
   capacityKw: number;
   totalValue: number;
+  receivedInflow?: number | null;
   status: ProjectStatus;
   currentStageKey: WorkflowStageKey;
   completionPercentage: number;

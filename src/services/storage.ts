@@ -993,6 +993,65 @@ class StorageService {
     window.dispatchEvent(new Event('solarpulse_storage_updated'));
   }
 
+  applyControlCenterSyncResult(result: {
+    project?: SolarProject | null;
+    customer?: Customer | null;
+    payments?: PaymentRecord[];
+  }): void {
+    if (result?.project) {
+      const projects = this.getProjects();
+      const idx = projects.findIndex(p => p.id === result.project!.id);
+      if (idx >= 0) {
+        projects[idx] = result.project;
+      } else {
+        projects.unshift(result.project);
+      }
+      this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
+    }
+    if (result?.customer) {
+      const customers = this.getCustomers();
+      const idx = customers.findIndex(c => c.id === result.customer!.id);
+      if (idx >= 0) {
+        customers[idx] = result.customer;
+      } else {
+        customers.unshift(result.customer);
+      }
+      this.memStore.set(STORAGE_KEYS.CUSTOMERS, customers);
+    }
+    if (Array.isArray(result?.payments)) {
+      this.memStore.set(STORAGE_KEYS.PAYMENTS, result.payments);
+    }
+    this.lastSyncError = null;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('solarpulse_storage_updated'));
+    }
+  }
+
+  async updateProjectSpecsAsync(
+    projectId: string,
+    payload: { capacityKw: number; totalValue: number }
+  ): Promise<{ project: SolarProject | null; customer: Customer | null; payments: PaymentRecord[] }> {
+    const result = await apiClient.updateProjectControlCenter(projectId, payload);
+    this.applyControlCenterSyncResult(result);
+    return result;
+  }
+
+  async updateControlCenterDetailsAsync(
+    projectId: string,
+    payload: {
+      totalValue?: number;
+      receivedInflow?: number;
+      city?: string;
+      siteAddress?: string;
+      location?: string;
+      capacityKw?: number;
+    }
+  ): Promise<{ project: SolarProject | null; customer: Customer | null; payments: PaymentRecord[] }> {
+    const result = await apiClient.updateProjectControlCenter(projectId, payload);
+    this.applyControlCenterSyncResult(result);
+    return result;
+  }
+
   deleteProject(id: string): void {
     const projects = this.getProjects().filter(p => p.id !== id);
     this.memStore.set(STORAGE_KEYS.PROJECTS, projects);

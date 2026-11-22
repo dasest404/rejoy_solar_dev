@@ -1441,6 +1441,10 @@ class AccountingService {
         `${existing ? 'Updated' : 'Recorded'} receipt ${receiptNumber} from ${customerName} for ₹${amount.toFixed(2)}`
       );
 
+      if (projectId) {
+        await conn.query('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?', [projectId]).catch(() => {});
+      }
+
       await conn.commit();
       return { id, receiptNumber, amount, status, journalEntryId };
     } catch (err) {
@@ -1501,6 +1505,9 @@ class AccountingService {
         receipt.receipt_number || id,
         `Deleted customer receipt ${receipt.receipt_number || id} (${receipt.customer_name}) for ₹${Number(receipt.amount || 0).toFixed(2)}`
       );
+      if (receipt.project_id) {
+        await conn.query('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?', [receipt.project_id]).catch(() => {});
+      }
       await conn.commit();
     } catch (err) {
       await conn.rollback();

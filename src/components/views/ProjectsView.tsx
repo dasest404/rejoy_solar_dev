@@ -1,33 +1,64 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
-import { SolarProject } from '../../types/solar';
 import { StatusBadge } from '../common/StatusBadge';
 import {
-  SunMedium,
   Search,
-  Filter,
   ArrowRight,
   MapPin,
   Calendar,
-  Layers,
-  CheckCircle2,
-  Clock,
-  Zap,
-  Building2,
   FileSpreadsheet,
-  MessageSquare
+  MessageSquare,
+  Pencil,
+  Check,
+  X,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 
+const formatLakhValue = (amount: number): string => {
+  const lakhs = (Number(amount || 0) / 100000).toFixed(2).replace(/\.?0+$/, '');
+  return lakhs || '0';
+};
+
 export const ProjectsView: React.FC = () => {
-  const { openCustomerControlCenter, openWhatsAppModal, openImportExportModal, stageFilterKey, setStageFilterKey, refreshTrigger } = useApp();
-  const { currentUser } = useAuth();
+  const {
+    openCustomerControlCenter,
+    openWhatsAppModal,
+    openImportExportModal,
+    stageFilterKey,
+    setStageFilterKey,
+    triggerRefresh,
+    showToast,
+    refreshTrigger
+  } = useApp();
+  const { isCustomer, isAdmin, hasPermission, canEditFinancials } = useAuth();
+
+  const canEditProjectSpecs =
+    !isCustomer && (isAdmin || hasPermission('projects.edit_specs') || canEditFinancials());
 
   const [searchTerm, setSearchTerm] = useState('');
   const [activeStageFilter, setActiveStageFilter] = useState<string>(stageFilterKey || 'ALL');
+  const [localUpdateCounter, setLocalUpdateCounter] = useState(0);
 
-  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
+  // Inline edit state for Project Capacity & Total Project Value
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editCapacityInput, setEditCapacityInput] = useState('');
+  const [editTotalValueInput, setEditTotalValueInput] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingProjectId, setSavingProjectId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleStorageUpdate = () => setLocalUpdateCounter(prev => prev + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
+
+  const projects = useMemo(
+    () => storageService.getProjects(),
+    [refreshTrigger, localUpdateCounter]
+  );
 
   const filteredProjects = useMemo(() => {
     const term = (searchTerm || '').toLowerCase().trim();
@@ -39,7 +70,9 @@ export const ProjectsView: React.FC = () => {
         (p.title || '').toLowerCase().includes(term) ||
         (p.projectCode || '').toLowerCase().includes(term) ||
         (p.customerName || '').toLowerCase().includes(term) ||
-        (p.location || '').toLowerCase().includes(term);
+        (p.location || '').toLowerCase().includes(term) ||
+        (p.city || '').toLowerCase().includes(term) ||
+        (p.siteAddress || '').toLowerCase().includes(term);
 
       const matchesStage =
         !activeStageFilter ||
@@ -49,6 +82,53 @@ export const ProjectsView: React.FC = () => {
       return matchesSearch && matchesStage;
     });
   }, [projects, searchTerm, activeStageFilter]);
+
+  const startEditingSpecs = (projectId: string, capacityKw: number, totalValue: number) => {
+    if (!canEditProjectSpecs) return;
+    setEditingProjectId(projectId);
+    setEditCapacityInput(String(capacityKw ?? ''));
+    setEditTotalValueInput(String(totalValue ?? ''));
+    setEditError(null);
+  };
+
+  const cancelEditingSpecs = () => {
+    if (savingProjectId) return;
+    setEditingProjectId(null);
+    setEditError(null);
+  };
+
+  const handleSaveSpecs = async (projectId: string) => {
+    const parsedCapacity = Number(editCapacityInput);
+    const parsedTotalValue = Number(editTotalValueInput);
+
+    if (!Number.isFinite(parsedCapacity) || parsedCapacity <= 0) {
+      setEditError('Project Capacity must be greater than 0 kW.');
+      return;
+    }
+    if (!Number.isFinite(parsedTotalValue) || parsedTotalValue < 0) {
+      setEditError('Total Project Value cannot be negative.');
+      return;
+    }
+
+    setSavingProjectId(projectId);
+    setEditError(null);
+    try {
+      await storageService.updateProjectSpecsAsync(projectId, {
+        capacityKw: Math.round(parsedCapacity * 100) / 100,
+        totalValue: Math.round(parsedTotalValue * 100) / 100
+      });
+      setEditingProjectId(null);
+      setLocalUpdateCounter(prev => prev + 1);
+      triggerRefresh();
+      showToast('Project capacity and total value saved to MySQL', 'success');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to update project specs in MySQL.';
+      setEditError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setSavingProjectId(null);
+    }
+  };
 
   const stagesList = [
     { key: 'ALL', label: 'All Projects' },
@@ -127,6 +207,10 @@ export const ProjectsView: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {(filteredProjects || []).map((p) => {
           const completedStagesCount = (p.stages || []).filter(s => s && s.status === 'COMPLETED').length;
+          const isEditing = editingProjectId === p.id;
+          const isSaving = savingProjectId === p.id;
+          const displayLocation = p.city || p.location || p.siteAddress || 'Not specified';
+          const pct = p.progressPercentage ?? p.completionPercentage ?? 0;
 
           return (
             <div
@@ -146,27 +230,130 @@ export const ProjectsView: React.FC = () => {
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">{p.customerName}</p>
 
-                {/* Specs Box */}
-                <div className="grid grid-cols-2 gap-2 p-3 bg-slate-50 rounded-xl border border-slate-100 my-3 text-xs">
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Capacity</span>
-                    <p className="font-black text-slate-900 text-sm">{p.capacityKw} kW</p>
+                {/* Specs Box (Editable Capacity & Total Value) */}
+                {isEditing ? (
+                  <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 my-3 space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">
+                        Edit Project Specs
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveSpecs(p.id)}
+                          disabled={isSaving}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold disabled:opacity-50 cursor-pointer"
+                        >
+                          {isSaving ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Check className="w-3 h-3" />
+                          )}
+                          <span>Save</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditingSpecs}
+                          disabled={isSaving}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Cancel</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                          Project Capacity (kW)
+                        </label>
+                        <input
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          value={editCapacityInput}
+                          onChange={(e) => setEditCapacityInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveSpecs(p.id);
+                            if (e.key === 'Escape') cancelEditingSpecs();
+                          }}
+                          disabled={isSaving}
+                          aria-label="Project Capacity (kW)"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                          Total Value (₹)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="100"
+                          value={editTotalValueInput}
+                          onChange={(e) => setEditTotalValueInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveSpecs(p.id);
+                            if (e.key === 'Escape') cancelEditingSpecs();
+                          }}
+                          disabled={isSaving}
+                          aria-label="Total Project Value (INR)"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                        />
+                        <span className="block text-[10px] text-slate-500 mt-0.5">
+                          ≈ ₹{formatLakhValue(Number(editTotalValueInput || 0))}L
+                        </span>
+                      </div>
+                    </div>
+
+                    {editError && (
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded-lg">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{editError}</span>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Total Value</span>
-                    <p className="font-black text-slate-900 text-sm">₹{(p.totalValue / 100000).toFixed(1)}L</p>
+                ) : (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 my-3 text-xs relative">
+                    {canEditProjectSpecs && (
+                      <button
+                        type="button"
+                        onClick={() => startEditingSpecs(p.id, p.capacityKw, p.totalValue)}
+                        title="Edit Project Capacity & Total Value"
+                        className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold text-slate-600 hover:text-amber-700 bg-white border border-slate-200 hover:border-amber-300 transition-colors cursor-pointer"
+                      >
+                        <Pencil className="w-2.5 h-2.5" />
+                        <span>Edit</span>
+                      </button>
+                    )}
+                    <div className="grid grid-cols-2 gap-2 pr-10">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Capacity</span>
+                        <p className="font-black text-slate-900 text-sm">{p.capacityKw} kW</p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Total Value</span>
+                        <p className="font-black text-slate-900 text-sm">
+                          ₹{formatLakhValue(p.totalValue)}L
+                        </p>
+                        <span className="text-[10px] text-slate-500 font-medium block">
+                          ₹{Number(p.totalValue || 0).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Location & Dates */}
                 <div className="space-y-1 text-xs text-slate-500">
                   <p className="flex items-center gap-1.5 truncate">
                     <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{p.location}</span>
+                    <span>{displayLocation}</span>
                   </p>
                   <p className="flex items-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>Target: {p.expectedCompletionDate}</span>
+                    <span>Target: {p.expectedCompletionDate || 'TBD'}</span>
                   </p>
                 </div>
 
@@ -174,18 +361,18 @@ export const ProjectsView: React.FC = () => {
                 <div className="mt-4 pt-3 border-t border-slate-100">
                   <div className="flex items-center justify-between text-xs mb-1">
                     <span className="font-bold text-slate-700 capitalize">
-                      Stage: {p.currentStageKey.replace(/_/g, ' ')}
+                      Stage: {(p.currentStageKey || 'site_survey').replace(/_/g, ' ')}
                     </span>
-                    <span className="font-bold text-amber-700">{p.progressPercentage}%</span>
+                    <span className="font-bold text-amber-700">{pct}%</span>
                   </div>
                   <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
                     <div
                       className="bg-amber-500 h-full rounded-full transition-all"
-                      style={{ width: `${p.progressPercentage}%` }}
+                      style={{ width: `${pct}%` }}
                     />
                   </div>
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    {completedStagesCount} of 15 Workflow Stages Completed
+                    {completedStagesCount} of {(p.stages || []).length || 15} Workflow Stages Completed
                   </span>
                 </div>
               </div>
@@ -196,7 +383,7 @@ export const ProjectsView: React.FC = () => {
                   onClick={() =>
                     openWhatsAppModal('919879544321', p.customerName, 'INSTALLATION_UPDATE', {
                       projectTitle: p.title,
-                      stageTitle: p.currentStageKey.replace(/_/g, ' ')
+                      stageTitle: (p.currentStageKey || 'site_survey').replace(/_/g, ' ')
                     })
                   }
                   className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
@@ -207,7 +394,7 @@ export const ProjectsView: React.FC = () => {
 
                 <button
                   onClick={() => openCustomerControlCenter(p.customerId, p.id)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs cursor-pointer"
                 >
                   <span>Open Control Center</span>
                   <ArrowRight className="w-3 h-3" />
@@ -220,3 +407,4 @@ export const ProjectsView: React.FC = () => {
     </div>
   );
 };
+

@@ -1052,7 +1052,10 @@ apiRouter.post(['/projects/import', '/projects/import/'], async (req: Request, r
 apiRouter.put(['/projects/:id', '/projects/:id/'], async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    if (user && isCustomerUser(user)) {
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(user)) {
       return res.status(403).json({
         success: false,
         error: 'Forbidden: Customers have read-only access to project stages and progress.'
@@ -1060,13 +1063,55 @@ apiRouter.put(['/projects/:id', '/projects/:id/'], async (req: Request, res: Res
     }
 
     const { id } = req.params;
-    const payload = req.body;
+    const payload = req.body || {};
+    if (payload.capacityKw !== undefined && (!Number.isFinite(Number(payload.capacityKw)) || Number(payload.capacityKw) <= 0)) {
+      return res.status(400).json({ success: false, error: 'Project capacity must be greater than 0 kW.' });
+    }
+    if (payload.totalValue !== undefined && (!Number.isFinite(Number(payload.totalValue)) || Number(payload.totalValue) < 0)) {
+      return res.status(400).json({ success: false, error: 'Total project value cannot be negative.' });
+    }
     const updated = await dbManager.saveProject({ ...payload, id });
     res.json({ success: true, data: updated });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update project');
   }
 });
+
+apiRouter.put(
+  ['/projects/:id/control-center', '/projects/:id/control-center/', '/projects/:id/overview', '/projects/:id/overview/'],
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      if (!user) {
+        return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+      }
+      if (isCustomerUser(user)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: Customers have read-only access to project financials and site details.'
+        });
+      }
+      const allowedRoles = ['ADMIN', 'SUPER ADMIN', 'PROJECT MANAGER', 'ACCOUNTANT', 'SALES MANAGER', 'SALES EXECUTIVE'];
+      const roleUpper = String(user.role || '').trim().toUpperCase();
+      if (!allowedRoles.includes(roleUpper)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: Insufficient permissions to modify project capacity, contract value, inflow, or site location.'
+        });
+      }
+
+      const { id } = req.params;
+      const result = await dbManager.updateProjectControlCenter(id, req.body || {}, user);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      const status = Number(err?.statusCode) || 500;
+      if (status < 500) {
+        return res.status(status).json({ success: false, error: err.message, message: err.message });
+      }
+      sendApiError(res, err, 'Failed to update project overview in MySQL');
+    }
+  }
+);
 
 apiRouter.delete(['/projects/:id', '/projects/:id/'], async (req: Request, res: Response) => {
   try {

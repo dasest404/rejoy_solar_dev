@@ -5,6 +5,7 @@ import { storageService } from '../../services/storage';
 import { liveLocationService } from '../../services/liveLocationService';
 import { pusherService } from '../../services/pusherService';
 import { LiveEmployeeLocation, PusherConnectionState } from '../../types/tracking';
+import { getProjectReceivedInflow } from '../finance/accountingUtils';
 import {
   SunMedium,
   Zap,
@@ -56,14 +57,17 @@ export const AdminDashboard: React.FC = () => {
   const employees = useMemo(() => storageService.getEmployees(), [refreshTrigger]);
 
   // Compute metrics
-  const totalCapacityKw = projects.reduce((sum, p) => sum + p.capacityKw, 0);
-  const totalProjectValue = projects.reduce((sum, p) => sum + p.totalValue, 0);
-  const totalCollected = payments
-    .filter(p => p.status === 'PAID')
-    .reduce((sum, p) => sum + p.amount, 0);
+  const totalCapacityKw = projects.reduce((sum, p) => sum + Number(p.capacityKw || 0), 0);
+  const totalProjectValue = projects.reduce((sum, p) => sum + Number(p.totalValue || 0), 0);
+  const projectIds = new Set(projects.map(p => p.id));
+  const linkedCollected = projects.reduce((sum, p) => sum + getProjectReceivedInflow(p, payments), 0);
+  const unlinkedCollected = payments
+    .filter(p => p.status === 'PAID' && (!p.projectId || !projectIds.has(p.projectId)))
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const totalCollected = Math.round((linkedCollected + unlinkedCollected) * 100) / 100;
   const totalPendingCollection = payments
     .filter(p => p.status !== 'PAID')
-    .reduce((sum, p) => sum + p.amount, 0);
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
   const activeLeadsCount = leads.filter(l => !['WON', 'LOST'].includes(l.status)).length;
   const openTicketsCount = serviceTickets.filter(s => s.status !== 'RESOLVED').length;

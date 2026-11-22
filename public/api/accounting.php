@@ -1063,6 +1063,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
 
                 $pdo->prepare("INSERT INTO `solar_payments` (`id`,`receipt_number`,`project_id`,`customer_id`,`customer_name`,`milestone`,`amount`,`status`,`due_date`,`paid_date`,`payment_mode`,`transaction_reference`,`notes`,`invoice_id`,`invoice_number`,`bank_account_id`,`journal_entry_id`,`tally_sync_status`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT SYNCED') ON DUPLICATE KEY UPDATE `project_id`=VALUES(`project_id`),`customer_id`=VALUES(`customer_id`),`customer_name`=VALUES(`customer_name`),`milestone`=VALUES(`milestone`),`amount`=VALUES(`amount`),`status`=VALUES(`status`),`due_date`=VALUES(`due_date`),`paid_date`=VALUES(`paid_date`),`payment_mode`=VALUES(`payment_mode`),`transaction_reference`=VALUES(`transaction_reference`),`notes`=VALUES(`notes`),`invoice_id`=VALUES(`invoice_id`),`invoice_number`=VALUES(`invoice_number`),`bank_account_id`=VALUES(`bank_account_id`),`journal_entry_id`=VALUES(`journal_entry_id`)")
                     ->execute([$id, $rcptNo, $projId, $custId, $custName, $body['milestone'] ?? 'Project Milestone', $amt, $status, $dueDate, $status === 'PAID' ? $paidDate : null, $body['paymentMode'] ?? 'Bank NEFT/RTGS', $body['transactionReference'] ?? '', $body['notes'] ?? '', $body['invoiceId'] ?? '', $invNo, $body['bankAccountId'] ?? '', $jeId]);
+                if (!empty($projId)) {
+                    $pdo->prepare('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?')->execute([$projId]);
+                }
                 accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', $existing ? 'UPDATE_RECEIPT' : 'RECORD_RECEIPT', $id, $rcptNo, ($existing ? 'Updated ' : 'Recorded ') . "receipt {$rcptNo} from {$custName} for {$amt}");
                 $pdo->commit();
                 if ($isReceiptCreate) http_response_code(201);
@@ -1107,6 +1110,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     }
                 }
                 $pdo->prepare('DELETE FROM `solar_payments` WHERE `id` = ?')->execute([$id]);
+                if (!empty($receipt['project_id'])) {
+                    $pdo->prepare('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?')->execute([$receipt['project_id']]);
+                }
                 accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', 'DELETE_RECEIPT', $id, $receipt['receipt_number'] ?? $id, "Deleted customer receipt {$receipt['receipt_number']} ({$receipt['customer_name']})");
                 $pdo->commit();
                 echo json_encode(['success' => true, 'message' => 'Customer receipt deleted.']);

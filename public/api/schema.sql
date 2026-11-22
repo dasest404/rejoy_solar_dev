@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS `solar_projects` (
   `title` VARCHAR(255) NOT NULL,
   `capacity_kw` DECIMAL(10,2) NOT NULL,
   `total_value` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  `received_inflow` DECIMAL(14,2) DEFAULT NULL,
   `status` VARCHAR(64) DEFAULT 'PLANNING',
   `current_stage_key` VARCHAR(64) DEFAULT 'site_survey',
   `completion_percentage` INT DEFAULT 0,

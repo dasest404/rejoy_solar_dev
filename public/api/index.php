@@ -293,6 +293,9 @@ function ensureRequiredTables($pdo) {
         'solar_stock_audits' => [
             'items_audited' => 'INT DEFAULT 0',
             'net_adjustment_value' => 'DECIMAL(14,2) DEFAULT 0.00'
+        ],
+        'solar_projects' => [
+            'received_inflow' => 'DECIMAL(14,2) DEFAULT NULL'
         ]
     ];
     foreach ($spMigrations as $tbl => $colsMap) {
@@ -1079,29 +1082,36 @@ $body = json_decode($rawInput, true) ?: [];
 // Helper: Customers
 function saveCustomerToDb($pdo, $item) {
     if (empty($item['id'])) $item['id'] = 'cust-' . round(microtime(true) * 1000);
-    $customerCode = $item['customerCode'] ?? $item['customer_code'] ?? ('CUST-' . rand(100, 999));
-    $name = trim($item['name'] ?? '');
-    $companyName = trim($item['companyName'] ?? $item['company_name'] ?? '');
-    $customerType = $item['customerType'] ?? $item['customer_type'] ?? 'Residential';
-    $phone = trim($item['phone'] ?? '');
-    $email = trim($item['email'] ?? '');
+    $ex = fetchExistingRowPhp($pdo, 'solar_customers', $item['id']);
+    $customerCode = $item['customerCode'] ?? $item['customer_code'] ?? ($ex['customer_code'] ?? ('CUST-' . rand(100, 999)));
+    $name = trim((string)($item['name'] ?? ($ex['name'] ?? '')));
+    $companyName = trim((string)($item['companyName'] ?? $item['company_name'] ?? ($ex['company_name'] ?? '')));
+    $customerType = $item['customerType'] ?? $item['customer_type'] ?? ($ex['customer_type'] ?? 'Residential');
+    $phone = trim((string)($item['phone'] ?? ($ex['phone'] ?? '')));
+    $email = trim((string)($item['email'] ?? ($ex['email'] ?? '')));
     $rawCustomerPass = $item['password'] ?? '';
     if (!empty($rawCustomerPass)) {
         $password = str_starts_with((string)$rawCustomerPass, '$2')
             ? $rawCustomerPass
             : password_hash((string)$rawCustomerPass, PASSWORD_BCRYPT, ['cost' => 10]);
+    } elseif (!empty($ex['password'])) {
+        $password = $ex['password'];
     } else {
         $password = password_hash('Cust@' . substr(bin2hex(random_bytes(3)), 0, 6), PASSWORD_BCRYPT, ['cost' => 10]);
     }
-    $siteAddress = $item['siteAddress'] ?? $item['site_address'] ?? '';
-    $city = $item['city'] ?? 'Ahmedabad';
-    $state = $item['state'] ?? 'Gujarat';
-    $pincode = $item['pincode'] ?? '';
-    $gstNumber = $item['gstNumber'] ?? $item['gst_number'] ?? '';
-    $electricityConsumerNo = $item['electricityConsumerNo'] ?? $item['electricity_consumer_no'] ?? '';
-    $sanctionedLoadKw = floatval($item['sanctionedLoadKw'] ?? $item['sanctioned_load_kw'] ?? 0);
-    $status = $item['status'] ?? 'ACTIVE';
-    $activeProjectId = $item['activeProjectId'] ?? $item['active_project_id'] ?? null;
+    $siteAddress = $item['siteAddress'] ?? $item['site_address'] ?? ($ex['site_address'] ?? '');
+    $city = $item['city'] ?? ($ex['city'] ?? 'Ahmedabad');
+    $state = $item['state'] ?? ($ex['state'] ?? 'Gujarat');
+    $pincode = $item['pincode'] ?? ($ex['pincode'] ?? '');
+    $gstNumber = $item['gstNumber'] ?? $item['gst_number'] ?? ($ex['gst_number'] ?? '');
+    $electricityConsumerNo = $item['electricityConsumerNo'] ?? $item['electricity_consumer_no'] ?? ($ex['electricity_consumer_no'] ?? '');
+    $sanctionedLoadKw = array_key_exists('sanctionedLoadKw', $item) || array_key_exists('sanctioned_load_kw', $item)
+        ? floatval($item['sanctionedLoadKw'] ?? $item['sanctioned_load_kw'] ?? 0)
+        : floatval($ex['sanctioned_load_kw'] ?? 0);
+    $status = $item['status'] ?? ($ex['status'] ?? 'ACTIVE');
+    $activeProjectId = array_key_exists('activeProjectId', $item) || array_key_exists('active_project_id', $item)
+        ? ($item['activeProjectId'] ?? $item['active_project_id'])
+        : ($ex['active_project_id'] ?? null);
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_customers` (
@@ -1132,7 +1142,24 @@ function saveCustomerToDb($pdo, $item) {
         $pincode, $gstNumber, $electricityConsumerNo, $sanctionedLoadKw,
         $status, $activeProjectId
     ]);
-    return $item;
+    return array_merge($item, [
+        'id' => $item['id'],
+        'customerCode' => $customerCode,
+        'name' => $name,
+        'companyName' => $companyName,
+        'customerType' => $customerType,
+        'phone' => $phone,
+        'email' => $email,
+        'siteAddress' => $siteAddress,
+        'city' => $city,
+        'state' => $state,
+        'pincode' => $pincode,
+        'gstNumber' => $gstNumber,
+        'electricityConsumerNo' => $electricityConsumerNo,
+        'sanctionedLoadKw' => $sanctionedLoadKw,
+        'status' => $status,
+        'activeProjectId' => $activeProjectId
+    ]);
 }
 
 // Helper: Leads
@@ -1188,42 +1215,67 @@ function saveLeadToDb($pdo, $item) {
 // Helper: Projects
 function saveProjectToDb($pdo, $item) {
     if (empty($item['id'])) $item['id'] = 'proj-' . round(microtime(true) * 1000);
-    $projectCode = $item['projectCode'] ?? $item['project_code'] ?? ('SOL-' . date('Y') . '-' . rand(100, 999));
-    $customerId = $item['customerId'] ?? $item['customer_id'] ?? '';
-    $customerName = $item['customerName'] ?? $item['customer_name'] ?? '';
-    $title = $item['title'] ?? 'Solar Project';
-    $capacityKw = floatval($item['capacityKw'] ?? $item['capacity_kw'] ?? 10);
-    $totalValue = floatval($item['totalValue'] ?? $item['total_value'] ?? 0);
-    $status = $item['status'] ?? 'PLANNING';
-    $currentStageKey = $item['currentStageKey'] ?? $item['current_stage_key'] ?? 'site_survey';
-    $completionPercentage = intval($item['completionPercentage'] ?? $item['completion_percentage'] ?? 0);
-    $projectManagerId = $item['projectManagerId'] ?? $item['project_manager_id'] ?? '';
-    $projectManagerName = $item['projectManagerName'] ?? $item['project_manager_name'] ?? '';
-    $siteAddress = $item['siteAddress'] ?? $item['site_address'] ?? 'Site Address';
-    $city = $item['city'] ?? 'Ahmedabad';
-    $inverterModel = $item['inverterModel'] ?? $item['inverter_model'] ?? '';
-    $panelModel = $item['panelModel'] ?? $item['panel_model'] ?? '';
-    $structureType = $item['structureType'] ?? $item['structure_type'] ?? 'Elevated GI Structure';
-    $startDate = !empty($item['startDate'] ?? $item['start_date']) ? substr($item['startDate'] ?? $item['start_date'], 0, 10) : null;
-    $expectedCompletionDate = !empty($item['expectedCompletionDate'] ?? $item['expected_completion_date']) ? substr($item['expectedCompletionDate'] ?? $item['expected_completion_date'], 0, 10) : null;
-    $notes = $item['notes'] ?? '';
-    $assignedUsers = $item['assignedUsers'] ?? $item['assignments'] ?? [];
-    $assignmentsJson = is_string($assignedUsers) ? $assignedUsers : json_encode($assignedUsers);
+    $ex = fetchExistingRowPhp($pdo, 'solar_projects', $item['id']);
+
+    $projectCode = $item['projectCode'] ?? $item['project_code'] ?? ($ex['project_code'] ?? ('SOL-' . date('Y') . '-' . rand(100, 999)));
+    $customerId = $item['customerId'] ?? $item['customer_id'] ?? ($ex['customer_id'] ?? '');
+    $customerName = $item['customerName'] ?? $item['customer_name'] ?? ($ex['customer_name'] ?? '');
+    $title = $item['title'] ?? ($ex['title'] ?? 'Solar Project');
+
+    $rawCap = array_key_exists('capacityKw', $item) ? $item['capacityKw'] : ($item['capacity_kw'] ?? null);
+    $capacityKw = $rawCap !== null ? floatval($rawCap) : floatval($ex['capacity_kw'] ?? 10);
+
+    $rawVal = array_key_exists('totalValue', $item) ? $item['totalValue'] : ($item['total_value'] ?? null);
+    $totalValue = $rawVal !== null ? floatval($rawVal) : floatval($ex['total_value'] ?? 0);
+
+    $hasInflow = array_key_exists('receivedInflow', $item) || array_key_exists('received_inflow', $item);
+    if ($hasInflow) {
+        $rawInf = array_key_exists('receivedInflow', $item) ? $item['receivedInflow'] : ($item['received_inflow'] ?? null);
+        $receivedInflow = ($rawInf === null || $rawInf === '') ? null : floatval($rawInf);
+    } else {
+        $receivedInflow = (isset($ex['received_inflow']) && $ex['received_inflow'] !== null) ? floatval($ex['received_inflow']) : null;
+    }
+
+    $status = $item['status'] ?? ($ex['status'] ?? 'PLANNING');
+    $currentStageKey = $item['currentStageKey'] ?? $item['current_stage_key'] ?? ($ex['current_stage_key'] ?? 'site_survey');
+    $rawPct = $item['completionPercentage'] ?? $item['completion_percentage'] ?? $item['progressPercentage'] ?? null;
+    $completionPercentage = $rawPct !== null ? intval($rawPct) : intval($ex['completion_percentage'] ?? 0);
+    $projectManagerId = $item['projectManagerId'] ?? $item['project_manager_id'] ?? ($ex['project_manager_id'] ?? '');
+    $projectManagerName = $item['projectManagerName'] ?? $item['project_manager_name'] ?? ($ex['project_manager_name'] ?? '');
+    $siteAddress = $item['siteAddress'] ?? $item['site_address'] ?? ($ex['site_address'] ?? 'Not specified');
+    $city = $item['city'] ?? $item['location'] ?? ($ex['city'] ?? 'Not specified');
+    $inverterModel = $item['inverterModel'] ?? $item['inverter_model'] ?? ($ex['inverter_model'] ?? '');
+    $panelModel = $item['panelModel'] ?? $item['panel_model'] ?? ($ex['panel_model'] ?? '');
+    $structureType = $item['structureType'] ?? $item['structure_type'] ?? ($ex['structure_type'] ?? 'Elevated GI Structure');
+
+    $rawStart = $item['startDate'] ?? $item['start_date'] ?? ($ex['start_date'] ?? null);
+    $startDate = !empty($rawStart) ? substr((string)$rawStart, 0, 10) : null;
+    $rawExp = $item['expectedCompletionDate'] ?? $item['expected_completion_date'] ?? ($ex['expected_completion_date'] ?? null);
+    $expectedCompletionDate = !empty($rawExp) ? substr((string)$rawExp, 0, 10) : null;
+
+    $notes = $item['notes'] ?? ($ex['notes'] ?? '');
+    if (array_key_exists('assignedUsers', $item) || array_key_exists('assignments', $item)) {
+        $assignedUsers = $item['assignedUsers'] ?? $item['assignments'] ?? [];
+        $assignmentsJson = is_string($assignedUsers) ? $assignedUsers : json_encode($assignedUsers);
+    } else {
+        $assignmentsJson = $ex['assignments_json'] ?? '[]';
+    }
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_projects` (
             `id`, `project_code`, `customer_id`, `customer_name`, `title`,
-            `capacity_kw`, `total_value`, `status`, `current_stage_key`,
+            `capacity_kw`, `total_value`, `received_inflow`, `status`, `current_stage_key`,
             `completion_percentage`, `project_manager_id`, `project_manager_name`,
             `site_address`, `city`, `inverter_model`, `panel_model`,
             `structure_type`, `start_date`, `expected_completion_date`,
             `notes`, `assignments_json`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             `customer_name` = VALUES(`customer_name`),
             `title` = VALUES(`title`),
             `capacity_kw` = VALUES(`capacity_kw`),
             `total_value` = VALUES(`total_value`),
+            `received_inflow` = VALUES(`received_inflow`),
             `status` = VALUES(`status`),
             `current_stage_key` = VALUES(`current_stage_key`),
             `completion_percentage` = VALUES(`completion_percentage`),
@@ -1241,7 +1293,7 @@ function saveProjectToDb($pdo, $item) {
     ");
     $stmt->execute([
         $item['id'], $projectCode, $customerId, $customerName, $title,
-        $capacityKw, $totalValue, $status, $currentStageKey,
+        $capacityKw, $totalValue, $receivedInflow, $status, $currentStageKey,
         $completionPercentage, $projectManagerId, $projectManagerName,
         $siteAddress, $city, $inverterModel, $panelModel,
         $structureType, $startDate, $expectedCompletionDate,
@@ -1305,7 +1357,32 @@ function saveProjectToDb($pdo, $item) {
             ]);
         }
     }
-    return $item;
+    return array_merge($item, [
+        'id' => $item['id'],
+        'projectCode' => $projectCode,
+        'customerId' => $customerId,
+        'customerName' => $customerName,
+        'title' => $title,
+        'capacityKw' => $capacityKw,
+        'totalValue' => $totalValue,
+        'receivedInflow' => $receivedInflow,
+        'status' => $status,
+        'currentStageKey' => $currentStageKey,
+        'completionPercentage' => $completionPercentage,
+        'progressPercentage' => $completionPercentage,
+        'projectManagerId' => $projectManagerId,
+        'projectManagerName' => $projectManagerName,
+        'siteAddress' => $siteAddress,
+        'city' => $city,
+        'location' => !empty($city) ? $city : $siteAddress,
+        'inverterModel' => $inverterModel,
+        'panelModel' => $panelModel,
+        'structureType' => $structureType,
+        'startDate' => $startDate,
+        'expectedCompletionDate' => $expectedCompletionDate,
+        'notes' => $notes,
+        'assignedUsers' => json_decode($assignmentsJson, true) ?: []
+    ]);
 }
 
 function parseBoolFlagPhp($val, $fallback = false) {
@@ -8001,6 +8078,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'title' => $r['title'],
                 'capacityKw' => floatval($r['capacity_kw'] ?? 0),
                 'totalValue' => floatval($r['total_value'] ?? 0),
+                'receivedInflow' => (isset($r['received_inflow']) && $r['received_inflow'] !== null) ? floatval($r['received_inflow']) : null,
                 'status' => $r['status'] ?? 'PLANNING',
                 'currentStageKey' => $r['current_stage_key'] ?? 'site_survey',
                 'completionPercentage' => intval($r['completion_percentage'] ?? 0),
@@ -8009,6 +8087,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'projectManagerName' => $r['project_manager_name'] ?? '',
                 'siteAddress' => $r['site_address'] ?? '',
                 'city' => $r['city'] ?? 'Ahmedabad',
+                'location' => !empty($r['city']) ? $r['city'] : ($r['site_address'] ?? ''),
                 'inverterModel' => $r['inverter_model'] ?? '',
                 'panelModel' => $r['panel_model'] ?? '',
                 'structureType' => $r['structure_type'] ?? 'Elevated GI Structure',
@@ -11165,6 +11244,417 @@ if (preg_match('#^/expenses/([^/]+)/?$#', $cleanPath, $matches)) {
             deleteItemFromDb($pdo, 'expenses', $expId, $actor);
             http_response_code(200);
             echo json_encode(['success' => true, 'message' => 'Expense deleted from MySQL.']);
+            exit;
+        }
+    }
+}
+
+// Helpers: Projects, Control Center & Payments REST mapping
+function isCustomerUserPhp($user) {
+    if (!$user || !is_array($user)) return false;
+    $acc = strtoupper(trim((string)($user['accountType'] ?? ($user['account_type'] ?? ''))));
+    $role = strtolower(trim((string)($user['role'] ?? '')));
+    return $acc === 'CUSTOMER' || in_array($role, ['customer', 'client'], true);
+}
+
+function getProjectsListPhp($pdo, $projectIdFilter = null) {
+    $stagesByProject = [];
+    if ($projectIdFilter !== null) {
+        $sStmt = $pdo->prepare('SELECT * FROM `solar_project_stages` WHERE `project_id` = ? ORDER BY `stage_order` ASC');
+        $sStmt->execute([$projectIdFilter]);
+    } else {
+        $sStmt = $pdo->query('SELECT * FROM `solar_project_stages` ORDER BY `stage_order` ASC');
+    }
+    while ($s = $sStmt->fetch(PDO::FETCH_ASSOC)) {
+        $pId = $s['project_id'];
+        if (!isset($stagesByProject[$pId])) $stagesByProject[$pId] = [];
+        $stagesByProject[$pId][] = [
+            'id' => $s['id'],
+            'stageKey' => $s['stage_key'],
+            'title' => $s['title'],
+            'order' => intval($s['stage_order']),
+            'department' => $s['department'],
+            'assignedRole' => $s['assigned_role'],
+            'assignedEmployeeId' => $s['assigned_employee_id'] ?? '',
+            'assignedEmployeeName' => $s['assigned_employee_name'] ?? '',
+            'assignedToName' => $s['assigned_employee_name'] ?? '',
+            'status' => $s['status'] ?? 'NOT STARTED',
+            'priority' => $s['priority'] ?? 'MEDIUM',
+            'startDate' => $s['start_date'],
+            'dueDate' => $s['due_date'],
+            'completedDate' => $s['completed_date'],
+            'checklist' => json_decode($s['checklist_json'] ?? '[]', true) ?: [],
+            'photos' => json_decode($s['photos_json'] ?? '[]', true) ?: [],
+            'documents' => json_decode($s['documents_json'] ?? '[]', true) ?: [],
+            'gpsLocation' => json_decode($s['gps_location_json'] ?? 'null', true),
+            'notes' => $s['notes'] ?? '',
+            'approvedBy' => $s['approved_by'] ?? '',
+            'rejectionReason' => $s['rejection_reason'] ?? '',
+            'activities' => []
+        ];
+    }
+
+    if ($projectIdFilter !== null) {
+        $pStmt = $pdo->prepare('SELECT * FROM `solar_projects` WHERE `id` = ? LIMIT 1');
+        $pStmt->execute([$projectIdFilter]);
+    } else {
+        $pStmt = $pdo->query('SELECT * FROM `solar_projects` ORDER BY `created_at` DESC');
+    }
+    $rows = $pStmt ? ($pStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+    return array_map(function ($r) use ($stagesByProject) {
+        $assignments = json_decode($r['assignments_json'] ?? '[]', true) ?: [];
+        return [
+            'id' => $r['id'],
+            'projectCode' => $r['project_code'],
+            'customerId' => $r['customer_id'],
+            'customerName' => $r['customer_name'],
+            'title' => $r['title'],
+            'capacityKw' => floatval($r['capacity_kw'] ?? 0),
+            'totalValue' => floatval($r['total_value'] ?? 0),
+            'receivedInflow' => (isset($r['received_inflow']) && $r['received_inflow'] !== null) ? floatval($r['received_inflow']) : null,
+            'status' => $r['status'] ?? 'PLANNING',
+            'currentStageKey' => $r['current_stage_key'] ?? 'site_survey',
+            'completionPercentage' => intval($r['completion_percentage'] ?? 0),
+            'progressPercentage' => intval($r['completion_percentage'] ?? 0),
+            'projectManagerId' => $r['project_manager_id'] ?? '',
+            'projectManagerName' => $r['project_manager_name'] ?? '',
+            'siteAddress' => $r['site_address'] ?? '',
+            'city' => $r['city'] ?? 'Ahmedabad',
+            'location' => !empty($r['city']) ? $r['city'] : ($r['site_address'] ?? ''),
+            'inverterModel' => $r['inverter_model'] ?? '',
+            'panelModel' => $r['panel_model'] ?? '',
+            'structureType' => $r['structure_type'] ?? 'Elevated GI Structure',
+            'startDate' => $r['start_date'],
+            'expectedCompletionDate' => $r['expected_completion_date'],
+            'notes' => $r['notes'] ?? '',
+            'assignedUsers' => $assignments,
+            'stages' => $stagesByProject[$r['id']] ?? [],
+            'createdAt' => $r['created_at'],
+            'updatedAt' => $r['updated_at']
+        ];
+    }, $rows);
+}
+
+function getPaymentsListPhp($pdo) {
+    $stmt = $pdo->query('SELECT * FROM `solar_payments` ORDER BY `created_at` DESC');
+    $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+    return array_map(function ($r) {
+        return [
+            'id' => $r['id'],
+            'receiptNumber' => $r['receipt_number'],
+            'projectId' => $r['project_id'],
+            'customerId' => $r['customer_id'],
+            'customerName' => $r['customer_name'],
+            'milestone' => $r['milestone'],
+            'amount' => floatval($r['amount'] ?? 0),
+            'status' => $r['status'],
+            'dueDate' => $r['due_date'],
+            'paidDate' => $r['paid_date'],
+            'paymentMode' => $r['payment_mode'] ?? 'Bank NEFT/RTGS',
+            'transactionReference' => $r['transaction_reference'] ?? '',
+            'notes' => $r['notes'] ?? '',
+            'invoiceId' => $r['invoice_id'] ?? '',
+            'invoiceNumber' => $r['invoice_number'] ?? '',
+            'bankAccountId' => $r['bank_account_id'] ?? '',
+            'journalEntryId' => $r['journal_entry_id'] ?? '',
+            'tallySyncStatus' => $r['tally_sync_status'] ?? 'NOT SYNCED',
+            'tallyReference' => $r['tally_reference'] ?? '',
+            'createdAt' => $r['created_at']
+        ];
+    }, $rows);
+}
+
+function updateProjectControlCenterPhp($pdo, $projectId, $payload, $actor) {
+    $existing = fetchExistingRowPhp($pdo, 'solar_projects', $projectId);
+    if (!$existing) {
+        return ['error' => "Project \"$projectId\" not found.", 'status' => 404];
+    }
+
+    $nextCapacity = array_key_exists('capacityKw', $payload)
+        ? floatval($payload['capacityKw'])
+        : floatval($existing['capacity_kw'] ?? 0);
+    if (!is_finite($nextCapacity) || $nextCapacity <= 0) {
+        return ['error' => 'Project capacity must be greater than 0 kW.', 'status' => 400];
+    }
+
+    $nextTotalValue = array_key_exists('totalValue', $payload)
+        ? round(floatval($payload['totalValue']), 2)
+        : floatval($existing['total_value'] ?? 0);
+    if (!is_finite($nextTotalValue) || $nextTotalValue < 0) {
+        return ['error' => 'Total project/contract value cannot be negative.', 'status' => 400];
+    }
+
+    $hasCityKey = array_key_exists('city', $payload);
+    $hasLocKey = array_key_exists('location', $payload);
+    $nextCityRaw = $hasCityKey
+        ? trim((string)($payload['city'] ?? ''))
+        : ($hasLocKey ? trim((string)($payload['location'] ?? '')) : trim((string)($existing['city'] ?? '')));
+    if ($hasCityKey && $nextCityRaw === '') {
+        return ['error' => 'Site location cannot be empty.', 'status' => 400];
+    }
+    $nextCity = $nextCityRaw !== '' ? $nextCityRaw : ((string)($existing['city'] ?? '') ?: 'Not specified');
+
+    $hasAddrKey = array_key_exists('siteAddress', $payload);
+    $nextSiteAddress = $hasAddrKey
+        ? trim((string)($payload['siteAddress'] ?? ''))
+        : (string)($existing['site_address'] ?? '');
+
+    $nextReceivedInflowCol = (isset($existing['received_inflow']) && $existing['received_inflow'] !== null)
+        ? floatval($existing['received_inflow'])
+        : null;
+
+    if (array_key_exists('receivedInflow', $payload) && $payload['receivedInflow'] !== null && $payload['receivedInflow'] !== '') {
+        $targetInflow = round(floatval($payload['receivedInflow']), 2);
+        if (!is_finite($targetInflow) || $targetInflow < 0) {
+            return ['error' => 'Received inflow cannot be negative.', 'status' => 400];
+        }
+
+        $safeProjId = substr(preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$projectId), 0, 56);
+        $adjId = 'pay-cc-' . $safeProjId;
+        $sumStmt = $pdo->prepare("SELECT COALESCE(SUM(`amount`), 0) AS total_paid FROM `solar_payments` WHERE `project_id` = ? AND `status` = 'PAID' AND `id` <> ?");
+        $sumStmt->execute([$projectId, $adjId]);
+        $sumRow = $sumStmt->fetch(PDO::FETCH_ASSOC);
+        $otherPaidSum = round(floatval($sumRow['total_paid'] ?? 0), 2);
+
+        if ($targetInflow >= $otherPaidSum - 0.009) {
+            $delta = round(max(0, $targetInflow - $otherPaidSum), 2);
+            if ($delta > 0.009) {
+                $today = date('Y-m-d');
+                $safeRecNo = 'CC-INF-' . substr(preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$projectId), 0, 54);
+                savePaymentToDb($pdo, [
+                    'id' => $adjId,
+                    'receiptNumber' => $safeRecNo,
+                    'projectId' => $projectId,
+                    'customerId' => $existing['customer_id'] ?? '',
+                    'customerName' => $existing['customer_name'] ?? 'Customer',
+                    'milestone' => 'Direct Inflow (Control Center)',
+                    'amount' => $delta,
+                    'status' => 'PAID',
+                    'dueDate' => $today,
+                    'paidDate' => $today,
+                    'paymentMode' => 'Bank NEFT/RTGS',
+                    'notes' => 'Updated by ' . ($actor['name'] ?? 'Admin') . ' in Control Center'
+                ]);
+            } else {
+                $pdo->prepare('DELETE FROM `solar_payments` WHERE `id` = ?')->execute([$adjId]);
+            }
+            $nextReceivedInflowCol = null;
+        } else {
+            $pdo->prepare('DELETE FROM `solar_payments` WHERE `id` = ?')->execute([$adjId]);
+            $nextReceivedInflowCol = $targetInflow;
+        }
+    }
+
+    $pdo->prepare('UPDATE `solar_projects` SET `capacity_kw` = ?, `total_value` = ?, `received_inflow` = ?, `city` = ?, `site_address` = ? WHERE `id` = ?')
+        ->execute([$nextCapacity, $nextTotalValue, $nextReceivedInflowCol, $nextCity, $nextSiteAddress, $projectId]);
+
+    if (!empty($existing['customer_id']) && ($hasCityKey || $hasAddrKey || $hasLocKey)) {
+        $custExisting = fetchExistingRowPhp($pdo, 'solar_customers', $existing['customer_id']);
+        if ($custExisting) {
+            $custCity = $nextCity ?: ($custExisting['city'] ?? '');
+            $custAddr = $hasAddrKey ? $nextSiteAddress : ($custExisting['site_address'] ?? '');
+            $pdo->prepare('UPDATE `solar_customers` SET `city` = ?, `site_address` = ? WHERE `id` = ?')
+                ->execute([$custCity, $custAddr, $existing['customer_id']]);
+        }
+    }
+
+    $updatedList = getProjectsListPhp($pdo, $projectId);
+    $updatedProject = $updatedList[0] ?? null;
+    $updatedCustomer = null;
+    if (!empty($existing['customer_id'])) {
+        $cRow = fetchExistingRowPhp($pdo, 'solar_customers', $existing['customer_id']);
+        if ($cRow) {
+            $updatedCustomer = [
+                'id' => $cRow['id'],
+                'customerCode' => $cRow['customer_code'],
+                'name' => $cRow['name'],
+                'companyName' => $cRow['company_name'] ?? '',
+                'customerType' => $cRow['customer_type'] ?? 'Residential',
+                'phone' => $cRow['phone'],
+                'email' => $cRow['email'] ?? '',
+                'siteAddress' => $cRow['site_address'] ?? '',
+                'city' => $cRow['city'] ?? 'Ahmedabad',
+                'state' => $cRow['state'] ?? 'Gujarat',
+                'pincode' => $cRow['pincode'] ?? '',
+                'gstNumber' => $cRow['gst_number'] ?? '',
+                'electricityConsumerNo' => $cRow['electricity_consumer_no'] ?? '',
+                'sanctionedLoadKw' => floatval($cRow['sanctioned_load_kw'] ?? 0),
+                'status' => $cRow['status'] ?? 'ACTIVE',
+                'activeProjectId' => $cRow['active_project_id'] ?? null,
+                'createdAt' => $cRow['created_at'],
+                'updatedAt' => $cRow['updated_at']
+            ];
+        }
+    }
+
+    return [
+        'status' => 200,
+        'data' => [
+            'project' => $updatedProject,
+            'customer' => $updatedCustomer,
+            'payments' => getPaymentsListPhp($pdo)
+        ]
+    ];
+}
+
+// GET|POST /api/projects
+if (in_array($cleanPath, ['/projects', '/projects/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $items = getProjectsListPhp($pdo);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        if (isCustomerUserPhp($actor)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to projects.']);
+            exit;
+        }
+        if (empty($body['id'])) $body['id'] = 'proj-' . round(microtime(true) * 1000);
+        if (empty($body['projectCode'])) $body['projectCode'] = 'SOL-' . date('Y') . '-' . rand(100, 999);
+        $saved = saveProjectToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST /api/projects/{id}/control-center or /api/projects/{id}/overview
+if (preg_match('#^/projects/([^/]+)/(?:control-center|overview)/?$#', $cleanPath, $matches)) {
+    $projId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to project financials and site details.']);
+        exit;
+    }
+    $allowedRoles = ['ADMIN', 'SUPER ADMIN', 'PROJECT MANAGER', 'ACCOUNTANT', 'SALES MANAGER', 'SALES EXECUTIVE'];
+    $roleUpper = strtoupper(trim((string)($actor['role'] ?? '')));
+    if (!in_array($roleUpper, $allowedRoles, true)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Insufficient permissions to modify project capacity, contract value, inflow, or site location.']);
+        exit;
+    }
+
+    if ($method === 'PUT' || $method === 'POST') {
+        $res = updateProjectControlCenterPhp($pdo, $projId, $body, $actor);
+        if (!empty($res['error'])) {
+            http_response_code($res['status'] ?? 400);
+            echo json_encode(['success' => false, 'error' => $res['error'], 'message' => $res['error']]);
+            exit;
+        }
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $res['data']]);
+        exit;
+    }
+}
+
+// GET|PUT|POST|DELETE /api/projects/{id}
+if (preg_match('#^/projects/([^/]+)/?$#', $cleanPath, $matches)) {
+    $projId = urldecode($matches[1]);
+    if ($projId !== 'import') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAuthUserPhp($pdo);
+
+        if ($method === 'GET') {
+            $list = getProjectsListPhp($pdo, $projId);
+            if (empty($list)) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Project not found']);
+                exit;
+            }
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $list[0]]);
+            exit;
+        }
+        if ($method === 'PUT' || $method === 'POST') {
+            if (isCustomerUserPhp($actor)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to project stages and progress.']);
+                exit;
+            }
+            if (array_key_exists('capacityKw', $body) && (!is_numeric($body['capacityKw']) || floatval($body['capacityKw']) <= 0)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Project capacity must be greater than 0 kW.']);
+                exit;
+            }
+            if (array_key_exists('totalValue', $body) && (!is_numeric($body['totalValue']) || floatval($body['totalValue']) < 0)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Total project value cannot be negative.']);
+                exit;
+            }
+            $body['id'] = $projId;
+            $saved = saveProjectToDb($pdo, $body);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => $saved]);
+            exit;
+        }
+        if ($method === 'DELETE') {
+            if (isCustomerUserPhp($actor)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to projects.']);
+                exit;
+            }
+            deleteItemFromDb($pdo, 'projects', $projId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Project deleted from MySQL.']);
+            exit;
+        }
+    }
+}
+
+// GET|POST /api/payments
+if (in_array($cleanPath, ['/payments', '/payments/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+
+    if ($method === 'GET') {
+        $items = getPaymentsListPhp($pdo);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        if (isCustomerUserPhp($actor)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot record payments directly.']);
+            exit;
+        }
+        $saved = savePaymentToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// DELETE /api/payments/{id}
+if (preg_match('#^/payments/([^/]+)/?$#', $cleanPath, $matches)) {
+    $payId = urldecode($matches[1]);
+    if ($payId !== 'import') {
+        $pdo = getDbConnection($dbConfig);
+        ensureRequiredTables($pdo);
+        $actor = requireAuthUserPhp($pdo);
+        if ($method === 'DELETE') {
+            if (isCustomerUserPhp($actor)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot delete payment records.']);
+                exit;
+            }
+            deleteItemFromDb($pdo, 'payments', $payId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Payment deleted from MySQL.']);
             exit;
         }
     }

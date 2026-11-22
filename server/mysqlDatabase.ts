@@ -240,6 +240,9 @@ class MySqlDatabaseManager {
 
       // Auto-migrate extended columns on Sales & Purchase ERP tables
       const salesPurchaseMigrations: Record<string, Record<string, string>> = {
+        solar_projects: {
+          received_inflow: "DECIMAL(14,2) DEFAULT NULL"
+        },
         solar_products: {
           gst_rate: "DECIMAL(5,2) DEFAULT 18.00",
           selling_price: "DECIMAL(12,2) DEFAULT 0.00",
@@ -1476,6 +1479,7 @@ class MySqlDatabaseManager {
         title: r.title,
         capacityKw: Number(r.capacity_kw) || 0,
         totalValue: Number(r.total_value) || 0,
+        receivedInflow: r.received_inflow !== null && r.received_inflow !== undefined ? Number(r.received_inflow) : null,
         status: r.status,
         currentStageKey: r.current_stage_key,
         completionPercentage: Number(r.completion_percentage) || 0,
@@ -1484,6 +1488,7 @@ class MySqlDatabaseManager {
         projectManagerName: r.project_manager_name,
         siteAddress: r.site_address,
         city: r.city,
+        location: r.city || r.site_address || '',
         inverterModel: r.inverter_model,
         panelModel: r.panel_model,
         structureType: r.structure_type,
@@ -1511,15 +1516,24 @@ class MySqlDatabaseManager {
     const customerId = item.customerId ?? item.customer_id ?? existing?.customer_id ?? '';
     const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? '';
     const title = item.title ?? existing?.title ?? 'Solar EPC Project';
-    const capacityKw = Number(item.capacityKw ?? item.capacity_kw ?? existing?.capacity_kw) || 0;
-    const totalValue = Number(item.totalValue ?? item.total_value ?? existing?.total_value) || 0;
+    const rawCap = item.capacityKw ?? item.capacity_kw;
+    const capacityKw = rawCap !== undefined ? Number(rawCap) : (Number(existing?.capacity_kw) || 0);
+    const rawVal = item.totalValue ?? item.total_value;
+    const totalValue = rawVal !== undefined ? Number(rawVal) : (Number(existing?.total_value) || 0);
+    const rawInflow = item.receivedInflow !== undefined ? item.receivedInflow : item.received_inflow;
+    const receivedInflow =
+      rawInflow !== undefined
+        ? (rawInflow === null || rawInflow === '' ? null : Number(rawInflow))
+        : (existing?.received_inflow !== null && existing?.received_inflow !== undefined
+            ? Number(existing.received_inflow)
+            : null);
     const status = item.status ?? existing?.status ?? 'PLANNING';
     const currentStageKey = item.currentStageKey ?? item.current_stage_key ?? existing?.current_stage_key ?? 'site_survey';
     const completionPercentage = Number(item.completionPercentage ?? item.completion_percentage ?? existing?.completion_percentage) || 0;
     const projectManagerId = item.projectManagerId ?? item.project_manager_id ?? existing?.project_manager_id ?? '';
     const projectManagerName = item.projectManagerName ?? item.project_manager_name ?? existing?.project_manager_name ?? '';
     const siteAddress = item.siteAddress ?? item.site_address ?? existing?.site_address ?? 'Not specified';
-    const city = item.city ?? existing?.city ?? 'Not specified';
+    const city = item.city ?? item.location ?? existing?.city ?? 'Not specified';
     const inverterModel = item.inverterModel ?? item.inverter_model ?? existing?.inverter_model ?? '';
     const panelModel = item.panelModel ?? item.panel_model ?? existing?.panel_model ?? '';
     const structureType = item.structureType ?? item.structure_type ?? existing?.structure_type ?? 'Elevated GI Structure';
@@ -1533,19 +1547,29 @@ class MySqlDatabaseManager {
     const sql = `
       INSERT INTO \`solar_projects\` (
         \`id\`, \`project_code\`, \`customer_id\`, \`customer_name\`, \`title\`,
-        \`capacity_kw\`, \`total_value\`, \`status\`, \`current_stage_key\`,
+        \`capacity_kw\`, \`total_value\`, \`received_inflow\`, \`status\`, \`current_stage_key\`,
         \`completion_percentage\`, \`project_manager_id\`, \`project_manager_name\`,
         \`site_address\`, \`city\`, \`inverter_model\`, \`panel_model\`,
         \`structure_type\`, \`start_date\`, \`expected_completion_date\`,
         \`notes\`, \`assignments_json\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
+        \`customer_name\` = VALUES(\`customer_name\`),
         \`title\` = VALUES(\`title\`), \`capacity_kw\` = VALUES(\`capacity_kw\`),
-        \`total_value\` = VALUES(\`total_value\`), \`status\` = VALUES(\`status\`),
+        \`total_value\` = VALUES(\`total_value\`),
+        \`received_inflow\` = VALUES(\`received_inflow\`),
+        \`status\` = VALUES(\`status\`),
         \`current_stage_key\` = VALUES(\`current_stage_key\`),
         \`completion_percentage\` = VALUES(\`completion_percentage\`),
         \`project_manager_id\` = VALUES(\`project_manager_id\`),
         \`project_manager_name\` = VALUES(\`project_manager_name\`),
+        \`site_address\` = VALUES(\`site_address\`),
+        \`city\` = VALUES(\`city\`),
+        \`inverter_model\` = VALUES(\`inverter_model\`),
+        \`panel_model\` = VALUES(\`panel_model\`),
+        \`structure_type\` = VALUES(\`structure_type\`),
+        \`start_date\` = VALUES(\`start_date\`),
+        \`expected_completion_date\` = VALUES(\`expected_completion_date\`),
         \`notes\` = VALUES(\`notes\`), \`assignments_json\` = VALUES(\`assignments_json\`)
     `;
     await this.pool!.query(sql, [
@@ -1556,6 +1580,7 @@ class MySqlDatabaseManager {
       title,
       capacityKw,
       totalValue,
+      receivedInflow,
       status,
       currentStageKey,
       completionPercentage,
@@ -1622,12 +1647,38 @@ class MySqlDatabaseManager {
       }
     }
 
+    const normalizedSaved = {
+      ...item,
+      projectCode,
+      customerId,
+      customerName,
+      title,
+      capacityKw,
+      totalValue,
+      receivedInflow,
+      status,
+      currentStageKey,
+      completionPercentage,
+      progressPercentage: completionPercentage,
+      projectManagerId,
+      projectManagerName,
+      siteAddress,
+      city,
+      location: city || siteAddress || '',
+      inverterModel,
+      panelModel,
+      structureType,
+      startDate: startDate || '',
+      expectedCompletionDate: expectedCompletionDate || '',
+      notes
+    };
+
     const items = this.getFallbackItems('projects');
     const idx = items.findIndex(p => p.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    if (idx >= 0) items[idx] = { ...items[idx], ...normalizedSaved };
+    else items.unshift(normalizedSaved);
     this.setFallbackItems('projects', items);
-    return item;
+    return normalizedSaved;
   }
 
   public async deleteProject(id: string): Promise<boolean> {
@@ -1732,6 +1783,129 @@ class MySqlDatabaseManager {
 
     const saved = await this.saveProject(project);
     return saved;
+  }
+
+  public async updateProjectControlCenter(
+    projectId: string,
+    payload: {
+      capacityKw?: number;
+      totalValue?: number;
+      receivedInflow?: number;
+      city?: string;
+      siteAddress?: string;
+      location?: string;
+    },
+    actor?: any
+  ): Promise<{ project: any; customer: any | null; payments: any[] }> {
+    this.assertDbConnected();
+    const existing = await this.getExistingRow('solar_projects', projectId);
+    if (!existing) {
+      throw Object.assign(new Error(`Project "${projectId}" not found.`), { statusCode: 404 });
+    }
+
+    const nextCapacity =
+      payload.capacityKw !== undefined ? Number(payload.capacityKw) : Number(existing.capacity_kw || 0);
+    if (!Number.isFinite(nextCapacity) || nextCapacity <= 0) {
+      throw Object.assign(new Error('Project capacity must be greater than 0 kW.'), { statusCode: 400 });
+    }
+
+    const nextTotalValue =
+      payload.totalValue !== undefined ? Math.round(Number(payload.totalValue) * 100) / 100 : Number(existing.total_value || 0);
+    if (!Number.isFinite(nextTotalValue) || nextTotalValue < 0) {
+      throw Object.assign(new Error('Total project/contract value cannot be negative.'), { statusCode: 400 });
+    }
+
+    const nextCityRaw =
+      payload.city !== undefined
+        ? String(payload.city).trim()
+        : payload.location !== undefined
+        ? String(payload.location).trim()
+        : String(existing.city || '');
+    if (payload.city !== undefined && !nextCityRaw) {
+      throw Object.assign(new Error('Site location cannot be empty.'), { statusCode: 400 });
+    }
+    const nextCity = nextCityRaw || String(existing.city || 'Not specified');
+
+    const nextSiteAddress =
+      payload.siteAddress !== undefined ? String(payload.siteAddress).trim() : String(existing.site_address || '');
+
+    let nextReceivedInflowCol: number | null =
+      existing.received_inflow !== null && existing.received_inflow !== undefined
+        ? Number(existing.received_inflow)
+        : null;
+
+    if (payload.receivedInflow !== undefined && payload.receivedInflow !== null) {
+      const targetInflow = Math.round(Number(payload.receivedInflow) * 100) / 100;
+      if (!Number.isFinite(targetInflow) || targetInflow < 0) {
+        throw Object.assign(new Error('Received inflow cannot be negative.'), { statusCode: 400 });
+      }
+
+      const adjId = 'pay-cc-' + String(projectId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 56);
+      const [otherPaidRows]: any = await this.pool!.query(
+        "SELECT COALESCE(SUM(`amount`), 0) AS total_paid FROM `solar_payments` WHERE `project_id` = ? AND `status` = 'PAID' AND `id` <> ?",
+        [projectId, adjId]
+      );
+      const otherPaidSum = Math.round(Number(otherPaidRows?.[0]?.total_paid || 0) * 100) / 100;
+
+      if (targetInflow >= otherPaidSum - 0.009) {
+        const delta = Math.round(Math.max(0, targetInflow - otherPaidSum) * 100) / 100;
+        if (delta > 0.009) {
+          const today = new Date().toISOString().slice(0, 10);
+          const safeRecNo = 'CC-INF-' + String(projectId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 54);
+          await this.savePayment({
+            id: adjId,
+            receiptNumber: safeRecNo,
+            projectId,
+            customerId: existing.customer_id || '',
+            customerName: existing.customer_name || 'Customer',
+            milestone: 'Direct Inflow (Control Center)',
+            amount: delta,
+            status: 'PAID',
+            dueDate: today,
+            paidDate: today,
+            paymentMode: 'Bank NEFT/RTGS',
+            notes: `Updated by ${actor?.name || 'Admin'} in Control Center`
+          });
+        } else {
+          await this.pool!.query('DELETE FROM `solar_payments` WHERE `id` = ?', [adjId]);
+        }
+        nextReceivedInflowCol = null;
+      } else {
+        await this.pool!.query('DELETE FROM `solar_payments` WHERE `id` = ?', [adjId]);
+        nextReceivedInflowCol = targetInflow;
+      }
+    }
+
+    await this.pool!.query(
+      'UPDATE `solar_projects` SET `capacity_kw` = ?, `total_value` = ?, `received_inflow` = ?, `city` = ?, `site_address` = ? WHERE `id` = ?',
+      [nextCapacity, nextTotalValue, nextReceivedInflowCol, nextCity, nextSiteAddress, projectId]
+    );
+
+    if (existing.customer_id && (payload.city !== undefined || payload.siteAddress !== undefined || payload.location !== undefined)) {
+      const custExisting = await this.getExistingRow('solar_customers', existing.customer_id);
+      if (custExisting) {
+        const custCity = nextCity || custExisting.city;
+        const custAddr = payload.siteAddress !== undefined ? nextSiteAddress : custExisting.site_address;
+        await this.pool!.query(
+          'UPDATE `solar_customers` SET `city` = ?, `site_address` = ? WHERE `id` = ?',
+          [custCity, custAddr, existing.customer_id]
+        );
+      }
+    }
+
+    const projects = await this.getProjects();
+    const updatedProject = projects.find(p => p.id === projectId) || null;
+    let updatedCustomer: any | null = null;
+    if (existing.customer_id) {
+      const customers = await this.getCustomers();
+      updatedCustomer = customers.find(c => c.id === existing.customer_id) || null;
+    }
+    const payments = await this.getPayments();
+    return {
+      project: updatedProject,
+      customer: updatedCustomer,
+      payments
+    };
   }
 
   private generateDefaultProjectStages(projId: string, status: string): any[] {

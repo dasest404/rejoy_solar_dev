@@ -17,6 +17,25 @@ import {
 
 export const round2 = (n: number): number => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 
+export const getProjectReceivedInflow = (
+  project: Pick<SolarProject, 'id' | 'receivedInflow'> | null | undefined,
+  payments: PaymentRecord[]
+): number => {
+  if (!project) return 0;
+  if (
+    project.receivedInflow !== undefined &&
+    project.receivedInflow !== null &&
+    Number.isFinite(Number(project.receivedInflow))
+  ) {
+    return round2(Math.max(0, Number(project.receivedInflow)));
+  }
+  return round2(
+    (payments || [])
+      .filter(pay => pay.projectId === project.id && pay.status === 'PAID')
+      .reduce((sum, pay) => sum + Number(pay.amount || 0), 0)
+  );
+};
+
 export const formatINR = (amount: number, showSign = false): string => {
   const num = round2(Number(amount || 0));
   const abs = Math.abs(num);
@@ -982,11 +1001,7 @@ export function buildProjectCosting(
         .filter(i => i.projectId === p.id && i.status !== 'CANCELLED' && i.status !== 'DRAFT')
         .reduce((s, i) => s + Number(i.totalAmount || 0), 0)
     );
-    const collectedRevenue = round2(
-      (payments || [])
-        .filter(pay => pay.projectId === p.id && pay.status === 'PAID')
-        .reduce((s, pay) => s + Number(pay.amount || 0), 0)
-    );
+    const collectedRevenue = getProjectReceivedInflow(p, payments);
     const bomEstimatedCost = round2(
       (boms || [])
         .filter(b => b.projectId === p.id)
