@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
-import { BillOfMaterials, BOMItem, ProductItem, SolarProject } from '../../types/solar';
-import { validateBOM, validateBOMLineItems, DuplicateRecordError } from '../../services/validation';
+import { BillOfMaterials, BOMItem } from '../../types/solar';
+import { validateBOM, validateBOMLineItems } from '../../services/validation';
 import {
   Layers,
   Plus,
@@ -13,40 +13,45 @@ import {
   Send,
   Trash2,
   Eye,
-  AlertTriangle,
   X,
   FileSpreadsheet,
   Building2,
-  Sun,
   ShieldCheck,
   Check,
   Truck,
-  Loader2
+  Loader2,
+  Pencil
 } from 'lucide-react';
 import { EWayBillModal } from './EWayBillModal';
 
+type DraftBOMItem = Omit<BOMItem, 'id'> & { id?: string };
+
 export const BOMManager: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast } = useApp();
-  const { currentUser, hasPermission } = useAuth();
-  const canManageBom = hasPermission('inventory.bom_manage');
-  const canEditBom = hasPermission('inventory.bom_edit') || canManageBom;
+  const { currentUser, hasPermission, isCustomer } = useAuth();
+  const canManageBom = !isCustomer && hasPermission('inventory.bom_manage');
+  const canEditBom = !isCustomer && (hasPermission('inventory.bom_edit') || canManageBom);
 
+  const [localUpdateCounter, setLocalUpdateCounter] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const [editingBOM, setEditingBOM] = useState<BillOfMaterials | null>(null);
   const [viewingBOMId, setViewingBOMId] = useState<string | null>(null);
   const [ewayBOMId, setEwayBOMId] = useState<string | null>(null);
+  const [confirmDeleteBOM, setConfirmDeleteBOM] = useState<BillOfMaterials | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [allocatingId, setAllocatingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Form state for new BOM
+  // Form state for create/edit BOM
   const [formProjectId, setFormProjectId] = useState('');
   const [formWarehouseId, setFormWarehouseId] = useState('');
   const [formVersion, setFormVersion] = useState('v1.0');
+  const [formStatus, setFormStatus] = useState<BillOfMaterials['status']>('DRAFT');
   const [formNotes, setFormNotes] = useState('');
-  const [formItems, setFormItems] = useState<Omit<BOMItem, 'id'>[]>([]);
+  const [formItems, setFormItems] = useState<DraftBOMItem[]>([]);
   const [bomError, setBOMError] = useState<string>('');
   const [lineItemError, setLineItemError] = useState<string>('');
 
@@ -55,11 +60,17 @@ export const BOMManager: React.FC = () => {
   const [itemRequiredQty, setItemRequiredQty] = useState<number>(1);
   const [customDescription, setCustomDescription] = useState('');
 
+  useEffect(() => {
+    const handleStorageUpdate = () => setLocalUpdateCounter(c => c + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
+
   // Fetch reactive data
-  const boms = useMemo(() => storageService.getBOMs(), [refreshTrigger]);
-  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
-  const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
-  const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
+  const boms = useMemo(() => storageService.getBOMs(), [refreshTrigger, localUpdateCounter]);
+  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger, localUpdateCounter]);
+  const products = useMemo(() => storageService.getProducts(), [refreshTrigger, localUpdateCounter]);
+  const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger, localUpdateCounter]);
 
   const selectedBOMForView = useMemo(
     () => (viewingBOMId ? boms.find(b => b.id === viewingBOMId) || null : null),
@@ -85,6 +96,49 @@ export const BOMManager: React.FC = () => {
     });
   }, [boms, searchQuery, statusFilter]);
 
+  const resetBOMForm = () => {
+    setEditingBOM(null);
+    setFormProjectId('');
+    setFormWarehouseId('');
+    setFormVersion('v1.0');
+    setFormStatus('DRAFT');
+    setFormNotes('');
+    setFormItems([]);
+    setSelectedProductId('');
+    setItemRequiredQty(1);
+    setCustomDescription('');
+    setBOMError('');
+    setLineItemError('');
+  };
+
+  const openCreateModal = () => {
+    resetBOMForm();
+    setIsFormModalOpen(true);
+  };
+
+  const openEditModal = (bom: BillOfMaterials) => {
+    setViewingBOMId(null);
+    setEditingBOM(bom);
+    setFormProjectId(bom.projectId || '');
+    setFormWarehouseId(bom.warehouseId || '');
+    setFormVersion(bom.version || 'v1.0');
+    setFormStatus(bom.status || 'DRAFT');
+    setFormNotes(bom.notes || '');
+    setFormItems((bom.items || []).map(it => ({ ...it })));
+    setSelectedProductId('');
+    setItemRequiredQty(1);
+    setCustomDescription('');
+    setBOMError('');
+    setLineItemError('');
+    setIsFormModalOpen(true);
+  };
+
+  const closeFormModal = () => {
+    if (isSaving) return;
+    setIsFormModalOpen(false);
+    resetBOMForm();
+  };
+
   // Handle adding line item to the draft form
   const handleAddLineItem = () => {
     setLineItemError('');
@@ -95,34 +149,35 @@ export const BOMManager: React.FC = () => {
       return;
     }
 
-    if (itemRequiredQty <= 0) {
+    if (!Number.isFinite(itemRequiredQty) || itemRequiredQty <= 0) {
       setLineItemError('Quantity must be greater than zero.');
       showToast('Quantity must be greater than zero', 'warning');
       return;
     }
 
     const prod = products.find(p => p.id === selectedProductId);
+    const unitCost = prod ? Number(prod.unitPrice || 0) : 0;
 
-    const newItem: Omit<BOMItem, 'id'> = {
-      productId: prod?.id,
+    const newItem: DraftBOMItem = {
+      productId: prod?.id || '',
       productName: prod ? prod.name : customDescription.trim(),
       sku: prod ? prod.sku : `CUSTOM-${Date.now()}`,
       category: prod ? prod.category : 'General',
       requiredQty: itemRequiredQty,
       allocatedQty: 0,
       unit: prod ? prod.unit : 'NOS',
-      estimatedUnitCost: prod ? prod.unitPrice : 0,
-      totalCost: (prod ? prod.unitPrice : 0) * itemRequiredQty,
+      estimatedUnitCost: unitCost,
+      totalCost: Number((unitCost * itemRequiredQty).toFixed(2)),
       status: 'PENDING'
     };
 
     // Pre-validate for duplicate line item
     const dummyCandidate: BOMItem = { ...newItem, id: 'temp-new-item' };
-    const dummyExisting: BOMItem[] = formItems.map((it, idx) => ({ ...it, id: `item-${idx}` }));
+    const dummyExisting: BOMItem[] = formItems.map((it, idx) => ({ ...it, id: it.id || `item-${idx}` }));
     const lineValidation = validateBOMLineItems([...dummyExisting, dummyCandidate]);
     if (!lineValidation.valid) {
-      setLineItemError(lineValidation.message);
-      showToast(lineValidation.message, 'warning');
+      setLineItemError(lineValidation.message || 'Duplicate line item detected.');
+      showToast(lineValidation.message || 'Duplicate line item detected.', 'warning');
       return;
     }
 
@@ -131,6 +186,27 @@ export const BOMManager: React.FC = () => {
     setItemRequiredQty(1);
     setCustomDescription('');
     setLineItemError('');
+  };
+
+  const handleUpdateLineItem = (index: number, patch: Partial<DraftBOMItem>) => {
+    setLineItemError('');
+    setFormItems(prev =>
+      prev.map((it, i) => {
+        if (i !== index) return it;
+        const nextQty = patch.requiredQty !== undefined ? patch.requiredQty : it.requiredQty;
+        const nextUnitCost =
+          patch.estimatedUnitCost !== undefined ? patch.estimatedUnitCost : it.estimatedUnitCost;
+        const safeQty = Number.isFinite(Number(nextQty)) ? Number(nextQty) : 0;
+        const safeCost = Number.isFinite(Number(nextUnitCost)) ? Number(nextUnitCost) : 0;
+        return {
+          ...it,
+          ...patch,
+          requiredQty: safeQty,
+          estimatedUnitCost: safeCost,
+          totalCost: Number((safeQty * safeCost).toFixed(2))
+        };
+      })
+    );
   };
 
   const handleRemoveLineItem = (index: number) => {
@@ -144,71 +220,121 @@ export const BOMManager: React.FC = () => {
     setBOMError('');
 
     if (!formProjectId) {
-      setBOMError('Please select a project for this BOM.');
-      showToast('Please select a project for this BOM', 'warning');
+      const msg = 'Please select a project for this BOM.';
+      setBOMError(msg);
+      showToast(msg, 'warning');
       return;
     }
 
     if (formItems.length === 0) {
-      setBOMError('Please add at least one line item to the BOM.');
-      showToast('Please add at least one line item to the BOM', 'warning');
+      const msg = 'Please add at least one line item to the BOM.';
+      setBOMError(msg);
+      showToast(msg, 'warning');
       return;
     }
 
+    for (let i = 0; i < formItems.length; i++) {
+      const it = formItems[i];
+      if (!String(it.productName || '').trim()) {
+        const msg = `Line item #${i + 1} must have an item description.`;
+        setBOMError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+      if (!Number.isFinite(it.requiredQty) || it.requiredQty <= 0) {
+        const msg = `Quantity for "${it.productName}" must be greater than zero.`;
+        setBOMError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+      if (!Number.isFinite(it.estimatedUnitCost) || it.estimatedUnitCost < 0) {
+        const msg = `Unit cost for "${it.productName}" cannot be negative.`;
+        setBOMError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+    }
+
     const project = projects.find(p => p.id === formProjectId);
-    if (!project) return;
+    if (!project && !editingBOM) {
+      const msg = 'Selected project could not be found.';
+      setBOMError(msg);
+      showToast(msg, 'error');
+      return;
+    }
 
-    const totalCost = formItems.reduce((acc, it) => acc + it.totalCost, 0);
+    const totalCost = Number(
+      formItems.reduce((acc, it) => acc + (Number(it.totalCost) || 0), 0).toFixed(2)
+    );
 
-    const selectedWh = warehouses.find(w => w.id === formWarehouseId) || storageService.getDefaultWarehouse();
+    const selectedWh =
+      warehouses.find(w => w.id === formWarehouseId) ||
+      (!formWarehouseId ? storageService.getDefaultWarehouse() : undefined);
 
-    const newBOM: BillOfMaterials = {
-      id: `bom-${Date.now()}`,
-      bomNumber: `BOM-${new Date().getFullYear()}-${String(boms.length + 1).padStart(3, '0')}`,
-      projectId: project.id,
-      projectCode: project.projectCode,
-      projectTitle: project.title,
-      customerName: project.customerName,
-      capacityKw: project.capacityKw || 10,
+    const now = new Date().toISOString();
+    const isEditing = Boolean(editingBOM);
+
+    const resolvedApprovedBy =
+      formStatus === 'APPROVED' && !editingBOM?.approvedAt
+        ? currentUser?.name || 'Project Engineer'
+        : editingBOM?.approvedBy;
+    const resolvedApprovedAt =
+      formStatus === 'APPROVED' && !editingBOM?.approvedAt ? now : editingBOM?.approvedAt;
+
+    const payloadBOM: BillOfMaterials = {
+      id: editingBOM ? editingBOM.id : `bom-${Date.now()}`,
+      bomNumber: editingBOM
+        ? editingBOM.bomNumber
+        : `BOM-${new Date().getFullYear()}-${String(boms.length + 1).padStart(3, '0')}`,
+      projectId: project ? project.id : formProjectId,
+      projectCode: project ? project.projectCode : editingBOM?.projectCode || '',
+      projectTitle: project ? project.title : editingBOM?.projectTitle || 'Solar Project Installation',
+      customerName: project ? project.customerName : editingBOM?.customerName || '',
+      capacityKw: project ? project.capacityKw || 10 : editingBOM?.capacityKw || 10,
       version: formVersion.trim() || 'v1.0',
-      warehouseId: selectedWh.id,
-      warehouseName: selectedWh.name,
-      status: 'DRAFT',
-      stockAllocated: false,
+      warehouseId: selectedWh?.id ?? (formWarehouseId || editingBOM?.warehouseId || ''),
+      warehouseName: selectedWh?.name ?? (editingBOM?.warehouseName || ''),
+      status: formStatus || 'DRAFT',
+      stockAllocated: editingBOM ? Boolean(editingBOM.stockAllocated) : false,
+      ewayBillNumber: editingBOM?.ewayBillNumber,
+      ewayBillDate: editingBOM?.ewayBillDate,
       items: formItems.map((it, idx) => ({
         ...it,
-        id: `bomi-${Date.now()}-${idx}`
+        id: it.id || `bomi-${Date.now()}-${idx}`,
+        productId: it.productId || '',
+        allocatedQty: it.allocatedQty ?? 0,
+        status: it.status || 'PENDING'
       })),
       totalCost,
       notes: formNotes,
-      createdBy: currentUser?.name || 'Project Engineer',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdBy: editingBOM?.createdBy || currentUser?.name || 'Project Engineer',
+      approvedBy: resolvedApprovedBy,
+      approvedAt: resolvedApprovedAt,
+      createdAt: editingBOM?.createdAt || now,
+      updatedAt: now
     };
 
-    const bomCheck = validateBOM(newBOM, boms);
+    const bomCheck = validateBOM(payloadBOM, boms, editingBOM?.id);
     if (!bomCheck.valid) {
-      setBOMError(bomCheck.message);
-      showToast(bomCheck.message, 'error');
+      setBOMError(bomCheck.message || 'Validation failed.');
+      showToast(bomCheck.message || 'Validation failed.', 'error');
       return;
     }
 
     setIsSaving(true);
     try {
-      const saved = await storageService.saveBOMAsync(newBOM);
+      const saved = await storageService.saveBOMAsync(payloadBOM);
       triggerRefresh();
-      showToast(`Bill of Materials ${saved.bomNumber} created successfully`, 'success');
-      setIsCreateModalOpen(false);
-
-      setFormProjectId('');
-      setFormWarehouseId('');
-      setFormVersion('v1.0');
-      setFormNotes('');
-      setFormItems([]);
-      setBOMError('');
-      setLineItemError('');
+      showToast(
+        isEditing
+          ? `Bill of Materials ${saved.bomNumber} updated successfully`
+          : `Bill of Materials ${saved.bomNumber} created successfully`,
+        'success'
+      );
+      setIsFormModalOpen(false);
+      resetBOMForm();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to create Bill of Materials';
+      const msg = err instanceof Error ? err.message : 'Failed to save Bill of Materials';
       setBOMError(msg);
       showToast(msg, 'error');
     } finally {
@@ -225,7 +351,10 @@ export const BOMManager: React.FC = () => {
       triggerRefresh();
       showToast(`Stock successfully reserved & allocated for BOM ${bom.bomNumber}`, 'success');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Could not allocate stock. Please verify product inventory.';
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Could not allocate stock. Please verify product inventory.';
       showToast(msg, 'error');
     } finally {
       setAllocatingId(null);
@@ -257,16 +386,21 @@ export const BOMManager: React.FC = () => {
     }
   };
 
-  const handleDeleteBOM = async (id: string, bomNumber: string) => {
-    if (deletingId) return;
-    if (!window.confirm(`Are you sure you want to delete ${bomNumber}?`)) return;
-    setDeletingId(id);
+  const handleConfirmDeleteBOM = async () => {
+    if (!confirmDeleteBOM || deletingId) return;
+    const target = confirmDeleteBOM;
+    setDeletingId(target.id);
     try {
-      await storageService.deleteBOMAsync(id);
-      if (viewingBOMId === id) setViewingBOMId(null);
-      if (ewayBOMId === id) setEwayBOMId(null);
+      await storageService.deleteBOMAsync(target.id);
+      if (viewingBOMId === target.id) setViewingBOMId(null);
+      if (ewayBOMId === target.id) setEwayBOMId(null);
+      if (editingBOM?.id === target.id) {
+        setIsFormModalOpen(false);
+        resetBOMForm();
+      }
+      setConfirmDeleteBOM(null);
       triggerRefresh();
-      showToast(`BOM ${bomNumber} deleted`, 'info');
+      showToast(`BOM ${target.bomNumber} deleted`, 'info');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to delete BOM';
       showToast(msg, 'error');
@@ -274,6 +408,14 @@ export const BOMManager: React.FC = () => {
       setDeletingId(null);
     }
   };
+
+  const formTotalCost = useMemo(
+    () => formItems.reduce((acc, it) => acc + (Number(it.totalCost) || 0), 0),
+    [formItems]
+  );
+
+  const hasLegacyProjectOption =
+    Boolean(editingBOM && formProjectId) && !projects.some(p => p.id === formProjectId);
 
   return (
     <div className="space-y-6">
@@ -292,8 +434,9 @@ export const BOMManager: React.FC = () => {
         {canManageBom && (
           <button
             id="btn-create-bom"
-            onClick={() => setIsCreateModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors"
+            type="button"
+            onClick={openCreateModal}
+            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             Create New BOM
@@ -315,17 +458,18 @@ export const BOMManager: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-1">
-          {['ALL', 'DRAFT', 'SUBMITTED', 'APPROVED', 'RELEASED_TO_SITE'].map(st => (
+          {['ALL', 'DRAFT', 'APPROVED', 'RELEASED_TO_SITE', 'COMPLETED'].map(st => (
             <button
               key={st}
+              type="button"
               onClick={() => setStatusFilter(st)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
                 statusFilter === st
                   ? 'bg-slate-800 text-white'
                   : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
               }`}
             >
-              {st.replace('_', ' ')}
+              {st.replace(/_/g, ' ')}
             </button>
           ))}
         </div>
@@ -357,7 +501,7 @@ export const BOMManager: React.FC = () => {
                           : 'bg-slate-100 text-slate-700 border-slate-200'
                       }`}
                     >
-                      {bom.status.replace('_', ' ')}
+                      {bom.status.replace(/_/g, ' ')}
                     </span>
                     <span className="text-[10px] text-slate-400 font-semibold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
                       {bom.version}
@@ -439,6 +583,7 @@ export const BOMManager: React.FC = () => {
               <div className="space-y-2 pt-3 border-t border-slate-100">
                 <div className="flex items-center justify-between gap-2">
                   <button
+                    type="button"
                     onClick={() => setViewingBOMId(bom.id)}
                     className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                   >
@@ -446,9 +591,22 @@ export const BOMManager: React.FC = () => {
                     Inspect Details
                   </button>
 
+                  {canEditBom && (
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(bom)}
+                      className="flex items-center justify-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200/80 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                      title="Edit BOM"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Edit
+                    </button>
+                  )}
+
                   {canManageBom && (
                     <button
-                      onClick={() => handleDeleteBOM(bom.id, bom.bomNumber)}
+                      type="button"
+                      onClick={() => setConfirmDeleteBOM(bom)}
                       disabled={deletingId === bom.id}
                       className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                       title="Delete BOM"
@@ -465,6 +623,7 @@ export const BOMManager: React.FC = () => {
                 {/* Stock Allocation Button */}
                 {canEditBom && !isAllocated && (
                   <button
+                    type="button"
                     onClick={() => handleAllocateStock(bom)}
                     disabled={allocatingId === bom.id}
                     className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
@@ -481,6 +640,7 @@ export const BOMManager: React.FC = () => {
                 {/* Workflow Release */}
                 {canEditBom && bom.status === 'APPROVED' && (
                   <button
+                    type="button"
                     onClick={() => handleUpdateStatus(bom, 'RELEASED_TO_SITE')}
                     disabled={updatingId === bom.id}
                     className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
@@ -497,6 +657,7 @@ export const BOMManager: React.FC = () => {
                 {/* Generate E-Way Bill Button */}
                 {canManageBom && (
                   <button
+                    type="button"
                     onClick={() => setEwayBOMId(bom.id)}
                     className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                     title="Generate GST Form EWB-01 for this Bill of Materials"
@@ -508,6 +669,7 @@ export const BOMManager: React.FC = () => {
 
                 {canEditBom && bom.status === 'DRAFT' && (
                   <button
+                    type="button"
                     onClick={() => handleUpdateStatus(bom, 'APPROVED')}
                     disabled={updatingId === bom.id}
                     className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-60 cursor-pointer"
@@ -534,8 +696,9 @@ export const BOMManager: React.FC = () => {
             </p>
             {canManageBom && (
               <button
-                onClick={() => setIsCreateModalOpen(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600 transition-colors"
+                type="button"
+                onClick={openCreateModal}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600 transition-colors cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 Create First BOM
@@ -545,26 +708,33 @@ export const BOMManager: React.FC = () => {
         )}
       </div>
 
-      {/* Modal: Create New BOM */}
-      {isCreateModalOpen && (
+      {/* Modal: Create / Edit BOM */}
+      {isFormModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-amber-500 text-white">
-                  <Layers className="w-5 h-5" />
+                  {editingBOM ? <Pencil className="w-5 h-5" /> : <Layers className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-800 text-base">Create Bill of Materials</h3>
+                  <h3 className="font-bold text-slate-800 text-base">
+                    {editingBOM
+                      ? `Edit Bill of Materials (${editingBOM.bomNumber})`
+                      : 'Create Bill of Materials'}
+                  </h3>
                   <p className="text-xs text-slate-500">
-                    Define technical billable items and allocate inventory.
+                    {editingBOM
+                      ? 'Modify project details, status, sourcing warehouse, and equipment line items.'
+                      : 'Define technical billable items and allocate inventory.'}
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setIsCreateModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
+                type="button"
+                onClick={closeFormModal}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -578,8 +748,8 @@ export const BOMManager: React.FC = () => {
                 </div>
               )}
 
-              {/* Project & Version Selection */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Project, Version & Status Selection */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="md:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Select Target Project *
@@ -591,6 +761,11 @@ export const BOMManager: React.FC = () => {
                     className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                   >
                     <option value="">-- Choose Project --</option>
+                    {hasLegacyProjectOption && editingBOM && (
+                      <option value={formProjectId}>
+                        {editingBOM.projectTitle} ({editingBOM.customerName} - {editingBOM.capacityKw}kW)
+                      </option>
+                    )}
                     {projects.map(p => (
                       <option key={p.id} value={p.id}>
                         {p.title} ({p.customerName} - {p.capacityKw || 10}kW)
@@ -610,6 +785,22 @@ export const BOMManager: React.FC = () => {
                     placeholder="e.g. v1.0"
                     className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    BOM Status
+                  </label>
+                  <select
+                    value={formStatus}
+                    onChange={e => setFormStatus(e.target.value as BillOfMaterials['status'])}
+                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  >
+                    <option value="DRAFT">DRAFT</option>
+                    <option value="APPROVED">APPROVED</option>
+                    <option value="RELEASED_TO_SITE">RELEASED TO SITE</option>
+                    <option value="COMPLETED">COMPLETED</option>
+                  </select>
                 </div>
               </div>
 
@@ -635,14 +826,23 @@ export const BOMManager: React.FC = () => {
                 </span>
               </div>
 
+              {editingBOM?.stockAllocated && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    Warehouse stock has already been allocated for this BOM. Saving edits preserves allocation history without deducting warehouse inventory a second time.
+                  </span>
+                </div>
+              )}
+
               {/* Line Items Builder Section */}
               <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/70 space-y-4">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Add Items to BOM
+                    BOM Line Items ({formItems.length})
                   </h4>
                   <span className="text-[11px] text-slate-500">
-                    Auto-selects from inventory catalog
+                    Add items below or edit quantities &amp; costs directly in the table
                   </span>
                 </div>
 
@@ -662,11 +862,18 @@ export const BOMManager: React.FC = () => {
                       <option value="">-- Pick from Inventory Catalog --</option>
                       {products.map(p => {
                         const whStock = formWarehouseId
-                          ? (p.warehouseStocks?.[formWarehouseId] ?? (warehouses.find(w => w.id === formWarehouseId)?.isDefault ? p.currentStock : 0))
+                          ? (p.warehouseStocks?.[formWarehouseId] ??
+                            (warehouses.find(w => w.id === formWarehouseId)?.isDefault
+                              ? p.currentStock
+                              : 0))
                           : p.currentStock;
                         return (
                           <option key={p.id} value={p.id}>
-                            {p.sku} - {p.name} ({formWarehouseId ? `Facility Stock: ${whStock} ${p.unit} | Total: ${p.currentStock}` : `Stock: ${p.currentStock} ${p.unit}`})
+                            {p.sku} - {p.name} (
+                            {formWarehouseId
+                              ? `Facility Stock: ${whStock} ${p.unit} | Total: ${p.currentStock}`
+                              : `Stock: ${p.currentStock} ${p.unit}`}
+                            )
                           </option>
                         );
                       })}
@@ -679,7 +886,8 @@ export const BOMManager: React.FC = () => {
                     </label>
                     <input
                       type="number"
-                      min="1"
+                      step="any"
+                      min="0.01"
                       value={itemRequiredQty}
                       onChange={e => setItemRequiredQty(Number(e.target.value))}
                       className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
@@ -690,7 +898,7 @@ export const BOMManager: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleAddLineItem}
-                      className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1"
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Add to List
@@ -701,15 +909,25 @@ export const BOMManager: React.FC = () => {
                 {selectedProductId && (() => {
                   const selProd = products.find(p => p.id === selectedProductId);
                   const selWh = warehouses.find(w => w.id === formWarehouseId);
-                  const whStock = formWarehouseId && selProd
-                    ? (selProd.warehouseStocks?.[formWarehouseId] ?? (selWh?.isDefault ? selProd.currentStock : 0))
-                    : selProd?.currentStock;
+                  const whStock =
+                    formWarehouseId && selProd
+                      ? (selProd.warehouseStocks?.[formWarehouseId] ??
+                        (selWh?.isDefault ? selProd.currentStock : 0))
+                      : selProd?.currentStock;
                   return selProd ? (
                     <div className="flex items-center gap-2 text-[11px] bg-amber-50/70 border border-amber-200/60 p-2 rounded-lg text-amber-900">
                       <span className="font-semibold">Warehouse Availability:</span>
                       <span>
-                        {selWh ? selWh.name : 'Primary Logistics Hub'}: <strong>{whStock ?? 0} {selProd.unit}</strong> on-hand
-                        {formWarehouseId && <span className="text-slate-500 ml-1.5">(Total across all warehouses: {selProd.currentStock} {selProd.unit})</span>}
+                        {selWh ? selWh.name : 'Primary Logistics Hub'}:{' '}
+                        <strong>
+                          {whStock ?? 0} {selProd.unit}
+                        </strong>{' '}
+                        on-hand
+                        {formWarehouseId && (
+                          <span className="text-slate-500 ml-1.5">
+                            (Total across all warehouses: {selProd.currentStock} {selProd.unit})
+                          </span>
+                        )}
                       </span>
                     </div>
                   ) : null;
@@ -737,41 +955,85 @@ export const BOMManager: React.FC = () => {
                   </div>
                 )}
 
-                {/* Items Table */}
-                <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                {/* Inline-Editable Items Table */}
+                <div className="border border-slate-200 rounded-lg overflow-x-auto bg-white">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
                       <tr>
-                        <th className="p-2.5">Item Description</th>
+                        <th className="p-2.5 min-w-[200px]">Item Description</th>
                         <th className="p-2.5">Category</th>
-                        <th className="p-2.5 text-center">Qty</th>
-                        <th className="p-2.5 text-right">Est. Unit Cost</th>
-                        <th className="p-2.5 text-right">Line Total</th>
-                        <th className="p-2.5 text-center">Remove</th>
+                        <th className="p-2.5 text-center w-28">Qty</th>
+                        <th className="p-2.5 text-right w-32">Est. Unit Cost (₹)</th>
+                        <th className="p-2.5 text-right w-28">Line Total</th>
+                        <th className="p-2.5 text-center w-14">Remove</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {formItems.map((it, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50/80">
-                          <td className="p-2.5 font-medium text-slate-800">
-                            <div>{it.productName}</div>
-                            <span className="text-[10px] text-slate-400 font-mono">{it.sku}</span>
+                        <tr key={it.id || idx} className="hover:bg-slate-50/80">
+                          <td className="p-2">
+                            {it.productId ? (
+                              <div>
+                                <div className="font-medium text-slate-800">{it.productName}</div>
+                                <span className="text-[10px] text-slate-400 font-mono">{it.sku}</span>
+                              </div>
+                            ) : (
+                              <div>
+                                <input
+                                  type="text"
+                                  value={it.productName}
+                                  onChange={e =>
+                                    handleUpdateLineItem(idx, { productName: e.target.value })
+                                  }
+                                  className="w-full px-2 py-1 text-xs border border-slate-200 rounded font-medium text-slate-800"
+                                />
+                                <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                                  {it.sku}
+                                </span>
+                              </div>
+                            )}
                           </td>
-                          <td className="p-2.5 text-slate-500">{it.category}</td>
-                          <td className="p-2.5 text-center font-bold text-slate-700">
-                            {it.requiredQty} {it.unit}
+                          <td className="p-2 text-slate-500">{it.category}</td>
+                          <td className="p-2">
+                            <div className="flex items-center justify-center gap-1">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.01"
+                                value={it.requiredQty}
+                                onChange={e =>
+                                  handleUpdateLineItem(idx, {
+                                    requiredQty: Number(e.target.value)
+                                  })
+                                }
+                                className="w-16 px-2 py-1 text-center font-bold text-slate-700 border border-slate-200 rounded bg-white"
+                              />
+                              <span className="text-[11px] text-slate-500">{it.unit}</span>
+                            </div>
                           </td>
-                          <td className="p-2.5 text-right text-slate-600 font-mono">
-                            ₹{it.estimatedUnitCost.toLocaleString('en-IN')}
+                          <td className="p-2 text-right">
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              value={it.estimatedUnitCost}
+                              onChange={e =>
+                                handleUpdateLineItem(idx, {
+                                  estimatedUnitCost: Number(e.target.value)
+                                })
+                              }
+                              className="w-24 px-2 py-1 text-right font-mono text-slate-700 border border-slate-200 rounded bg-white"
+                            />
                           </td>
-                          <td className="p-2.5 text-right font-bold text-amber-700 font-mono">
-                            ₹{it.totalCost.toLocaleString('en-IN')}
+                          <td className="p-2 text-right font-bold text-amber-700 font-mono">
+                            ₹{(Number(it.totalCost) || 0).toLocaleString('en-IN')}
                           </td>
-                          <td className="p-2.5 text-center">
+                          <td className="p-2 text-center">
                             <button
                               type="button"
                               onClick={() => handleRemoveLineItem(idx)}
-                              className="text-slate-400 hover:text-rose-600"
+                              className="text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title="Remove line item"
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
@@ -793,10 +1055,7 @@ export const BOMManager: React.FC = () => {
                             Estimated Total BOM Cost:
                           </td>
                           <td className="p-2.5 text-right text-amber-800 font-mono text-sm">
-                            ₹
-                            {formItems
-                              .reduce((acc, it) => acc + it.totalCost, 0)
-                              .toLocaleString('en-IN')}
+                            ₹{formTotalCost.toLocaleString('en-IN')}
                           </td>
                           <td></td>
                         </tr>
@@ -809,7 +1068,7 @@ export const BOMManager: React.FC = () => {
               {/* Notes */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Design & Site Notes
+                  Design &amp; Site Notes
                 </label>
                 <textarea
                   rows={2}
@@ -825,7 +1084,7 @@ export const BOMManager: React.FC = () => {
                 <button
                   type="button"
                   disabled={isSaving}
-                  onClick={() => setIsCreateModalOpen(false)}
+                  onClick={closeFormModal}
                   className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Cancel
@@ -836,7 +1095,11 @@ export const BOMManager: React.FC = () => {
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
                 >
                   {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  {isSaving ? 'Saving to MySQL...' : 'Save Bill of Materials'}
+                  {isSaving
+                    ? 'Saving to MySQL...'
+                    : editingBOM
+                    ? 'Update Bill of Materials'
+                    : 'Save Bill of Materials'}
                 </button>
               </div>
             </form>
@@ -858,6 +1121,7 @@ export const BOMManager: React.FC = () => {
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setViewingBOMId(null)}
                 className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
               >
@@ -876,7 +1140,10 @@ export const BOMManager: React.FC = () => {
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px]">Sourcing Hub</span>
-                <span className="font-semibold text-slate-800 truncate block" title={selectedBOMForView.warehouseName || 'Central Hub'}>
+                <span
+                  className="font-semibold text-slate-800 truncate block"
+                  title={selectedBOMForView.warehouseName || 'Central Hub'}
+                >
                   {selectedBOMForView.warehouseName || 'Central Hub'}
                 </span>
               </div>
@@ -942,22 +1209,33 @@ export const BOMManager: React.FC = () => {
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-2">
-              {canManageBom ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const targetId = selectedBOMForView.id;
-                    setViewingBOMId(null);
-                    setEwayBOMId(targetId);
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
-                >
-                  <Truck className="w-3.5 h-3.5" />
-                  <span>Generate E-Way Bill</span>
-                </button>
-              ) : (
-                <div />
-              )}
+              <div className="flex items-center gap-2">
+                {canEditBom && (
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(selectedBOMForView)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Edit BOM</span>
+                  </button>
+                )}
+
+                {canManageBom && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = selectedBOMForView.id;
+                      setViewingBOMId(null);
+                      setEwayBOMId(targetId);
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>Generate E-Way Bill</span>
+                  </button>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -965,6 +1243,51 @@ export const BOMManager: React.FC = () => {
                 className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 transition-colors cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Delete BOM */}
+      {confirmDeleteBOM && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-900 text-base">Delete Bill of Materials</h4>
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={() => setConfirmDeleteBOM(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Are you sure you want to permanently delete{' '}
+              <strong className="font-mono text-slate-900">{confirmDeleteBOM.bomNumber}</strong>{' '}
+              ({confirmDeleteBOM.projectTitle}) from MySQL?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={() => setConfirmDeleteBOM(null)}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={handleConfirmDeleteBOM}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                {deletingId === confirmDeleteBOM.id && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                )}
+                Delete BOM
               </button>
             </div>
           </div>

@@ -1802,7 +1802,14 @@ apiRouter.get('/boms', async (_req: Request, res: Response) => {
 
 apiRouter.post('/boms', async (req: Request, res: Response) => {
   try {
-    const bom = { ...req.body, id: req.body.id || `bom-${Date.now()}` };
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to Bill of Materials.' });
+    }
+    const bom = { ...req.body, id: req.body?.id || `bom-${Date.now()}` };
     const saved = await dbManager.saveBOM(bom);
     res.status(201).json({ success: true, data: saved });
   } catch (err: any) {
@@ -1812,6 +1819,13 @@ apiRouter.post('/boms', async (req: Request, res: Response) => {
 
 apiRouter.put('/boms/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to Bill of Materials.' });
+    }
     const { id } = req.params;
     const saved = await dbManager.saveBOM({ ...req.body, id });
     res.json({ success: true, data: saved });
@@ -1822,6 +1836,13 @@ apiRouter.put('/boms/:id', async (req: Request, res: Response) => {
 
 apiRouter.delete('/boms/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to Bill of Materials.' });
+    }
     await dbManager.deleteBOM(req.params.id);
     res.json({ success: true, message: 'BOM deleted from MySQL.' });
   } catch (err: any) {
@@ -1841,7 +1862,14 @@ apiRouter.get('/sales-invoices', async (_req: Request, res: Response) => {
 
 apiRouter.post('/sales-invoices', async (req: Request, res: Response) => {
   try {
-    const inv = { ...req.body, id: req.body.id || `inv-${Date.now()}` };
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to sales invoices.' });
+    }
+    const inv = { ...req.body, id: req.body?.id || `inv-${Date.now()}` };
     const saved = await dbManager.saveSalesInvoice(inv);
     res.status(201).json({ success: true, data: saved });
   } catch (err: any) {
@@ -1851,6 +1879,13 @@ apiRouter.post('/sales-invoices', async (req: Request, res: Response) => {
 
 apiRouter.put('/sales-invoices/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to sales invoices.' });
+    }
     const { id } = req.params;
     const saved = await dbManager.saveSalesInvoice({ ...req.body, id });
     res.json({ success: true, data: saved });
@@ -1861,6 +1896,13 @@ apiRouter.put('/sales-invoices/:id', async (req: Request, res: Response) => {
 
 apiRouter.delete('/sales-invoices/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to sales invoices.' });
+    }
     await dbManager.deleteSalesInvoice(req.params.id);
     res.json({ success: true, message: 'Sales invoice deleted from MySQL.' });
   } catch (err: any) {

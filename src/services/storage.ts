@@ -3676,19 +3676,37 @@ class StorageService {
     performedBy: string = 'Accounts Officer'
   ): Promise<SalesInvoice> {
     const invoices = this.getSalesInvoices();
+    if (!invoice.customerId && !invoice.customerName?.trim()) {
+      throw new Error('Customer selection is required before saving an invoice.');
+    }
+    if (!Array.isArray(invoice.items) || invoice.items.length === 0) {
+      throw new Error('Please include at least one billable line item on the invoice.');
+    }
+    const normInvNum = (invoice.invoiceNumber || '').trim().toUpperCase();
+    if (normInvNum) {
+      const dupInv = invoices.find(
+        i => i.id !== invoice.id && (i.invoiceNumber || '').trim().toUpperCase() === normInvNum
+      );
+      if (dupInv) {
+        throw new Error(`Sales invoice number "${invoice.invoiceNumber}" already exists.`);
+      }
+    }
+
     const now = new Date().toISOString();
     const existingInv = invoices.find(i => i.id === invoice.id);
 
     const updated: SalesInvoice = {
       ...invoice,
       id: invoice.id || `inv-${Date.now()}`,
+      stockDeducted: Boolean(invoice.stockDeducted ?? existingInv?.stockDeducted ?? false),
       createdAt: invoice.createdAt || existingInv?.createdAt || now,
       updatedAt: now
     };
 
     const productClones = new Map<string, ProductItem>();
     const newMovements: StockMovement[] = [];
-    const shouldDeduct = (deductStockNow || updated.deductStock) && !updated.stockDeducted;
+    const isFinalStatus = updated.status !== 'DRAFT' && updated.status !== 'CANCELLED';
+    const shouldDeduct = isFinalStatus && (deductStockNow || updated.deductStock) && !updated.stockDeducted;
 
     if (shouldDeduct) {
       const currentProducts = this.getProducts();

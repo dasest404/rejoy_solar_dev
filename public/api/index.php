@@ -2299,22 +2299,40 @@ function saveSalesInvoiceToDb($pdo, $item) {
     $items = $item['items'] ?? (!empty($ex['items_json']) ? json_decode($ex['items_json'], true) : []);
     $itemsArr = is_string($items) ? (json_decode($items, true) ?: []) : $items;
     $itemsJson = is_string($items) ? $items : json_encode($items);
-    $subtotal = floatval($item['subtotal'] ?? ($ex['subtotal'] ?? 0));
-    $gstAmount = floatval($item['taxAmount'] ?? $item['gstAmount'] ?? $item['gst_amount'] ?? ($ex['gst_amount'] ?? 0));
-    $totalAmount = floatval($item['totalAmount'] ?? $item['grandTotal'] ?? $item['total_amount'] ?? ($ex['total_amount'] ?? ($subtotal + $gstAmount)));
+    $subtotal = round(floatval($item['subtotal'] ?? ($ex['subtotal'] ?? 0)), 2);
+    $gstAmount = round(floatval($item['taxAmount'] ?? $item['gstAmount'] ?? $item['gst_amount'] ?? ($ex['gst_amount'] ?? 0)), 2);
+    $hasTotalKey = array_key_exists('totalAmount', $item) || array_key_exists('grandTotal', $item) || array_key_exists('total_amount', $item);
+    $hasSubtotalOrTaxKey = array_key_exists('subtotal', $item) || array_key_exists('taxAmount', $item) || array_key_exists('gstAmount', $item);
+    $totalAmount = round(
+        $hasTotalKey
+            ? floatval($item['totalAmount'] ?? $item['grandTotal'] ?? $item['total_amount'] ?? 0)
+            : ($hasSubtotalOrTaxKey ? ($subtotal + $gstAmount) : floatval($ex['total_amount'] ?? ($subtotal + $gstAmount))),
+        2
+    );
     $status = $item['status'] ?? $item['paymentStatus'] ?? $item['payment_status'] ?? ($ex['payment_status'] ?? 'ISSUED');
-    $paidAmount = floatval($item['amountPaid'] ?? $item['paidAmount'] ?? $item['paid_amount'] ?? ($ex['paid_amount'] ?? 0));
-    $balanceAmount = floatval($item['balanceDue'] ?? $item['balanceAmount'] ?? $item['balance_amount'] ?? ($ex['balance_amount'] ?? max(0, $totalAmount - $paidAmount)));
+    $paidAmount = round(floatval($item['amountPaid'] ?? $item['paidAmount'] ?? $item['paid_amount'] ?? ($ex['paid_amount'] ?? 0)), 2);
+    $hasBalKey = array_key_exists('balanceDue', $item) || array_key_exists('balanceAmount', $item) || array_key_exists('balance_amount', $item);
+    $balanceAmount = round(
+        $hasBalKey
+            ? max(0.0, floatval($item['balanceDue'] ?? $item['balanceAmount'] ?? $item['balance_amount'] ?? 0))
+            : ($status === 'PAID' ? 0.0 : max(0.0, $totalAmount - $paidAmount)),
+        2
+    );
     $ewayBill = $item['ewayBillNumber'] ?? $item['eway_bill_number'] ?? ($ex['eway_bill_number'] ?? '');
     $ewayDetails = array_key_exists('ewayBillDetails', $item) ? $item['ewayBillDetails'] : (!empty($ex['eway_bill_details_json']) ? json_decode($ex['eway_bill_details_json'], true) : null);
     $ewayDetailsJson = $ewayDetails ? (is_string($ewayDetails) ? $ewayDetails : json_encode($ewayDetails)) : null;
     $warehouseId = $item['warehouseId'] ?? $item['warehouse_id'] ?? ($ex['warehouse_id'] ?? '');
     $deductStock = (isset($item['deductStock']) ? (bool)$item['deductStock'] : (bool)($ex['deduct_stock'] ?? 1)) ? 1 : 0;
     $stockDeducted = (isset($item['stockDeducted']) ? (bool)$item['stockDeducted'] : (bool)($ex['stock_deducted'] ?? 0)) ? 1 : 0;
-    $igstDefault = floatval($ex['igst_amount'] ?? 0) > 0 ? 0.0 : ($gstAmount / 2.0);
-    $cgstAmount = floatval($item['cgstAmount'] ?? $item['cgst_amount'] ?? ($ex['cgst_amount'] ?? $igstDefault));
-    $sgstAmount = floatval($item['sgstAmount'] ?? $item['sgst_amount'] ?? ($ex['sgst_amount'] ?? $igstDefault));
-    $igstAmount = floatval($item['igstAmount'] ?? $item['igst_amount'] ?? ($ex['igst_amount'] ?? 0));
+    $hasExplicitTaxSplit = array_key_exists('cgstAmount', $item) || array_key_exists('cgst_amount', $item)
+        || array_key_exists('sgstAmount', $item) || array_key_exists('sgst_amount', $item)
+        || array_key_exists('igstAmount', $item) || array_key_exists('igst_amount', $item);
+    $existingIgst = floatval($ex['igst_amount'] ?? 0);
+    $igstAmount = round(floatval($item['igstAmount'] ?? $item['igst_amount'] ?? (!$hasExplicitTaxSplit && $existingIgst > 0 ? $gstAmount : $existingIgst)), 2);
+    $defaultHalfCgst = $igstAmount > 0 ? 0.0 : round($gstAmount / 2.0, 2);
+    $defaultHalfSgst = $igstAmount > 0 ? 0.0 : round($gstAmount - $defaultHalfCgst, 2);
+    $cgstAmount = round(floatval($item['cgstAmount'] ?? $item['cgst_amount'] ?? (!$hasExplicitTaxSplit ? $defaultHalfCgst : ($ex['cgst_amount'] ?? $defaultHalfCgst))), 2);
+    $sgstAmount = round(floatval($item['sgstAmount'] ?? $item['sgst_amount'] ?? (!$hasExplicitTaxSplit ? $defaultHalfSgst : ($ex['sgst_amount'] ?? $defaultHalfSgst))), 2);
     $einvoiceIrn = $item['einvoiceIrn'] ?? $item['einvoice_irn'] ?? ($ex['einvoice_irn'] ?? '');
     $einvoiceAckNo = $item['einvoiceAckNo'] ?? $item['einvoice_ack_no'] ?? ($ex['einvoice_ack_no'] ?? '');
     $einvoiceAckDate = $item['einvoiceAckDate'] ?? $item['einvoice_ack_date'] ?? ($ex['einvoice_ack_date'] ?? '');
@@ -11681,6 +11699,190 @@ if (preg_match('#^/payments/([^/]+)/?$#', $cleanPath, $matches)) {
             echo json_encode(['success' => true, 'message' => 'Payment deleted from MySQL.']);
             exit;
         }
+    }
+}
+
+// GET|POST /api/boms
+if (in_array($cleanPath, ['/boms', '/boms/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_boms` ORDER BY `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            $cap = floatval($r['system_capacity_kw'] ?? 0);
+            $cost = floatval($r['total_estimated_cost'] ?? 0);
+            return [
+                'id' => $r['id'],
+                'bomNumber' => $r['bom_number'],
+                'projectId' => $r['project_id'],
+                'projectCode' => $r['project_code'] ?? '',
+                'projectTitle' => $r['project_title'],
+                'customerName' => $r['customer_name'] ?? '',
+                'capacityKw' => $cap,
+                'systemCapacityKw' => $cap,
+                'version' => $r['version'] ?? '1.0',
+                'status' => $r['status'] ?? 'APPROVED',
+                'warehouseId' => $r['warehouse_id'] ?? '',
+                'warehouseName' => $r['warehouse_name'] ?? '',
+                'stockAllocated' => (bool)($r['stock_allocated'] ?? 0),
+                'ewayBillNumber' => $r['eway_bill_number'] ?? '',
+                'ewayBillDate' => $r['eway_bill_date'] ?? '',
+                'items' => json_decode($r['items_json'] ?? '[]', true) ?: [],
+                'totalCost' => $cost,
+                'totalEstimatedCost' => $cost,
+                'createdBy' => $r['created_by'] ?? '',
+                'approvedBy' => $r['approved_by'] ?? '',
+                'approvedAt' => $r['approved_at'] ?? null,
+                'notes' => $r['notes'] ?? '',
+                'createdAt' => $r['created_at'],
+                'updatedAt' => $r['updated_at'] ?? $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $actor = requireAuthUserPhp($pdo);
+        if (isCustomerUserPhp($actor)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to Bill of Materials.']);
+            exit;
+        }
+        $saved = saveBOMToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/boms/{id}
+if (preg_match('#^/boms/([^/]+)/?$#', $cleanPath, $matches)) {
+    $bomId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to Bill of Materials.']);
+        exit;
+    }
+    if ($method === 'PUT' || $method === 'POST') {
+        $body['id'] = $bomId;
+        $saved = saveBOMToDb($pdo, $body);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+    if ($method === 'DELETE') {
+        deleteItemFromDb($pdo, 'boms', $bomId, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'BOM deleted from MySQL.']);
+        exit;
+    }
+}
+
+// GET|POST /api/sales-invoices
+if (in_array($cleanPath, ['/sales-invoices', '/sales-invoices/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+
+    if ($method === 'GET') {
+        $stmt = $pdo->query('SELECT * FROM `solar_sales_invoices` ORDER BY `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) {
+            $status = $r['payment_status'] ?? 'ISSUED';
+            $gst = floatval($r['gst_amount'] ?? 0);
+            $total = floatval($r['total_amount'] ?? 0);
+            $paid = floatval($r['paid_amount'] ?? 0);
+            $bal = floatval($r['balance_amount'] ?? 0);
+            return [
+                'id' => $r['id'],
+                'invoiceNumber' => $r['invoice_number'],
+                'invoiceType' => $r['invoice_type'] ?? 'TAX_INVOICE',
+                'projectId' => $r['project_id'] ?? '',
+                'projectTitle' => $r['project_title'] ?? '',
+                'customerId' => $r['customer_id'],
+                'customerName' => $r['customer_name'],
+                'customerGst' => $r['customer_gst'] ?? '',
+                'customerAddress' => $r['customer_address'] ?? '',
+                'invoiceDate' => $r['invoice_date'],
+                'dueDate' => $r['due_date'] ?? '',
+                'paymentTerms' => $r['payment_terms'] ?? '15 Days Net',
+                'items' => json_decode($r['items_json'] ?? '[]', true) ?: [],
+                'subtotal' => floatval($r['subtotal'] ?? 0),
+                'taxAmount' => $gst,
+                'gstAmount' => $gst,
+                'totalAmount' => $total,
+                'grandTotal' => $total,
+                'status' => $status,
+                'paymentStatus' => $status,
+                'paidAmount' => $paid,
+                'amountPaid' => $paid,
+                'balanceAmount' => $bal,
+                'balanceDue' => $bal,
+                'ewayBillNumber' => $r['eway_bill_number'] ?? '',
+                'ewayBillDetails' => json_decode($r['eway_bill_details_json'] ?? 'null', true),
+                'cgstAmount' => floatval($r['cgst_amount'] ?? 0),
+                'sgstAmount' => floatval($r['sgst_amount'] ?? 0),
+                'igstAmount' => floatval($r['igst_amount'] ?? 0),
+                'einvoiceIrn' => $r['einvoice_irn'] ?? '',
+                'einvoiceAckNo' => $r['einvoice_ack_no'] ?? '',
+                'einvoiceAckDate' => $r['einvoice_ack_date'] ?? '',
+                'einvoiceStatus' => $r['einvoice_status'] ?? 'NOT_GENERATED',
+                'warehouseId' => $r['warehouse_id'] ?? '',
+                'deductStock' => isset($r['deduct_stock']) ? (bool)$r['deduct_stock'] : true,
+                'stockDeducted' => (bool)($r['stock_deducted'] ?? 0),
+                'notes' => $r['notes'] ?? '',
+                'createdAt' => $r['created_at'],
+                'updatedAt' => $r['updated_at'] ?? $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $actor = requireAuthUserPhp($pdo);
+        if (isCustomerUserPhp($actor)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to sales invoices.']);
+            exit;
+        }
+        $saved = saveSalesInvoiceToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/sales-invoices/{id}
+if (preg_match('#^/sales-invoices/([^/]+)/?$#', $cleanPath, $matches)) {
+    $invId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to sales invoices.']);
+        exit;
+    }
+    if ($method === 'PUT' || $method === 'POST') {
+        $body['id'] = $invId;
+        $saved = saveSalesInvoiceToDb($pdo, $body);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+    if ($method === 'DELETE') {
+        deleteItemFromDb($pdo, 'sales_invoices', $invId, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Sales invoice deleted from MySQL.']);
+        exit;
     }
 }
 

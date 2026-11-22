@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
-import { SalesInvoice, InvoiceLineItem, ProductItem, Customer, SolarProject } from '../../types/solar';
+import { SalesInvoice, InvoiceLineItem } from '../../types/solar';
 import { PrintPortal, triggerSafeWindowPrint } from '../common/PrintPortal';
 import { numberToIndianWords } from '../../utils/indianNumberWords';
 import {
@@ -16,22 +16,34 @@ import {
   AlertCircle,
   X,
   Printer,
-  Building2,
   DollarSign,
   PackageCheck,
-  Calendar,
   Loader2,
-  Mail
+  Mail,
+  Pencil
 } from 'lucide-react';
+
+type DraftInvoiceLineItem = Omit<InvoiceLineItem, 'id'> & { id?: string };
+
+const PRESET_PAYMENT_TERMS = [
+  'Immediate',
+  '15 Days Net',
+  '30 Days Net',
+  'Advance Milestone'
+];
 
 export const InvoiceCreator: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast, openEmailModal } = useApp();
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin, isCustomer, hasPermission } = useAuth();
+  const canManageInvoices = !isCustomer && (isAdmin || hasPermission('finance.invoices'));
 
+  const [localUpdateCounter, setLocalUpdateCounter] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<SalesInvoice | null>(null);
   const [viewingInvoiceId, setViewingInvoiceId] = useState<string | null>(null);
+  const [confirmDeleteInvoice, setConfirmDeleteInvoice] = useState<SalesInvoice | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -40,7 +52,9 @@ export const InvoiceCreator: React.FC = () => {
   // Form states
   const [formCustomerId, setFormCustomerId] = useState('');
   const [formProjectId, setFormProjectId] = useState('');
-  const [formInvoiceType, setFormInvoiceType] = useState<SalesInvoice['invoiceType']>('TAX_INVOICE');
+  const [formInvoiceType, setFormInvoiceType] =
+    useState<SalesInvoice['invoiceType']>('TAX_INVOICE');
+  const [formStatus, setFormStatus] = useState<SalesInvoice['status'] | string>('ISSUED');
   const [formInvoiceDate, setFormInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
   const [formDueDate, setFormDueDate] = useState(
     new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10)
@@ -50,7 +64,7 @@ export const InvoiceCreator: React.FC = () => {
   const [formDeductStock, setFormDeductStock] = useState(true);
 
   // Dynamic items in modal
-  const [lineItems, setLineItems] = useState<Omit<InvoiceLineItem, 'id'>[]>([]);
+  const [lineItems, setLineItems] = useState<DraftInvoiceLineItem[]>([]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [customItemDesc, setCustomItemDesc] = useState('');
   const [itemHsn, setItemHsn] = useState('85414011');
@@ -58,12 +72,33 @@ export const InvoiceCreator: React.FC = () => {
   const [itemUnitPrice, setItemUnitPrice] = useState<number>(0);
   const [itemTaxRate, setItemTaxRate] = useState<number>(12);
 
+  useEffect(() => {
+    const handleStorageUpdate = () => setLocalUpdateCounter(c => c + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
+
   // Storage data
-  const invoices = useMemo(() => storageService.getSalesInvoices(), [refreshTrigger]);
-  const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger]);
-  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
-  const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
-  const settings = useMemo(() => storageService.getSettings(), [refreshTrigger, viewingInvoiceId]);
+  const invoices = useMemo(
+    () => storageService.getSalesInvoices(),
+    [refreshTrigger, localUpdateCounter]
+  );
+  const customers = useMemo(
+    () => storageService.getCustomers(),
+    [refreshTrigger, localUpdateCounter]
+  );
+  const projects = useMemo(
+    () => storageService.getProjects(),
+    [refreshTrigger, localUpdateCounter]
+  );
+  const products = useMemo(
+    () => storageService.getProducts(),
+    [refreshTrigger, localUpdateCounter]
+  );
+  const settings = useMemo(
+    () => storageService.getSettings(),
+    [refreshTrigger, localUpdateCounter, viewingInvoiceId]
+  );
   const viewingInvoice = useMemo(
     () => (viewingInvoiceId ? invoices.find(inv => inv.id === viewingInvoiceId) || null : null),
     [viewingInvoiceId, invoices]
@@ -71,28 +106,94 @@ export const InvoiceCreator: React.FC = () => {
 
   // Calculations for summary metrics
   const metrics = useMemo(() => {
-    const totalInvoiced = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+    const totalInvoiced = invoices.reduce((sum, inv) => sum + (Number(inv.totalAmount) || 0), 0);
     const totalPaid = invoices
       .filter(inv => inv.status === 'PAID')
-      .reduce((sum, inv) => sum + inv.totalAmount, 0);
+      .reduce((sum, inv) => sum + (Number(inv.totalAmount) || 0), 0);
     const totalPending = invoices
-      .filter(inv => inv.status === 'ISSUED' || inv.status === 'DRAFT')
-      .reduce((sum, inv) => sum + inv.totalAmount, 0);
-    const totalTax = invoices.reduce((sum, inv) => sum + inv.taxAmount, 0);
+      .filter(inv => inv.status !== 'PAID' && inv.status !== 'CANCELLED')
+      .reduce(
+        (sum, inv) =>
+          sum +
+          (inv.balanceAmount != null
+            ? Number(inv.balanceAmount)
+            : Math.max(0, (Number(inv.totalAmount) || 0) - (Number(inv.paidAmount) || 0))),
+        0
+      );
+    const totalTax = invoices.reduce((sum, inv) => sum + (Number(inv.taxAmount) || 0), 0);
 
     return { totalInvoiced, totalPaid, totalPending, totalTax };
   }, [invoices]);
 
   const filteredInvoices = useMemo(() => {
+    const q = searchQuery.toLowerCase();
     return invoices.filter(inv => {
       const matchesSearch =
-        inv.invoiceNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        inv.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (inv.projectTitle && inv.projectTitle.toLowerCase().includes(searchQuery.toLowerCase()));
+        (inv.invoiceNumber || '').toLowerCase().includes(q) ||
+        (inv.customerName || '').toLowerCase().includes(q) ||
+        (inv.projectTitle && inv.projectTitle.toLowerCase().includes(q));
       const matchesStatus = statusFilter === 'ALL' || inv.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [invoices, searchQuery, statusFilter]);
+
+  const resetInvoiceForm = () => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const dueStr = new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10);
+    setEditingInvoice(null);
+    setFormCustomerId('');
+    setFormProjectId('');
+    setFormInvoiceType('TAX_INVOICE');
+    setFormStatus('ISSUED');
+    setFormInvoiceDate(todayStr);
+    setFormDueDate(dueStr);
+    setFormPaymentTerms('15 Days Net');
+    setFormNotes('');
+    setFormDeductStock(true);
+    setLineItems([]);
+    setSelectedProductId('');
+    setCustomItemDesc('');
+    setItemHsn('85414011');
+    setItemQty(1);
+    setItemUnitPrice(0);
+    setItemTaxRate(12);
+    setFormError(null);
+  };
+
+  const openCreateModal = () => {
+    resetInvoiceForm();
+    setIsFormModalOpen(true);
+  };
+
+  const openEditModal = (inv: SalesInvoice) => {
+    const fallbackToday = new Date().toISOString().slice(0, 10);
+    setViewingInvoiceId(null);
+    setEditingInvoice(inv);
+    setFormCustomerId(inv.customerId || '');
+    setFormProjectId(inv.projectId || '');
+    setFormInvoiceType(inv.invoiceType || 'TAX_INVOICE');
+    setFormStatus(inv.status || 'ISSUED');
+    setFormInvoiceDate((inv.invoiceDate || '').slice(0, 10) || fallbackToday);
+    setFormDueDate((inv.dueDate || '').slice(0, 10) || fallbackToday);
+    setFormPaymentTerms(inv.paymentTerms || '15 Days Net');
+    setFormNotes(inv.notes || '');
+    setFormDeductStock(Boolean(inv.deductStock));
+    setLineItems((inv.items || []).map(it => ({ ...it })));
+    setSelectedProductId('');
+    setCustomItemDesc('');
+    setItemHsn('85414011');
+    setItemQty(1);
+    setItemUnitPrice(0);
+    setItemTaxRate(12);
+    setFormError(null);
+    setIsFormModalOpen(true);
+  };
+
+  const closeFormModal = () => {
+    if (isSaving) return;
+    setIsFormModalOpen(false);
+    resetInvoiceForm();
+  };
 
   // When a product is selected in line item builder
   const handleProductSelect = (prodId: string) => {
@@ -116,8 +217,8 @@ export const InvoiceCreator: React.FC = () => {
       showToast('Please enter an item description', 'warning');
       return;
     }
-    if (itemQty <= 0 || itemUnitPrice <= 0) {
-      showToast('Quantity and Unit Price must be greater than 0', 'warning');
+    if (!Number.isFinite(itemQty) || itemQty <= 0 || !Number.isFinite(itemUnitPrice) || itemUnitPrice < 0) {
+      showToast('Quantity must be greater than 0 and Unit Price cannot be negative', 'warning');
       return;
     }
 
@@ -127,10 +228,10 @@ export const InvoiceCreator: React.FC = () => {
 
     const prod = products.find(p => p.id === selectedProductId);
 
-    const newItem: Omit<InvoiceLineItem, 'id'> = {
+    const newItem: DraftInvoiceLineItem = {
       productId: prod?.id,
-      description: customItemDesc,
-      hsnCode: itemHsn,
+      description: customItemDesc.trim(),
+      hsnCode: itemHsn.trim(),
       quantity: itemQty,
       unit: prod?.unit || 'NOS',
       unitPrice: itemUnitPrice,
@@ -147,25 +248,59 @@ export const InvoiceCreator: React.FC = () => {
     setItemTaxRate(12);
   };
 
+  const handleUpdateLineItem = (index: number, patch: Partial<DraftInvoiceLineItem>) => {
+    setLineItems(prev =>
+      prev.map((it, i) => {
+        if (i !== index) return it;
+        const nextQty = patch.quantity !== undefined ? patch.quantity : it.quantity;
+        const nextPrice = patch.unitPrice !== undefined ? patch.unitPrice : it.unitPrice;
+        const nextTaxRate =
+          patch.taxRatePercent !== undefined ? patch.taxRatePercent : it.taxRatePercent;
+        const safeQty = Number.isFinite(Number(nextQty)) ? Number(nextQty) : 0;
+        const safePrice = Number.isFinite(Number(nextPrice)) ? Number(nextPrice) : 0;
+        const safeTaxRate = Number.isFinite(Number(nextTaxRate)) ? Number(nextTaxRate) : 0;
+        const baseAmount = safeQty * safePrice;
+        const taxAmt = Number(((baseAmount * safeTaxRate) / 100).toFixed(2));
+        const totalAmt = Number((baseAmount + taxAmt).toFixed(2));
+        return {
+          ...it,
+          ...patch,
+          quantity: safeQty,
+          unitPrice: safePrice,
+          taxRatePercent: safeTaxRate,
+          taxAmount: taxAmt,
+          totalAmount: totalAmt
+        };
+      })
+    );
+  };
+
   const handleRemoveLineItem = (index: number) => {
     setLineItems(prev => prev.filter((_, i) => i !== index));
   };
 
   const formSubtotal = useMemo(() => {
-    return lineItems.reduce((acc, it) => acc + it.quantity * it.unitPrice, 0);
+    return Number(
+      lineItems
+        .reduce((acc, it) => acc + (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0), 0)
+        .toFixed(2)
+    );
   }, [lineItems]);
 
   const formTaxTotal = useMemo(() => {
-    return lineItems.reduce((acc, it) => acc + it.taxAmount, 0);
+    return Number(
+      lineItems.reduce((acc, it) => acc + (Number(it.taxAmount) || 0), 0).toFixed(2)
+    );
   }, [lineItems]);
 
-  const formGrandTotal = formSubtotal + formTaxTotal;
+  const formGrandTotal = Number((formSubtotal + formTaxTotal).toFixed(2));
 
   const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving || !canManageInvoices) return;
     setFormError(null);
 
-    if (!formCustomerId) {
+    if (!formCustomerId && !editingInvoice?.customerName) {
       const msg = 'Please select a customer';
       setFormError(msg);
       showToast(msg, 'warning');
@@ -179,54 +314,117 @@ export const InvoiceCreator: React.FC = () => {
       return;
     }
 
+    for (let i = 0; i < lineItems.length; i++) {
+      const it = lineItems[i];
+      if (!String(it.description || '').trim()) {
+        const msg = `Line item #${i + 1} must have a description`;
+        setFormError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+      if (!Number.isFinite(it.quantity) || it.quantity <= 0) {
+        const msg = `Quantity for "${it.description}" must be greater than zero`;
+        setFormError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+      if (!Number.isFinite(it.unitPrice) || it.unitPrice < 0) {
+        const msg = `Unit price for "${it.description}" cannot be negative`;
+        setFormError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+    }
+
     const customer = customers.find(c => c.id === formCustomerId);
     const project = projects.find(p => p.id === formProjectId);
+    const now = new Date().toISOString();
+    const isEditing = Boolean(editingInvoice);
 
-    const newInvoice: SalesInvoice = {
-      id: `inv-${Date.now()}`,
-      invoiceNumber: `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(3, '0')}`,
+    const existingPaid = Number(editingInvoice?.paidAmount ?? 0);
+    const nextPaidAmount =
+      formStatus === 'PAID'
+        ? Math.max(existingPaid, formGrandTotal)
+        : existingPaid;
+    const nextBalanceAmount =
+      formStatus === 'PAID'
+        ? 0
+        : Math.max(0, Number((formGrandTotal - nextPaidAmount).toFixed(2)));
+
+    const isInterState =
+      Boolean(editingInvoice?.igstAmount && editingInvoice.igstAmount > 0) &&
+      !(editingInvoice?.cgstAmount && editingInvoice.cgstAmount > 0);
+    const nextIgst = isInterState ? formTaxTotal : 0;
+    const nextCgst = isInterState ? 0 : Number((formTaxTotal / 2).toFixed(2));
+    const nextSgst = isInterState ? 0 : Number((formTaxTotal - nextCgst).toFixed(2));
+
+    const alreadyDeducted = Boolean(editingInvoice?.stockDeducted);
+    const canDeductNow =
+      !alreadyDeducted &&
+      formDeductStock &&
+      formStatus !== 'DRAFT' &&
+      formStatus !== 'CANCELLED';
+
+    const payloadInvoice: SalesInvoice = {
+      id: editingInvoice ? editingInvoice.id : `inv-${Date.now()}`,
+      invoiceNumber: editingInvoice
+        ? editingInvoice.invoiceNumber
+        : `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(3, '0')}`,
       invoiceType: formInvoiceType,
-      customerId: formCustomerId,
-      customerName: customer?.name || 'Valued Customer',
-      customerGst: customer?.gstNumber || 'Unregistered',
-      customerAddress: customer?.siteAddress || '',
-      projectId: formProjectId || undefined,
-      projectTitle: project?.title || undefined,
+      customerId: formCustomerId || editingInvoice?.customerId || '',
+      customerName: customer?.name || editingInvoice?.customerName || 'Valued Customer',
+      customerGst: customer?.gstNumber || editingInvoice?.customerGst || 'Unregistered',
+      customerAddress: customer?.siteAddress || editingInvoice?.customerAddress || '',
+      projectId: formProjectId || '',
+      projectTitle: formProjectId
+        ? project?.title || editingInvoice?.projectTitle || ''
+        : '',
       invoiceDate: formInvoiceDate,
       dueDate: formDueDate,
-      status: 'ISSUED',
+      status: formStatus as SalesInvoice['status'],
+      paymentStatus: formStatus,
       paymentTerms: formPaymentTerms,
       notes: formNotes,
-      deductStock: formDeductStock,
-      stockDeducted: false,
+      paidAmount: nextPaidAmount,
+      balanceAmount: nextBalanceAmount,
+      cgstAmount: nextCgst,
+      sgstAmount: nextSgst,
+      igstAmount: nextIgst,
+      ewayBillNumber: editingInvoice?.ewayBillNumber,
+      ewayBillDetails: editingInvoice?.ewayBillDetails,
+      einvoiceIrn: editingInvoice?.einvoiceIrn,
+      einvoiceAckNo: editingInvoice?.einvoiceAckNo,
+      einvoiceAckDate: editingInvoice?.einvoiceAckDate,
+      einvoiceStatus: editingInvoice?.einvoiceStatus,
+      deductStock: alreadyDeducted ? true : formDeductStock,
+      stockDeducted: alreadyDeducted,
       items: lineItems.map((it, idx) => ({
         ...it,
-        id: `ili-${Date.now()}-${idx}`
+        id: it.id || `ili-${Date.now()}-${idx}`
       })),
       subtotal: formSubtotal,
       taxAmount: formTaxTotal,
       totalAmount: formGrandTotal,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdAt: editingInvoice?.createdAt || now,
+      updatedAt: now
     };
 
     setIsSaving(true);
     try {
       const saved = await storageService.saveSalesInvoiceAsync(
-        newInvoice,
-        formDeductStock,
+        payloadInvoice,
+        canDeductNow,
         currentUser?.name || 'Accounts Officer'
       );
       triggerRefresh();
-      showToast(`Invoice ${saved.invoiceNumber} created and issued successfully`, 'success');
-      setIsCreateModalOpen(false);
-      setFormError(null);
-
-      // Reset Form only after confirmed persistence
-      setFormCustomerId('');
-      setFormProjectId('');
-      setLineItems([]);
-      setFormNotes('');
+      showToast(
+        isEditing
+          ? `Invoice ${saved.invoiceNumber} updated successfully`
+          : `Invoice ${saved.invoiceNumber} created and issued successfully`,
+        'success'
+      );
+      setIsFormModalOpen(false);
+      resetInvoiceForm();
     } catch (err: any) {
       const msg = err?.message || 'Failed to save sales invoice to MySQL.';
       setFormError(msg);
@@ -237,11 +435,16 @@ export const InvoiceCreator: React.FC = () => {
   };
 
   const handleMarkAsPaid = async (invoice: SalesInvoice) => {
+    if (!canManageInvoices || markingPaidId) return;
     setMarkingPaidId(invoice.id);
     try {
+      const total = Number(invoice.totalAmount || 0);
       const updated: SalesInvoice = {
         ...invoice,
         status: 'PAID',
+        paymentStatus: 'PAID',
+        paidAmount: Math.max(Number(invoice.paidAmount || 0), total),
+        balanceAmount: 0,
         updatedAt: new Date().toISOString()
       };
       await storageService.saveSalesInvoiceAsync(
@@ -258,22 +461,35 @@ export const InvoiceCreator: React.FC = () => {
     }
   };
 
-  const handleDeleteInvoice = async (id: string, invNumber: string) => {
-    if (!window.confirm(`Are you sure you want to delete invoice ${invNumber}?`)) return;
-    setDeletingId(id);
+  const handleConfirmDeleteInvoice = async () => {
+    if (!confirmDeleteInvoice || deletingId || !canManageInvoices) return;
+    const target = confirmDeleteInvoice;
+    setDeletingId(target.id);
     try {
-      await storageService.deleteSalesInvoiceAsync(id);
-      if (viewingInvoiceId === id) {
+      await storageService.deleteSalesInvoiceAsync(target.id);
+      if (viewingInvoiceId === target.id) {
         setViewingInvoiceId(null);
       }
+      if (editingInvoice?.id === target.id) {
+        setIsFormModalOpen(false);
+        resetInvoiceForm();
+      }
+      setConfirmDeleteInvoice(null);
       triggerRefresh();
-      showToast(`Invoice ${invNumber} deleted`, 'info');
+      showToast(`Invoice ${target.invoiceNumber} deleted`, 'info');
     } catch (err: any) {
-      showToast(err?.message || `Failed to delete invoice ${invNumber}`, 'error');
+      showToast(err?.message || `Failed to delete invoice ${target.invoiceNumber}`, 'error');
     } finally {
       setDeletingId(null);
     }
   };
+
+  const hasLegacyCustomerOption =
+    Boolean(editingInvoice && formCustomerId) && !customers.some(c => c.id === formCustomerId);
+  const hasLegacyProjectOption =
+    Boolean(editingInvoice && formProjectId) && !projects.some(p => p.id === formProjectId);
+  const hasCustomPaymentTerm =
+    Boolean(formPaymentTerms) && !PRESET_PAYMENT_TERMS.includes(formPaymentTerms);
 
   return (
     <div className="space-y-6">
@@ -353,24 +569,24 @@ export const InvoiceCreator: React.FC = () => {
         <div>
           <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
             <FileText className="w-5 h-5 text-amber-500" />
-            Sales Invoices & Billing
+            Sales Invoices &amp; Billing
           </h3>
           <p className="text-xs text-slate-500 mt-1">
-            Create milestone & supply tax invoices with automatic stock deduction and GST compliance.
+            Create milestone &amp; supply tax invoices with automatic stock deduction and GST compliance.
           </p>
         </div>
 
-        <button
-          id="btn-create-invoice"
-          onClick={() => {
-            setFormError(null);
-            setIsCreateModalOpen(true);
-          }}
-          className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Create Sales Invoice
-        </button>
+        {canManageInvoices && (
+          <button
+            id="btn-create-invoice"
+            type="button"
+            onClick={openCreateModal}
+            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Create Sales Invoice
+          </button>
+        )}
       </div>
 
       {/* Search & Status Filter */}
@@ -387,11 +603,12 @@ export const InvoiceCreator: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-1">
-          {['ALL', 'ISSUED', 'PAID', 'DRAFT'].map(st => (
+          {['ALL', 'ISSUED', 'PARTIAL', 'PAID', 'DRAFT', 'CANCELLED'].map(st => (
             <button
               key={st}
+              type="button"
               onClick={() => setStatusFilter(st)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
                 statusFilter === st
                   ? 'bg-slate-800 text-white'
                   : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
@@ -410,7 +627,7 @@ export const InvoiceCreator: React.FC = () => {
             <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
               <tr>
                 <th className="p-3.5">Invoice #</th>
-                <th className="p-3.5">Customer & Project</th>
+                <th className="p-3.5">Customer &amp; Project</th>
                 <th className="p-3.5">Invoice Date</th>
                 <th className="p-3.5">Due Date</th>
                 <th className="p-3.5 text-right">Tax (GST)</th>
@@ -449,6 +666,10 @@ export const InvoiceCreator: React.FC = () => {
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : inv.status === 'ISSUED'
                           ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : inv.status === 'PARTIAL'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : inv.status === 'CANCELLED'
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
                           : 'bg-slate-100 text-slate-700 border-slate-200'
                       }`}
                     >
@@ -467,31 +688,50 @@ export const InvoiceCreator: React.FC = () => {
                   </td>
                   <td className="p-3.5 text-right whitespace-nowrap">
                     <div className="flex items-center justify-end gap-1.5">
-                      {inv.status !== 'PAID' && (
+                      {canManageInvoices && inv.status !== 'PAID' && inv.status !== 'CANCELLED' && (
                         <button
+                          type="button"
                           onClick={() => handleMarkAsPaid(inv)}
                           disabled={markingPaidId === inv.id}
-                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1"
+                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1 cursor-pointer"
                         >
                           {markingPaidId === inv.id && <Loader2 className="w-3 h-3 animate-spin" />}
                           Mark Paid
                         </button>
                       )}
+                      {canManageInvoices && (
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(inv)}
+                          className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Invoice"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
+                        type="button"
                         onClick={() => setViewingInvoiceId(inv.id)}
-                        className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                        className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                         title="View Tax Invoice"
                       >
                         <Eye className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={() => handleDeleteInvoice(inv.id, inv.invoiceNumber)}
-                        disabled={deletingId === inv.id}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50 rounded-lg transition-colors"
-                        title="Delete Invoice"
-                      >
-                        {deletingId === inv.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                      </button>
+                      {canManageInvoices && (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteInvoice(inv)}
+                          disabled={deletingId === inv.id}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Invoice"
+                        >
+                          {deletingId === inv.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -508,26 +748,33 @@ export const InvoiceCreator: React.FC = () => {
         </div>
       </div>
 
-      {/* Modal: Generate New Sales Invoice */}
-      {isCreateModalOpen && (
+      {/* Modal: Create / Edit Sales Invoice */}
+      {isFormModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in">
             {/* Header */}
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-amber-500 text-white">
-                  <FileText className="w-5 h-5" />
+                  {editingInvoice ? <Pencil className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-800 text-base">Create Tax Invoice</h3>
+                  <h3 className="font-bold text-slate-800 text-base">
+                    {editingInvoice
+                      ? `Edit Sales Invoice (${editingInvoice.invoiceNumber})`
+                      : 'Create Tax Invoice'}
+                  </h3>
                   <p className="text-xs text-slate-500">
-                    Draft a customer invoice with GST calculations and optional inventory deduction.
+                    {editingInvoice
+                      ? 'Update customer, dates, status, line items, GST rates, and invoice terms.'
+                      : 'Draft a customer invoice with GST calculations and optional inventory deduction.'}
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setIsCreateModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg"
+                type="button"
+                onClick={closeFormModal}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -541,6 +788,7 @@ export const InvoiceCreator: React.FC = () => {
                   <span>{formError}</span>
                 </div>
               )}
+
               {/* Customer & Project */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -554,6 +802,11 @@ export const InvoiceCreator: React.FC = () => {
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
                     <option value="">-- Choose Customer --</option>
+                    {hasLegacyCustomerOption && editingInvoice && (
+                      <option value={formCustomerId}>
+                        {editingInvoice.customerName} ({editingInvoice.customerGst || 'Legacy'})
+                      </option>
+                    )}
                     {customers.map(c => (
                       <option key={c.id} value={c.id}>
                         {c.name} ({c.gstNumber ? `GST: ${c.gstNumber}` : 'Individual'})
@@ -572,6 +825,11 @@ export const InvoiceCreator: React.FC = () => {
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
                     <option value="">-- None / General Supply --</option>
+                    {hasLegacyProjectOption && editingInvoice && (
+                      <option value={formProjectId}>
+                        {editingInvoice.projectTitle || formProjectId}
+                      </option>
+                    )}
                     {projects.map(p => (
                       <option key={p.id} value={p.id}>
                         {p.title} ({p.customerName})
@@ -581,8 +839,40 @@ export const InvoiceCreator: React.FC = () => {
                 </div>
               </div>
 
-              {/* Dates & Terms */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Type, Status, Dates & Terms */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Invoice Type
+                  </label>
+                  <select
+                    value={formInvoiceType}
+                    onChange={e =>
+                      setFormInvoiceType(e.target.value as SalesInvoice['invoiceType'])
+                    }
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                  >
+                    <option value="TAX_INVOICE">Tax Invoice</option>
+                    <option value="PROFORMA">Proforma Invoice</option>
+                    <option value="MILESTONE_INVOICE">Milestone Invoice</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Status</label>
+                  <select
+                    value={formStatus}
+                    onChange={e => setFormStatus(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                  >
+                    <option value="DRAFT">DRAFT</option>
+                    <option value="ISSUED">ISSUED</option>
+                    {formStatus === 'PARTIAL' && <option value="PARTIAL">PARTIAL</option>}
+                    <option value="PAID">PAID</option>
+                    <option value="CANCELLED">CANCELLED</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Invoice Date</label>
                   <input
@@ -595,7 +885,9 @@ export const InvoiceCreator: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Payment Due Date</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Payment Due Date
+                  </label>
                   <input
                     type="date"
                     required
@@ -606,12 +898,17 @@ export const InvoiceCreator: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Payment Terms</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Payment Terms
+                  </label>
                   <select
                     value={formPaymentTerms}
                     onChange={e => setFormPaymentTerms(e.target.value)}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
+                    {hasCustomPaymentTerm && (
+                      <option value={formPaymentTerms}>{formPaymentTerms}</option>
+                    )}
                     <option value="Immediate">Immediate / Due on Receipt</option>
                     <option value="15 Days Net">15 Days Net</option>
                     <option value="30 Days Net">30 Days Net</option>
@@ -622,9 +919,14 @@ export const InvoiceCreator: React.FC = () => {
 
               {/* Line Items Section */}
               <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/70 space-y-4">
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Add Billable Line Items
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Billable Line Items ({lineItems.length})
+                  </h4>
+                  <span className="text-[11px] text-slate-500">
+                    Add items below or edit rows inline in the table
+                  </span>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
                   <div className="sm:col-span-4">
@@ -702,7 +1004,8 @@ export const InvoiceCreator: React.FC = () => {
                     </label>
                     <input
                       type="number"
-                      min="1"
+                      step="any"
+                      min="0.01"
                       value={itemQty}
                       onChange={e => setItemQty(Number(e.target.value))}
                       className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
@@ -715,6 +1018,7 @@ export const InvoiceCreator: React.FC = () => {
                     </label>
                     <input
                       type="number"
+                      step="any"
                       min="0"
                       value={itemUnitPrice}
                       onChange={e => setItemUnitPrice(Number(e.target.value))}
@@ -726,7 +1030,7 @@ export const InvoiceCreator: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleAddLineItem}
-                      className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1"
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Add Line Item
@@ -734,44 +1038,107 @@ export const InvoiceCreator: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Items List Table */}
-                <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                {/* Inline-Editable Items List Table */}
+                <div className="border border-slate-200 rounded-lg overflow-x-auto bg-white">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
                       <tr>
-                        <th className="p-2.5">Item Description</th>
-                        <th className="p-2.5 text-center">HSN</th>
-                        <th className="p-2.5 text-center">Qty</th>
-                        <th className="p-2.5 text-right">Unit Price</th>
-                        <th className="p-2.5 text-right">GST</th>
-                        <th className="p-2.5 text-right">Total</th>
-                        <th className="p-2.5 text-center">Action</th>
+                        <th className="p-2.5 min-w-[180px]">Item Description</th>
+                        <th className="p-2.5 text-center w-24">HSN</th>
+                        <th className="p-2.5 text-center w-24">Qty</th>
+                        <th className="p-2.5 text-right w-28">Unit Price (₹)</th>
+                        <th className="p-2.5 text-center w-20">GST %</th>
+                        <th className="p-2.5 text-right w-24">Tax (₹)</th>
+                        <th className="p-2.5 text-right w-28">Total (₹)</th>
+                        <th className="p-2.5 text-center w-12">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {lineItems.map((it, idx) => (
-                        <tr key={idx}>
-                          <td className="p-2.5 font-medium text-slate-800">{it.description}</td>
-                          <td className="p-2.5 text-center text-slate-500 font-mono text-[11px]">
-                            {it.hsnCode}
+                        <tr key={it.id || idx}>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={it.description}
+                              onChange={e =>
+                                handleUpdateLineItem(idx, { description: e.target.value })
+                              }
+                              className="w-full px-2 py-1 text-xs border border-slate-200 rounded font-medium text-slate-800"
+                            />
                           </td>
-                          <td className="p-2.5 text-center font-bold text-slate-700">
-                            {it.quantity} {it.unit}
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={it.hsnCode}
+                              onChange={e =>
+                                handleUpdateLineItem(idx, { hsnCode: e.target.value })
+                              }
+                              className="w-full px-2 py-1 text-center font-mono text-[11px] text-slate-600 border border-slate-200 rounded"
+                            />
                           </td>
-                          <td className="p-2.5 text-right font-mono text-slate-600">
-                            ₹{it.unitPrice.toLocaleString('en-IN')}
+                          <td className="p-2">
+                            <div className="flex items-center justify-center gap-1">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.01"
+                                value={it.quantity}
+                                onChange={e =>
+                                  handleUpdateLineItem(idx, {
+                                    quantity: Number(e.target.value)
+                                  })
+                                }
+                                className="w-14 px-1.5 py-1 text-center font-bold text-slate-700 border border-slate-200 rounded"
+                              />
+                              <span className="text-[10px] text-slate-500">{it.unit}</span>
+                            </div>
                           </td>
-                          <td className="p-2.5 text-right font-mono text-purple-700">
-                            ₹{it.taxAmount.toLocaleString('en-IN')} ({it.taxRatePercent}%)
+                          <td className="p-2 text-right">
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              value={it.unitPrice}
+                              onChange={e =>
+                                handleUpdateLineItem(idx, {
+                                  unitPrice: Number(e.target.value)
+                                })
+                              }
+                              className="w-24 px-2 py-1 text-right font-mono text-slate-700 border border-slate-200 rounded"
+                            />
                           </td>
-                          <td className="p-2.5 text-right font-mono font-bold text-slate-800">
-                            ₹{it.totalAmount.toLocaleString('en-IN')}
+                          <td className="p-2 text-center">
+                            <select
+                              value={it.taxRatePercent}
+                              onChange={e =>
+                                handleUpdateLineItem(idx, {
+                                  taxRatePercent: Number(e.target.value)
+                                })
+                              }
+                              className="w-full px-1.5 py-1 text-xs bg-white border border-slate-200 rounded font-mono text-purple-700"
+                            >
+                              {Array.from(new Set([0, 5, 12, 18, 28, Number(it.taxRatePercent) || 0]))
+                                .filter(r => Number.isFinite(r) && r >= 0 && r <= 100)
+                                .sort((a, b) => a - b)
+                                .map(rate => (
+                                  <option key={rate} value={rate}>
+                                    {rate}%
+                                  </option>
+                                ))}
+                            </select>
                           </td>
-                          <td className="p-2.5 text-center">
+                          <td className="p-2 text-right font-mono text-purple-700">
+                            ₹{(Number(it.taxAmount) || 0).toLocaleString('en-IN')}
+                          </td>
+                          <td className="p-2 text-right font-mono font-bold text-slate-800">
+                            ₹{(Number(it.totalAmount) || 0).toLocaleString('en-IN')}
+                          </td>
+                          <td className="p-2 text-center">
                             <button
                               type="button"
                               onClick={() => handleRemoveLineItem(idx)}
-                              className="text-slate-400 hover:text-rose-600"
+                              className="text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title="Remove line item"
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
@@ -780,7 +1147,7 @@ export const InvoiceCreator: React.FC = () => {
                       ))}
                       {lineItems.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="p-4 text-center text-slate-400 italic">
+                          <td colSpan={8} className="p-4 text-center text-slate-400 italic">
                             No items added yet. Please add items using the form above.
                           </td>
                         </tr>
@@ -789,7 +1156,7 @@ export const InvoiceCreator: React.FC = () => {
                     {lineItems.length > 0 && (
                       <tfoot className="bg-slate-50 border-t border-slate-200 font-semibold text-xs">
                         <tr>
-                          <td colSpan={5} className="p-2 text-right text-slate-600">
+                          <td colSpan={6} className="p-2 text-right text-slate-600">
                             Subtotal (Excl. Tax):
                           </td>
                           <td className="p-2 text-right font-mono">
@@ -798,7 +1165,7 @@ export const InvoiceCreator: React.FC = () => {
                           <td></td>
                         </tr>
                         <tr>
-                          <td colSpan={5} className="p-2 text-right text-purple-700">
+                          <td colSpan={6} className="p-2 text-right text-purple-700">
                             Total GST:
                           </td>
                           <td className="p-2 text-right font-mono text-purple-700">
@@ -807,7 +1174,7 @@ export const InvoiceCreator: React.FC = () => {
                           <td></td>
                         </tr>
                         <tr className="border-t border-slate-300 text-sm font-bold bg-amber-50">
-                          <td colSpan={5} className="p-2.5 text-right text-amber-900">
+                          <td colSpan={6} className="p-2.5 text-right text-amber-900">
                             Grand Invoice Total:
                           </td>
                           <td className="p-2.5 text-right font-mono text-amber-900">
@@ -826,23 +1193,27 @@ export const InvoiceCreator: React.FC = () => {
                 <input
                   type="checkbox"
                   id="chk-deduct-stock"
-                  checked={formDeductStock}
+                  checked={editingInvoice?.stockDeducted ? true : formDeductStock}
+                  disabled={Boolean(editingInvoice?.stockDeducted)}
                   onChange={e => setFormDeductStock(e.target.checked)}
-                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 disabled:opacity-60"
                 />
                 <label htmlFor="chk-deduct-stock" className="text-xs text-slate-700 select-none">
                   <span className="font-bold block text-emerald-900">
-                    Deduct items from Inventory Stock upon Invoice Issuance
+                    {editingInvoice?.stockDeducted
+                      ? 'Inventory Stock Already Deducted'
+                      : 'Deduct items from Inventory Stock upon Invoice Issuance'}
                   </span>
-                  Automatically updates product on-hand quantities and records an INVOICE_SALE stock
-                  movement in the audit ledger.
+                  {editingInvoice?.stockDeducted
+                    ? 'Stock movements were already recorded for this invoice. Editing fields will not deduct inventory a second time.'
+                    : 'Automatically updates product on-hand quantities and records an INVOICE_SALE stock movement in the audit ledger.'}
                 </label>
               </div>
 
               {/* Notes */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Invoice Notes & Terms
+                  Invoice Notes &amp; Terms
                 </label>
                 <textarea
                   rows={2}
@@ -858,18 +1229,24 @@ export const InvoiceCreator: React.FC = () => {
                 <button
                   type="button"
                   disabled={isSaving}
-                  onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-semibold"
+                  onClick={closeFormModal}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-xs transition-colors inline-flex items-center gap-1.5"
+                  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  {isSaving ? 'Issuing Invoice...' : 'Issue Tax Invoice'}
+                  {isSaving
+                    ? editingInvoice
+                      ? 'Updating Invoice...'
+                      : 'Issuing Invoice...'
+                    : editingInvoice
+                    ? 'Update Sales Invoice'
+                    : 'Issue Tax Invoice'}
                 </button>
               </div>
             </form>
@@ -889,6 +1266,16 @@ export const InvoiceCreator: React.FC = () => {
                 <h3 className="text-lg font-bold text-slate-900 mt-1">Tax Invoice</h3>
               </div>
               <div className="flex items-center gap-2">
+                {canManageInvoices && (
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(viewingInvoice)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -924,7 +1311,7 @@ export const InvoiceCreator: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setViewingInvoiceId(null)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600"
+                  className="p-1.5 text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -937,9 +1324,13 @@ export const InvoiceCreator: React.FC = () => {
                 <span className="font-bold text-slate-900 text-sm block mt-0.5">
                   {viewingInvoice.customerName}
                 </span>
-                <span className="text-slate-600 block mt-1">GSTIN: {viewingInvoice.customerGst || 'Unregistered'}</span>
+                <span className="text-slate-600 block mt-1">
+                  GSTIN: {viewingInvoice.customerGst || 'Unregistered'}
+                </span>
                 {viewingInvoice.customerAddress && (
-                  <span className="text-slate-500 block mt-0.5">{viewingInvoice.customerAddress}</span>
+                  <span className="text-slate-500 block mt-0.5">
+                    {viewingInvoice.customerAddress}
+                  </span>
                 )}
               </div>
 
@@ -1019,9 +1410,56 @@ export const InvoiceCreator: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setViewingInvoiceId(null)}
-                className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900"
+                className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Delete Sales Invoice */}
+      {confirmDeleteInvoice && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-900 text-base">Delete Sales Invoice</h4>
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={() => setConfirmDeleteInvoice(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Are you sure you want to permanently delete invoice{' '}
+              <strong className="font-mono text-slate-900">
+                {confirmDeleteInvoice.invoiceNumber}
+              </strong>{' '}
+              for {confirmDeleteInvoice.customerName}?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={() => setConfirmDeleteInvoice(null)}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={handleConfirmDeleteInvoice}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                {deletingId === confirmDeleteInvoice.id && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                )}
+                Delete Invoice
               </button>
             </div>
           </div>
@@ -1046,7 +1484,8 @@ export const InvoiceCreator: React.FC = () => {
                   {settings.companyName || 'REJOY SOLAR POWER PVT. LTD'}
                 </div>
                 <div>
-                  {settings.companyAddress || 'PLOT NO- 14, STREET NO- 14B, PRAGATI NAGAR, RISALI BHILAI, Chhattisgarh 490006'}
+                  {settings.companyAddress ||
+                    'PLOT NO- 14, STREET NO- 14B, PRAGATI NAGAR, RISALI BHILAI, Chhattisgarh 490006'}
                 </div>
                 <div>
                   <strong>GSTIN/UIN:</strong> {settings.companyGst || '22AAOCR0748K1Z5'}
@@ -1092,7 +1531,9 @@ export const InvoiceCreator: React.FC = () => {
             </div>
 
             <div className="border-x border-b border-black p-2.5 space-y-0.5">
-              <span className="text-[10px] font-bold text-slate-600 uppercase block">Buyer (Bill To)</span>
+              <span className="text-[10px] font-bold text-slate-600 uppercase block">
+                Buyer (Bill To)
+              </span>
               <div className="font-bold text-xs">{viewingInvoice.customerName}</div>
               <div>
                 <strong>GSTIN/UIN:</strong> {viewingInvoice.customerGst || 'Unregistered'}
@@ -1124,12 +1565,16 @@ export const InvoiceCreator: React.FC = () => {
                       <tr key={item.id || idx} className="border-b border-slate-200 align-top">
                         <td className="p-1.5 border-r border-black text-center">{idx + 1}</td>
                         <td className="p-1.5 border-r border-black font-semibold">{item.description}</td>
-                        <td className="p-1.5 border-r border-black text-center font-mono">{item.hsnCode || '-'}</td>
+                        <td className="p-1.5 border-r border-black text-center font-mono">
+                          {item.hsnCode || '-'}
+                        </td>
                         <td className="p-1.5 border-r border-black text-center font-bold">
                           {item.quantity} {item.unit}
                         </td>
                         <td className="p-1.5 border-r border-black text-right font-mono">
-                          {Number(item.unitPrice || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          {Number(item.unitPrice || 0).toLocaleString('en-IN', {
+                            minimumFractionDigits: 2
+                          })}
                         </td>
                         <td className="p-1.5 border-r border-black text-right font-mono">
                           {taxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -1144,7 +1589,9 @@ export const InvoiceCreator: React.FC = () => {
                           {halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="p-1.5 text-right font-mono font-bold">
-                          {Number(item.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          {Number(item.totalAmount || 0).toLocaleString('en-IN', {
+                            minimumFractionDigits: 2
+                          })}
                         </td>
                       </tr>
                     );
@@ -1155,7 +1602,10 @@ export const InvoiceCreator: React.FC = () => {
                       Subtotal (Excl. Tax)
                     </td>
                     <td className="p-1.5 text-right font-mono">
-                      ₹ {Number(viewingInvoice.subtotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{' '}
+                      {Number(viewingInvoice.subtotal || 0).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2
+                      })}
                     </td>
                   </tr>
                   <tr>
@@ -1163,7 +1613,10 @@ export const InvoiceCreator: React.FC = () => {
                       CGST Total
                     </td>
                     <td className="p-1 text-right font-mono">
-                      ₹ {Number((viewingInvoice.taxAmount || 0) / 2).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{' '}
+                      {Number((viewingInvoice.taxAmount || 0) / 2).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2
+                      })}
                     </td>
                   </tr>
                   <tr>
@@ -1171,7 +1624,10 @@ export const InvoiceCreator: React.FC = () => {
                       SGST Total
                     </td>
                     <td className="p-1 text-right font-mono">
-                      ₹ {Number((viewingInvoice.taxAmount || 0) / 2).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{' '}
+                      {Number((viewingInvoice.taxAmount || 0) / 2).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2
+                      })}
                     </td>
                   </tr>
                   <tr>
@@ -1179,7 +1635,10 @@ export const InvoiceCreator: React.FC = () => {
                       Total GST Tax
                     </td>
                     <td className="p-1 text-right font-mono font-semibold">
-                      ₹ {Number(viewingInvoice.taxAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{' '}
+                      {Number(viewingInvoice.taxAmount || 0).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2
+                      })}
                     </td>
                   </tr>
                   <tr className="border-t border-black font-bold bg-slate-50 text-xs">
@@ -1187,7 +1646,10 @@ export const InvoiceCreator: React.FC = () => {
                       Grand Invoice Total
                     </td>
                     <td className="p-1.5 text-right font-mono">
-                      ₹ {Number(viewingInvoice.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{' '}
+                      {Number(viewingInvoice.totalAmount || 0).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2
+                      })}
                     </td>
                   </tr>
                 </tbody>
@@ -1197,7 +1659,9 @@ export const InvoiceCreator: React.FC = () => {
             <div className="border-x border-b border-black p-2 flex items-center justify-between text-[11px]">
               <div>
                 <span className="font-bold">Amount Chargeable (in words): </span>
-                <span className="font-bold">INR {numberToIndianWords(Math.round(viewingInvoice.totalAmount || 0))}</span>
+                <span className="font-bold">
+                  INR {numberToIndianWords(Math.round(viewingInvoice.totalAmount || 0))}
+                </span>
               </div>
               <span className="font-bold italic">E. &amp; O.E</span>
             </div>
@@ -1206,7 +1670,8 @@ export const InvoiceCreator: React.FC = () => {
               <div className="pr-3 space-y-1">
                 <strong>Declaration &amp; Notes</strong>
                 <p className="text-[10px] text-slate-600 leading-normal">
-                  {viewingInvoice.notes || 'We declare that this invoice shows the actual price of the goods/services described and that all particulars are true and correct.'}
+                  {viewingInvoice.notes ||
+                    'We declare that this invoice shows the actual price of the goods/services described and that all particulars are true and correct.'}
                 </p>
               </div>
               <div className="pl-3 border-l border-black text-right flex flex-col justify-between">

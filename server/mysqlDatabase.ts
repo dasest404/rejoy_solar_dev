@@ -5639,21 +5639,53 @@ class MySqlDatabaseManager {
     const rawItems = item.items ?? (existing?.items_json ? JSON.parse(existing.items_json) : []);
     const itemsArr = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
     const itemsJson = typeof rawItems === 'string' ? rawItems : JSON.stringify(rawItems);
-    const subtotal = Number(item.subtotal ?? existing?.subtotal) || 0;
-    const gstAmount = Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0;
-    const totalAmount = Number(item.totalAmount ?? item.grandTotal ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount);
-    const status = item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'ISSUED';
-    const paidAmount = Number(item.amountPaid ?? item.paidAmount ?? item.paid_amount ?? existing?.paid_amount) || 0;
-    const balanceAmount = Number(item.balanceDue ?? item.balanceAmount ?? item.balance_amount ?? existing?.balance_amount) || Math.max(0, totalAmount - paidAmount);
+    const subtotal = roundCurrency(Number(item.subtotal ?? existing?.subtotal) || 0);
+    const gstAmount = roundCurrency(Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0);
+    const rawTotal = item.totalAmount ?? item.grandTotal ?? item.total_amount;
+    const totalAmount = roundCurrency(
+      rawTotal !== undefined && rawTotal !== null
+        ? (Number(rawTotal) || 0)
+        : (item.subtotal !== undefined || item.taxAmount !== undefined || item.gstAmount !== undefined
+            ? subtotal + gstAmount
+            : (Number(existing?.total_amount) || (subtotal + gstAmount)))
+    );
+    const status = String(item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'ISSUED');
+    const paidAmount = roundCurrency(Number(item.amountPaid ?? item.paidAmount ?? item.paid_amount ?? existing?.paid_amount) || 0);
+    const rawBal = item.balanceDue ?? item.balanceAmount ?? item.balance_amount;
+    const balanceAmount = roundCurrency(
+      rawBal !== undefined && rawBal !== null
+        ? Math.max(0, Number(rawBal) || 0)
+        : (status === 'PAID' ? 0 : Math.max(0, totalAmount - paidAmount))
+    );
     const ewayBillNumber = item.ewayBillNumber ?? item.eway_bill_number ?? existing?.eway_bill_number ?? '';
     const ewayObj = item.ewayBillDetails !== undefined ? item.ewayBillDetails : (existing?.eway_bill_details_json ? JSON.parse(existing.eway_bill_details_json) : null);
     const ewayBillDetailsJson = ewayObj ? JSON.stringify(ewayObj) : null;
     const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
     const deductStock = (item.deductStock !== undefined ? item.deductStock : (existing?.deduct_stock !== undefined ? Boolean(existing.deduct_stock) : true)) ? 1 : 0;
     const stockDeducted = (item.stockDeducted !== undefined ? item.stockDeducted : Boolean(existing?.stock_deducted)) ? 1 : 0;
-    const cgstAmount = Number(item.cgstAmount ?? item.cgst_amount ?? existing?.cgst_amount ?? (Number(item.igstAmount ?? existing?.igst_amount ?? 0) > 0 ? 0 : gstAmount / 2)) || 0;
-    const sgstAmount = Number(item.sgstAmount ?? item.sgst_amount ?? existing?.sgst_amount ?? (Number(item.igstAmount ?? existing?.igst_amount ?? 0) > 0 ? 0 : gstAmount / 2)) || 0;
-    const igstAmount = Number(item.igstAmount ?? item.igst_amount ?? existing?.igst_amount) || 0;
+    const hasExplicitTaxSplit =
+      item.cgstAmount !== undefined ||
+      item.cgst_amount !== undefined ||
+      item.sgstAmount !== undefined ||
+      item.sgst_amount !== undefined ||
+      item.igstAmount !== undefined ||
+      item.igst_amount !== undefined;
+    const existingIgst = Number(existing?.igst_amount ?? 0);
+    const igstAmount = roundCurrency(
+      Number(
+        item.igstAmount ??
+          item.igst_amount ??
+          (!hasExplicitTaxSplit && existingIgst > 0 ? gstAmount : existingIgst)
+      ) || 0
+    );
+    const defaultHalfCgst = igstAmount > 0 ? 0 : roundCurrency(gstAmount / 2);
+    const defaultHalfSgst = igstAmount > 0 ? 0 : roundCurrency(gstAmount - defaultHalfCgst);
+    const cgstAmount = roundCurrency(
+      Number(item.cgstAmount ?? item.cgst_amount ?? (!hasExplicitTaxSplit ? defaultHalfCgst : existing?.cgst_amount)) || 0
+    );
+    const sgstAmount = roundCurrency(
+      Number(item.sgstAmount ?? item.sgst_amount ?? (!hasExplicitTaxSplit ? defaultHalfSgst : existing?.sgst_amount)) || 0
+    );
     const einvoiceIrn = item.einvoiceIrn ?? item.einvoice_irn ?? existing?.einvoice_irn ?? '';
     const einvoiceAckNo = item.einvoiceAckNo ?? item.einvoice_ack_no ?? existing?.einvoice_ack_no ?? '';
     const einvoiceAckDate = item.einvoiceAckDate ?? item.einvoice_ack_date ?? existing?.einvoice_ack_date ?? '';

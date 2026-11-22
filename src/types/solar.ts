@@ -1032,7 +1032,7 @@ export interface BillOfMaterials {
   updatedAt: string;
 }
 
-export type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'PAID' | 'CANCELLED';
+export type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'PARTIAL' | 'PAID' | 'CANCELLED';
 
 export interface InvoiceLineItem {
   id: string;
@@ -1076,6 +1076,8 @@ export interface SalesInvoice {
   einvoiceAckNo?: string;
   einvoiceAckDate?: string;
   einvoiceStatus?: 'NOT_GENERATED' | 'GENERATED' | 'CANCELLED' | string;
+  ewayBillNumber?: string;
+  ewayBillDetails?: any;
   deductStock: boolean;
   stockDeducted: boolean;
   createdAt: string;

@@ -791,42 +791,52 @@ class ApiClient {
 
   // --- Bill of Materials (BOM) ---
   async getBOMs(): Promise<any[]> {
-    const res = await this.request(`${this.baseUrl}/boms`);
+    const res = await this.request(`${this.baseUrl}/boms`, { headers: this.getAuthHeaders() });
     return (await this.handleResponse(res)) || [];
   }
 
   async saveBOM(item: any): Promise<any> {
-    const res = await this.request(`${this.baseUrl}/boms`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const isUpdate = Boolean(item?.id);
+    const url = isUpdate ? `${this.baseUrl}/boms/${encodeURIComponent(item.id)}` : `${this.baseUrl}/boms`;
+    const res = await this.request(url, {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(item)
     });
     return await this.handleResponse(res);
   }
 
   async deleteBOM(id: string): Promise<boolean> {
-    const res = await this.request(`${this.baseUrl}/boms/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await this.request(`${this.baseUrl}/boms/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
     await this.handleResponse(res);
     return true;
   }
 
   // --- Sales Invoices ---
   async getSalesInvoices(): Promise<any[]> {
-    const res = await this.request(`${this.baseUrl}/sales-invoices`);
+    const res = await this.request(`${this.baseUrl}/sales-invoices`, { headers: this.getAuthHeaders() });
     return (await this.handleResponse(res)) || [];
   }
 
   async saveSalesInvoice(item: any): Promise<any> {
-    const res = await this.request(`${this.baseUrl}/sales-invoices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const isUpdate = Boolean(item?.id);
+    const url = isUpdate ? `${this.baseUrl}/sales-invoices/${encodeURIComponent(item.id)}` : `${this.baseUrl}/sales-invoices`;
+    const res = await this.request(url, {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(item)
     });
     return await this.handleResponse(res);
   }
 
   async deleteSalesInvoice(id: string): Promise<boolean> {
-    const res = await this.request(`${this.baseUrl}/sales-invoices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await this.request(`${this.baseUrl}/sales-invoices/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
     await this.handleResponse(res);
     return true;
   }
