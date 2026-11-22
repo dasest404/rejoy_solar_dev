@@ -225,6 +225,11 @@ function ensureRequiredTables($pdo) {
             'invoice_reference' => "VARCHAR(128) DEFAULT ''",
             'stock_updated' => 'TINYINT(1) DEFAULT 0',
             'received_date' => 'DATE DEFAULT NULL',
+            'paid_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'returned_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'refunded_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'balance_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'bank_account_id' => "VARCHAR(64) DEFAULT ''",
             'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
         ],
         'solar_boms' => [
@@ -274,6 +279,9 @@ function ensureRequiredTables($pdo) {
             'einvoice_ack_no' => "VARCHAR(64) DEFAULT ''",
             'einvoice_ack_date' => "VARCHAR(64) DEFAULT ''",
             'einvoice_status' => "VARCHAR(32) DEFAULT 'NOT_GENERATED'",
+            'returned_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'refunded_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'bank_account_id' => "VARCHAR(64) DEFAULT ''",
             'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
         ],
         'solar_warehouses' => [
@@ -2105,11 +2113,20 @@ function savePurchaseOrderToDb($pdo, $item) {
     $items = $item['items'] ?? (!empty($ex['items_json']) ? json_decode($ex['items_json'], true) : []);
     $itemsArr = is_string($items) ? (json_decode($items, true) ?: []) : $items;
     $itemsJson = is_string($items) ? $items : json_encode($items);
-    $subtotal = floatval($item['subtotal'] ?? ($ex['subtotal'] ?? 0));
-    $gstAmount = floatval($item['taxAmount'] ?? $item['gstAmount'] ?? $item['gst_amount'] ?? ($ex['gst_amount'] ?? 0));
-    $totalAmount = floatval($item['totalAmount'] ?? $item['grandTotal'] ?? $item['total_amount'] ?? ($ex['total_amount'] ?? ($subtotal + $gstAmount)));
+    $subtotal = round(floatval($item['subtotal'] ?? ($ex['subtotal'] ?? 0)), 2);
+    $gstAmount = round(floatval($item['taxAmount'] ?? $item['gstAmount'] ?? $item['gst_amount'] ?? ($ex['gst_amount'] ?? 0)), 2);
+    $totalAmount = round(floatval($item['totalAmount'] ?? $item['grandTotal'] ?? $item['total_amount'] ?? ($ex['total_amount'] ?? ($subtotal + $gstAmount))), 2);
     $status = $item['status'] ?? ($ex['status'] ?? 'ISSUED');
-    $paymentStatus = $item['paymentStatus'] ?? $item['payment_status'] ?? ($ex['payment_status'] ?? 'PENDING');
+    $paidAmount = round(floatval($ex ? ($ex['paid_amount'] ?? 0) : ($item['paidAmount'] ?? 0)), 2);
+    $returnedAmount = round(floatval($ex['returned_amount'] ?? ($item['returnedAmount'] ?? 0)), 2);
+    $refundedAmount = round(floatval($ex['refunded_amount'] ?? ($item['refundedAmount'] ?? 0)), 2);
+    $netPaid = round(max(0.0, $paidAmount - $refundedAmount), 2);
+    $balanceAmount = round(max(0.0, $totalAmount - $returnedAmount - $netPaid), 2);
+    $requestedPayStatus = $item['paymentStatus'] ?? $item['payment_status'] ?? ($ex['payment_status'] ?? 'PENDING');
+    $paymentStatus = ($ex && ($paidAmount > 0 || $returnedAmount > 0))
+        ? ($balanceAmount <= 0.01 && $totalAmount > 0 ? 'PAID' : ($netPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING'))
+        : $requestedPayStatus;
+    $bankAccountId = trim((string)($item['bankAccountId'] ?? ($ex['bank_account_id'] ?? '')));
     $receipts = $item['deliveryReceipts'] ?? $item['receipts'] ?? (!empty($ex['receipts_json']) ? json_decode($ex['receipts_json'], true) : []);
     $receiptsArr = is_string($receipts) ? (json_decode($receipts, true) ?: []) : $receipts;
     $receiptsJson = is_string($receipts) ? $receipts : json_encode($receipts);
@@ -2122,8 +2139,9 @@ function savePurchaseOrderToDb($pdo, $item) {
             `warehouse_id`, `warehouse_name`, `payment_due_date`,
             `invoice_reference`, `stock_updated`, `received_date`,
             `items_json`, `subtotal`, `gst_amount`, `total_amount`,
+            `paid_amount`, `returned_amount`, `refunded_amount`, `balance_amount`, `bank_account_id`,
             `status`, `payment_status`, `receipts_json`, `notes`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             `po_number` = VALUES(`po_number`),
             `vendor_id` = VALUES(`vendor_id`),
@@ -2141,6 +2159,11 @@ function savePurchaseOrderToDb($pdo, $item) {
             `subtotal` = VALUES(`subtotal`),
             `gst_amount` = VALUES(`gst_amount`),
             `total_amount` = VALUES(`total_amount`),
+            `paid_amount` = VALUES(`paid_amount`),
+            `returned_amount` = VALUES(`returned_amount`),
+            `refunded_amount` = VALUES(`refunded_amount`),
+            `balance_amount` = VALUES(`balance_amount`),
+            `bank_account_id` = VALUES(`bank_account_id`),
             `status` = VALUES(`status`),
             `payment_status` = VALUES(`payment_status`),
             `items_json` = VALUES(`items_json`),
@@ -2153,6 +2176,7 @@ function savePurchaseOrderToDb($pdo, $item) {
         $warehouseId, $warehouseName, $payDueDate,
         $invoiceRef, $stockUpdated, $receivedDate,
         $itemsJson, $subtotal, $gstAmount, $totalAmount,
+        $paidAmount, $returnedAmount, $refundedAmount, $balanceAmount, $bankAccountId,
         $status, $paymentStatus, $receiptsJson, $notes
     ]);
 
@@ -2180,6 +2204,11 @@ function savePurchaseOrderToDb($pdo, $item) {
         'gstAmount' => $gstAmount,
         'totalAmount' => $totalAmount,
         'grandTotal' => $totalAmount,
+        'paidAmount' => $paidAmount,
+        'returnedAmount' => $returnedAmount,
+        'refundedAmount' => $refundedAmount,
+        'balanceAmount' => $balanceAmount,
+        'bankAccountId' => $bankAccountId,
         'status' => $status,
         'paymentStatus' => $paymentStatus,
         'deliveryReceipts' => $receiptsArr,
@@ -2280,7 +2309,7 @@ function saveBOMToDb($pdo, $item) {
 }
 
 // Helper: Sales Invoices
-function saveSalesInvoiceToDb($pdo, $item) {
+function saveSalesInvoiceToDb($pdo, $item, $actor = null) {
     $id = !empty($item['id']) ? $item['id'] : ('inv-' . round(microtime(true) * 1000));
     $ex = fetchExistingRowPhp($pdo, 'solar_sales_invoices', $id);
     $invNumber = $item['invoiceNumber'] ?? $item['invoice_number'] ?? ($ex['invoice_number'] ?? $id);
@@ -2309,13 +2338,17 @@ function saveSalesInvoiceToDb($pdo, $item) {
             : ($hasSubtotalOrTaxKey ? ($subtotal + $gstAmount) : floatval($ex['total_amount'] ?? ($subtotal + $gstAmount))),
         2
     );
+    $returnedAmount = round(floatval($ex['returned_amount'] ?? ($item['returnedAmount'] ?? 0)), 2);
+    $refundedAmount = round(floatval($ex['refunded_amount'] ?? ($item['refundedAmount'] ?? 0)), 2);
+    $bankAccountId = trim((string)($item['bankAccountId'] ?? ($ex['bank_account_id'] ?? '')));
     $status = $item['status'] ?? $item['paymentStatus'] ?? $item['payment_status'] ?? ($ex['payment_status'] ?? 'ISSUED');
     $paidAmount = round(floatval($item['amountPaid'] ?? $item['paidAmount'] ?? $item['paid_amount'] ?? ($ex['paid_amount'] ?? 0)), 2);
+    $netPaid = round(max(0.0, $paidAmount - $refundedAmount), 2);
     $hasBalKey = array_key_exists('balanceDue', $item) || array_key_exists('balanceAmount', $item) || array_key_exists('balance_amount', $item);
     $balanceAmount = round(
-        $hasBalKey
+        $hasBalKey && $returnedAmount <= 0
             ? max(0.0, floatval($item['balanceDue'] ?? $item['balanceAmount'] ?? $item['balance_amount'] ?? 0))
-            : ($status === 'PAID' ? 0.0 : max(0.0, $totalAmount - $paidAmount)),
+            : ($status === 'PAID' && $returnedAmount <= 0 ? 0.0 : max(0.0, $totalAmount - $returnedAmount - $netPaid)),
         2
     );
     $ewayBill = $item['ewayBillNumber'] ?? $item['eway_bill_number'] ?? ($ex['eway_bill_number'] ?? '');
@@ -2346,9 +2379,9 @@ function saveSalesInvoiceToDb($pdo, $item) {
             `invoice_date`, `due_date`, `payment_terms`, `items_json`, `subtotal`, `gst_amount`,
             `cgst_amount`, `sgst_amount`, `igst_amount`,
             `einvoice_irn`, `einvoice_ack_no`, `einvoice_ack_date`, `einvoice_status`,
-            `total_amount`, `payment_status`, `paid_amount`, `balance_amount`,
+            `total_amount`, `payment_status`, `paid_amount`, `returned_amount`, `refunded_amount`, `balance_amount`, `bank_account_id`,
             `eway_bill_number`, `eway_bill_details_json`, `warehouse_id`, `deduct_stock`, `stock_deducted`, `notes`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             `invoice_type` = VALUES(`invoice_type`),
             `project_id` = VALUES(`project_id`),
@@ -2373,7 +2406,10 @@ function saveSalesInvoiceToDb($pdo, $item) {
             `total_amount` = VALUES(`total_amount`),
             `payment_status` = VALUES(`payment_status`),
             `paid_amount` = VALUES(`paid_amount`),
+            `returned_amount` = VALUES(`returned_amount`),
+            `refunded_amount` = VALUES(`refunded_amount`),
             `balance_amount` = VALUES(`balance_amount`),
+            `bank_account_id` = VALUES(`bank_account_id`),
             `eway_bill_number` = VALUES(`eway_bill_number`),
             `eway_bill_details_json` = VALUES(`eway_bill_details_json`),
             `warehouse_id` = VALUES(`warehouse_id`),
@@ -2387,9 +2423,16 @@ function saveSalesInvoiceToDb($pdo, $item) {
         $invDate, $dueDate, $paymentTerms, $itemsJson, $subtotal, $gstAmount,
         $cgstAmount, $sgstAmount, $igstAmount,
         $einvoiceIrn, $einvoiceAckNo, $einvoiceAckDate, $einvoiceStatus,
-        $totalAmount, $status, $paidAmount, $balanceAmount,
+        $totalAmount, $status, $paidAmount, $returnedAmount, $refundedAmount, $balanceAmount, $bankAccountId,
         $ewayBill, $ewayDetailsJson, $warehouseId, $deductStock, $stockDeducted, $notes
     ]);
+
+    if (strtoupper($status) !== 'DRAFT' && strtoupper($status) !== 'CANCELLED' && $totalAmount > 0) {
+        try {
+            require_once __DIR__ . '/accounting.php';
+            accEnsureSalesInvoiceJournalPhp($pdo, $id, $actor);
+        } catch (Exception $e) {}
+    }
 
     return array_merge($item, [
         'id' => $id,
@@ -2421,8 +2464,11 @@ function saveSalesInvoiceToDb($pdo, $item) {
         'paymentStatus' => $status,
         'paidAmount' => $paidAmount,
         'amountPaid' => $paidAmount,
+        'returnedAmount' => $returnedAmount,
+        'refundedAmount' => $refundedAmount,
         'balanceAmount' => $balanceAmount,
         'balanceDue' => $balanceAmount,
+        'bankAccountId' => $bankAccountId,
         'ewayBillNumber' => $ewayBill,
         'ewayBillDetails' => $ewayDetails,
         'warehouseId' => $warehouseId,
@@ -2670,16 +2716,17 @@ function computeVendorSalesInvoiceTotalsPhp($items, $supplyType) {
     ];
 }
 
-function resolveEffectiveVendorInvoiceStatusPhp($rawStatus, $dueDate, $totalAmount, $paidAmount) {
+function resolveEffectiveVendorInvoiceStatusPhp($rawStatus, $dueDate, $totalAmount, $paidAmount, $returnedAmount = 0.0, $refundedAmount = 0.0) {
     $status = strtoupper(trim((string)($rawStatus ?: 'ISSUED')));
-    $balance = roundCurrencyPhp(max(0.0, floatval($totalAmount) - floatval($paidAmount)));
-    if ($status === 'DRAFT' && floatval($paidAmount) <= 0) {
+    $netPaid = roundCurrencyPhp(max(0.0, floatval($paidAmount) - floatval($refundedAmount)));
+    $balance = roundCurrencyPhp(max(0.0, floatval($totalAmount) - floatval($returnedAmount) - $netPaid));
+    if ($status === 'DRAFT' && floatval($paidAmount) <= 0 && floatval($returnedAmount) <= 0) {
         return 'DRAFT';
     }
     if (floatval($totalAmount) > 0 && $balance <= 0.01) {
         return 'PAID';
     }
-    if (floatval($paidAmount) > 0) {
+    if ($netPaid > 0.01) {
         return 'PARTIALLY_PAID';
     }
     if (!empty($dueDate)) {
@@ -2716,7 +2763,19 @@ function mapVendorSalesItemRowPhp($r) {
     ];
 }
 
-function mapVendorSalesPaymentRowPhp($r) {
+function getBankAccountNameMapPhp($pdo) {
+    $map = [];
+    try {
+        $rows = $pdo->query('SELECT `id`, `account_name` FROM `solar_acc_bank_accounts`')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($rows as $r) {
+            $map[(string)$r['id']] = (string)($r['account_name'] ?? '');
+        }
+    } catch (Exception $e) {}
+    return $map;
+}
+
+function mapVendorSalesPaymentRowPhp($r, $bankMap = []) {
+    $bankId = (string)($r['bank_account_id'] ?? '');
     return [
         'id' => $r['id'],
         'invoiceId' => $r['invoice_id'],
@@ -2724,6 +2783,9 @@ function mapVendorSalesPaymentRowPhp($r) {
         'paymentDate' => toSqlDateVendorPhp($r['payment_date']) ?: '',
         'amount' => roundCurrencyPhp($r['amount'] ?? 0),
         'paymentMode' => $r['payment_mode'] ?? 'Bank NEFT/RTGS',
+        'bankAccountId' => $bankId,
+        'bankAccountName' => $bankId !== '' ? ($bankMap[$bankId] ?? '') : '',
+        'journalEntryId' => $r['journal_entry_id'] ?? '',
         'referenceNo' => $r['reference_no'] ?? '',
         'notes' => $r['notes'] ?? '',
         'recordedBy' => $r['recorded_by'] ?? '',
@@ -2731,18 +2793,24 @@ function mapVendorSalesPaymentRowPhp($r) {
     ];
 }
 
-function mapVendorSalesInvoiceRowPhp($row, $items = [], $payments = []) {
+function mapVendorSalesInvoiceRowPhp($row, $items = [], $payments = [], $bankMap = []) {
     $invoiceDate = toSqlDateVendorPhp($row['invoice_date'] ?? null) ?: '';
     $dueDate = toSqlDateVendorPhp($row['due_date'] ?? null) ?: '';
     $totalAmount = roundCurrencyPhp($row['total_amount'] ?? 0);
     $paidAmount = roundCurrencyPhp($row['paid_amount'] ?? 0);
-    $balanceAmount = roundCurrencyPhp(max(0.0, $totalAmount - $paidAmount));
+    $returnedAmount = roundCurrencyPhp($row['returned_amount'] ?? 0);
+    $refundedAmount = roundCurrencyPhp($row['refunded_amount'] ?? 0);
+    $netPaid = roundCurrencyPhp(max(0.0, $paidAmount - $refundedAmount));
+    $balanceAmount = roundCurrencyPhp(max(0.0, $totalAmount - $returnedAmount - $netPaid));
     $status = resolveEffectiveVendorInvoiceStatusPhp(
         $row['status'] ?? 'ISSUED',
         $dueDate,
         $totalAmount,
-        $paidAmount
+        $paidAmount,
+        $returnedAmount,
+        $refundedAmount
     );
+    $bankAccountId = (string)($row['bank_account_id'] ?? '');
 
     return [
         'id' => $row['id'],
@@ -2773,7 +2841,11 @@ function mapVendorSalesInvoiceRowPhp($row, $items = [], $payments = []) {
         'taxAmount' => roundCurrencyPhp($row['tax_amount'] ?? 0),
         'totalAmount' => $totalAmount,
         'paidAmount' => $paidAmount,
+        'returnedAmount' => $returnedAmount,
+        'refundedAmount' => $refundedAmount,
         'balanceAmount' => $balanceAmount,
+        'bankAccountId' => $bankAccountId,
+        'bankAccountName' => $bankAccountId !== '' ? ($bankMap[$bankAccountId] ?? '') : '',
         'status' => $status,
         'payments' => $payments,
         'createdBy' => $row['created_by'] ?? '',
@@ -2814,6 +2886,8 @@ function getVendorSalesInvoicesPhp($pdo) {
     $payStmt = $pdo->query('SELECT * FROM `solar_vendor_sales_payments` ORDER BY `payment_date` DESC, `created_at` DESC');
     $paymentRows = $payStmt ? ($payStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
 
+    $bankMap = getBankAccountNameMapPhp($pdo);
+
     $itemsByInv = [];
     foreach ($itemRows as $r) {
         $k = (string)$r['invoice_id'];
@@ -2825,15 +2899,16 @@ function getVendorSalesInvoicesPhp($pdo) {
     foreach ($paymentRows as $r) {
         $k = (string)$r['invoice_id'];
         if (!isset($paymentsByInv[$k])) $paymentsByInv[$k] = [];
-        $paymentsByInv[$k][] = mapVendorSalesPaymentRowPhp($r);
+        $paymentsByInv[$k][] = mapVendorSalesPaymentRowPhp($r, $bankMap);
     }
 
-    return array_map(function ($row) use ($itemsByInv, $paymentsByInv) {
+    return array_map(function ($row) use ($itemsByInv, $paymentsByInv, $bankMap) {
         $id = (string)$row['id'];
         return mapVendorSalesInvoiceRowPhp(
             $row,
             $itemsByInv[$id] ?? [],
-            $paymentsByInv[$id] ?? []
+            $paymentsByInv[$id] ?? [],
+            $bankMap
         );
     }, $invoiceRows);
 }
@@ -2844,15 +2919,19 @@ function getVendorSalesInvoiceByIdPhp($pdo, $id) {
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) return null;
 
+    $bankMap = getBankAccountNameMapPhp($pdo);
+
     $itStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ? ORDER BY `line_order` ASC, `created_at` ASC');
     $itStmt->execute([$id]);
     $items = array_map('mapVendorSalesItemRowPhp', $itStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
 
     $payStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ? ORDER BY `payment_date` DESC, `created_at` DESC');
     $payStmt->execute([$id]);
-    $payments = array_map('mapVendorSalesPaymentRowPhp', $payStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    $payments = array_map(function ($r) use ($bankMap) {
+        return mapVendorSalesPaymentRowPhp($r, $bankMap);
+    }, $payStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
 
-    return mapVendorSalesInvoiceRowPhp($row, $items, $payments);
+    return mapVendorSalesInvoiceRowPhp($row, $items, $payments, $bankMap);
 }
 
 function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
@@ -3010,14 +3089,22 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
         $paidAmount = $existing
             ? $recordedPaymentsTotal
             : min($computed['totalAmount'], roundCurrencyPhp($item['paidAmount'] ?? 0));
-        $balanceAmount = roundCurrencyPhp(max(0.0, $computed['totalAmount'] - $paidAmount));
+        $returnedAmount = roundCurrencyPhp($existing['returned_amount'] ?? 0);
+        $refundedAmount = roundCurrencyPhp($existing['refunded_amount'] ?? 0);
+        $initialPayToRecord = (!$existing && $paidAmount > 0) ? $paidAmount : 0.0;
+        $storedPaid = $existing ? $paidAmount : 0.0;
+        $netPaid = roundCurrencyPhp(max(0.0, $storedPaid - $refundedAmount));
+        $balanceAmount = roundCurrencyPhp(max(0.0, $computed['totalAmount'] - $returnedAmount - $netPaid));
+        $bankAccountId = trim((string)($item['bankAccountId'] ?? ($existing['bank_account_id'] ?? '')));
 
         $requestedStatus = strtoupper(trim((string)($item['status'] ?? ($existing['status'] ?? 'ISSUED'))));
         $status = resolveEffectiveVendorInvoiceStatusPhp(
             $requestedStatus,
             $dueDate,
             $computed['totalAmount'],
-            $paidAmount
+            $storedPaid,
+            $returnedAmount,
+            $refundedAmount
         );
 
         $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? ($item['updatedBy'] ?? ($item['createdBy'] ?? 'Admin')))));
@@ -3030,8 +3117,8 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
               `vendor_address`, `vendor_city`, `vendor_state`, `vendor_contact_person`, `vendor_phone`, `vendor_email`,
               `company_state`, `supply_type`, `invoice_date`, `due_date`, `payment_terms`, `notes`,
               `gross_amount`, `discount_amount`, `subtotal`, `cgst_amount`, `sgst_amount`, `igst_amount`, `tax_amount`,
-              `total_amount`, `paid_amount`, `balance_amount`, `status`, `created_by`, `updated_by`
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `total_amount`, `paid_amount`, `returned_amount`, `refunded_amount`, `balance_amount`, `bank_account_id`, `status`, `created_by`, `updated_by`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
               `invoice_number` = VALUES(`invoice_number`),
               `vendor_id` = VALUES(`vendor_id`),
@@ -3059,7 +3146,10 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
               `tax_amount` = VALUES(`tax_amount`),
               `total_amount` = VALUES(`total_amount`),
               `paid_amount` = VALUES(`paid_amount`),
+              `returned_amount` = VALUES(`returned_amount`),
+              `refunded_amount` = VALUES(`refunded_amount`),
               `balance_amount` = VALUES(`balance_amount`),
+              `bank_account_id` = VALUES(`bank_account_id`),
               `status` = VALUES(`status`),
               `updated_by` = VALUES(`updated_by`)
         ")->execute([
@@ -3089,8 +3179,11 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
             $computed['igstAmount'],
             $computed['taxAmount'],
             $computed['totalAmount'],
-            $paidAmount,
+            $storedPaid,
+            $returnedAmount,
+            $refundedAmount,
             $balanceAmount,
+            $bankAccountId,
             $status,
             $createdBy,
             $actorName
@@ -3134,26 +3227,26 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
             ]);
         }
 
-        if (!$existing && $paidAmount > 0) {
-            $payId = 'vsip-' . round(microtime(true) * 1000) . '-' . mt_rand(100, 999);
-            $pdo->prepare("
-                INSERT INTO `solar_vendor_sales_payments` (
-                  `id`, `invoice_id`, `vendor_id`, `payment_date`, `amount`, `payment_mode`, `reference_no`, `notes`, `recorded_by`
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ")->execute([
-                $payId,
-                $id,
-                $vendorId,
-                $invoiceDate,
-                $paidAmount,
-                'Bank NEFT/RTGS',
-                '',
-                'Initial payment recorded on invoice creation',
-                $actorName
-            ]);
+        $pdo->commit();
+
+        require_once __DIR__ . '/accounting.php';
+        if ($status !== 'DRAFT') {
+            try {
+                accEnsureVendorSalesInvoiceJournalPhp($pdo, $id, $actor);
+            } catch (Exception $e) {}
         }
 
-        $pdo->commit();
+        if ($initialPayToRecord > 0) {
+            $effectiveBankId = $bankAccountId !== '' ? $bankAccountId : 'bank-main-current';
+            accRecordVendorSalesInvoicePaymentPhp($pdo, $id, [
+                'amount' => $initialPayToRecord,
+                'paymentDate' => $invoiceDate,
+                'paymentMode' => $item['paymentMode'] ?? 'Bank NEFT/RTGS',
+                'bankAccountId' => $effectiveBankId,
+                'notes' => 'Initial payment recorded on invoice creation'
+            ], $actor);
+        }
+
         return getVendorSalesInvoiceByIdPhp($pdo, $id);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) {
@@ -3164,63 +3257,13 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
 }
 
 function recordVendorSalesPaymentPhp($pdo, $invoiceId, $payment, $actor = null) {
-    $pdo->beginTransaction();
-    try {
-        $stmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE');
-        $stmt->execute([$invoiceId]);
-        $inv = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$inv) {
-            throw new Exception('Vendor sales invoice not found.', 404);
-        }
-
-        if (strtoupper(trim((string)($inv['status'] ?? ''))) === 'DRAFT') {
-            throw new Exception('Cannot record payment against a DRAFT invoice. Issue the invoice first.', 400);
-        }
-
-        $totalAmount = roundCurrencyPhp($inv['total_amount'] ?? 0);
-        $currentPaid = roundCurrencyPhp($inv['paid_amount'] ?? 0);
-        $remaining = roundCurrencyPhp(max(0.0, $totalAmount - $currentPaid));
-        $amount = roundCurrencyPhp($payment['amount'] ?? 0);
-
-        if (!is_finite($amount) || $amount <= 0) {
-            throw new Exception('Payment amount must be greater than zero.', 400);
-        }
-        if ($amount > $remaining + 0.01) {
-            throw new Exception("Payment amount (₹{$amount}) exceeds remaining balance due (₹{$remaining}).", 400);
-        }
-
-        $paymentId = 'vsip-' . round(microtime(true) * 1000) . '-' . mt_rand(100, 999);
-        $paymentDate = toSqlDateVendorPhp($payment['paymentDate'] ?? null) ?: date('Y-m-d');
-        $paymentMode = trim((string)($payment['paymentMode'] ?? 'Bank NEFT/RTGS')) ?: 'Bank NEFT/RTGS';
-        $referenceNo = trim((string)($payment['referenceNo'] ?? ''));
-        $notes = trim((string)($payment['notes'] ?? ''));
-        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
-
-        $pdo->prepare("
-            INSERT INTO `solar_vendor_sales_payments` (
-              `id`, `invoice_id`, `vendor_id`, `payment_date`, `amount`, `payment_mode`, `reference_no`, `notes`, `recorded_by`
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ")->execute([$paymentId, $invoiceId, $inv['vendor_id'], $paymentDate, $amount, $paymentMode, $referenceNo, $notes, $actorName]);
-
-        $newPaid = roundCurrencyPhp($currentPaid + $amount);
-        $newBalance = roundCurrencyPhp(max(0.0, $totalAmount - $newPaid));
-        $dueDate = toSqlDateVendorPhp($inv['due_date'] ?? null) ?: '';
-        $nextStatus = resolveEffectiveVendorInvoiceStatusPhp('ISSUED', $dueDate, $totalAmount, $newPaid);
-
-        $pdo->prepare('UPDATE `solar_vendor_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ?, `updated_by` = ? WHERE `id` = ?')
-            ->execute([$newPaid, $newBalance, $nextStatus, $actorName, $invoiceId]);
-
-        $pdo->commit();
-        return getVendorSalesInvoiceByIdPhp($pdo, $invoiceId);
-    } catch (Exception $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-        throw $e;
-    }
+    require_once __DIR__ . '/accounting.php';
+    accRecordVendorSalesInvoicePaymentPhp($pdo, $invoiceId, $payment, $actor);
+    return getVendorSalesInvoiceByIdPhp($pdo, $invoiceId);
 }
 
 function deleteVendorSalesInvoicePhp($pdo, $id) {
+    require_once __DIR__ . '/accounting.php';
     $pdo->beginTransaction();
     try {
         $chk = $pdo->prepare('SELECT `id` FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1');
@@ -3228,6 +3271,32 @@ function deleteVendorSalesInvoicePhp($pdo, $id) {
         if (!$chk->fetch(PDO::FETCH_ASSOC)) {
             throw new Exception('Vendor sales invoice not found.', 404);
         }
+
+        try {
+            $srChk = $pdo->prepare("SELECT COUNT(*) AS cnt FROM `solar_sales_returns` WHERE `target_type` = 'VENDOR_INVOICE' AND `invoice_id` = ?");
+            $srChk->execute([$id]);
+            if (intval($srChk->fetchColumn() ?: 0) > 0) {
+                throw new Exception('Cannot delete vendor sales invoice with Sales Returns recorded. Delete the Sales Returns first.', 400);
+            }
+        } catch (Exception $e) {
+            if ($e->getCode() === 400) throw $e;
+        }
+
+        $payStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?');
+        $payStmt->execute([$id]);
+        foreach ($payStmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $vp) {
+            if (!empty($vp['bank_account_id']) && floatval($vp['amount'] ?? 0) > 0) {
+                $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')
+                    ->execute([roundCurrencyPhp($vp['amount']), $vp['bank_account_id']]);
+            }
+            if (!empty($vp['journal_entry_id'])) {
+                $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$vp['journal_entry_id']]);
+            }
+        }
+
+        $pdo->prepare("DELETE FROM `solar_acc_journal_entries` WHERE `reference_type` = 'VENDOR_SALES_INVOICE' AND `reference_id` = ?")->execute([$id]);
+        accRecalcBalancesPhp($pdo);
+
         $pdo->prepare('DELETE FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM `solar_vendor_sales_invoices` WHERE `id` = ?')->execute([$id]);
@@ -4662,7 +4731,7 @@ function saveItemToDb($pdo, $collection, $item, $actor = null) {
         case 'vendors': return saveVendorToDb($pdo, $item);
         case 'purchase_orders': return savePurchaseOrderToDb($pdo, $item);
         case 'boms': return saveBOMToDb($pdo, $item);
-        case 'sales_invoices': return saveSalesInvoiceToDb($pdo, $item);
+        case 'sales_invoices': return saveSalesInvoiceToDb($pdo, $item, $actor);
         case 'vendor_sales_invoices':
         case 'solar_vendor_sales_invoices':
             return saveVendorSalesInvoicePhp($pdo, $item, $actor);
@@ -4691,6 +4760,60 @@ function deleteItemFromDb($pdo, $collection, $id, $actor = null) {
     if (empty($id)) return false;
     if ($collection === 'vendor_sales_invoices' || $collection === 'solar_vendor_sales_invoices') {
         return deleteVendorSalesInvoicePhp($pdo, $id);
+    }
+    if ($collection === 'purchase_orders') {
+        try {
+            $prChk = $pdo->prepare('SELECT COUNT(*) AS cnt FROM `solar_purchase_returns` WHERE `purchase_order_id` = ?');
+            $prChk->execute([$id]);
+            if (intval($prChk->fetchColumn() ?: 0) > 0) {
+                throw new Exception('Cannot delete Purchase Order with Purchase Returns recorded. Reverse/delete the Purchase Returns first.', 400);
+            }
+        } catch (Exception $e) {
+            if ($e->getCode() === 400) throw $e;
+        }
+        try {
+            $vbStmt = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `po_id` = ? LIMIT 1');
+            $vbStmt->execute([$id]);
+            $vb = $vbStmt->fetch(PDO::FETCH_ASSOC);
+            if ($vb) {
+                if (floatval($vb['paid_amount'] ?? 0) > 0) {
+                    throw new Exception('Cannot delete Purchase Order with vendor payments recorded. Reverse vendor payments first.', 400);
+                }
+                if (!empty($vb['journal_entry_id'])) {
+                    $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$vb['journal_entry_id']]);
+                }
+                $pdo->prepare('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?')->execute([$vb['id']]);
+            }
+        } catch (Exception $e) {
+            if ($e->getCode() === 400) throw $e;
+        }
+        $pdo->prepare('DELETE FROM `solar_purchase_orders` WHERE `id` = ?')->execute([$id]);
+        return true;
+    }
+    if ($collection === 'sales_invoices') {
+        try {
+            $srChk = $pdo->prepare("SELECT COUNT(*) AS cnt FROM `solar_sales_returns` WHERE `target_type` = 'CUSTOMER_INVOICE' AND `invoice_id` = ?");
+            $srChk->execute([$id]);
+            if (intval($srChk->fetchColumn() ?: 0) > 0) {
+                throw new Exception('Cannot delete invoice with Sales Returns recorded. Delete the Sales Returns first.', 400);
+            }
+        } catch (Exception $e) {
+            if ($e->getCode() === 400) throw $e;
+        }
+        try {
+            $payChk = $pdo->prepare('SELECT COUNT(*) AS cnt FROM `solar_payments` WHERE `invoice_id` = ?');
+            $payChk->execute([$id]);
+            if (intval($payChk->fetchColumn() ?: 0) > 0) {
+                throw new Exception('Cannot delete invoice with Customer Receipts recorded. Delete the receipts first.', 400);
+            }
+        } catch (Exception $e) {
+            if ($e->getCode() === 400) throw $e;
+        }
+        try {
+            $pdo->prepare("DELETE FROM `solar_acc_journal_entries` WHERE `reference_type` = 'SALES_INVOICE' AND `reference_id` = ?")->execute([$id]);
+        } catch (Exception $e) {}
+        $pdo->prepare('DELETE FROM `solar_sales_invoices` WHERE `id` = ?')->execute([$id]);
+        return true;
     }
     $tableMap = [
         'customers' => 'solar_customers',
@@ -8374,11 +8497,21 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
     } catch (Exception $e) { $bootstrapErrors[] = 'vendors: ' . $e->getMessage(); }
 
     // 10. Purchase Orders
+    $bankNameMapBoot = getBankAccountNameMapPhp($pdo);
     try {
         $stmt = $pdo->query('SELECT * FROM `solar_purchase_orders` ORDER BY `created_at` DESC');
         $rows = $stmt->fetchAll();
-        $data['purchase_orders'] = array_map(function ($r) {
+        $data['purchase_orders'] = array_map(function ($r) use ($bankNameMapBoot) {
             $receipts = json_decode($r['receipts_json'] ?? '[]', true) ?: [];
+            $total = floatval($r['total_amount'] ?? 0);
+            $paid = floatval($r['paid_amount'] ?? 0);
+            $returned = floatval($r['returned_amount'] ?? 0);
+            $refunded = floatval($r['refunded_amount'] ?? 0);
+            $netPaid = round(max(0.0, $paid - $refunded), 2);
+            $bal = isset($r['balance_amount']) && $r['balance_amount'] !== null && ($paid > 0 || $returned > 0 || floatval($r['balance_amount']) > 0)
+                ? round(max(0.0, floatval($r['balance_amount'])), 2)
+                : round(max(0.0, $total - $returned - $netPaid), 2);
+            $bankId = (string)($r['bank_account_id'] ?? '');
             return [
                 'id' => $r['id'],
                 'purchaseNumber' => $r['po_number'],
@@ -8400,8 +8533,14 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'subtotal' => floatval($r['subtotal'] ?? 0),
                 'gstAmount' => floatval($r['gst_amount'] ?? 0),
                 'taxAmount' => floatval($r['gst_amount'] ?? 0),
-                'totalAmount' => floatval($r['total_amount'] ?? 0),
-                'grandTotal' => floatval($r['total_amount'] ?? 0),
+                'totalAmount' => $total,
+                'grandTotal' => $total,
+                'paidAmount' => $paid,
+                'returnedAmount' => $returned,
+                'refundedAmount' => $refunded,
+                'balanceAmount' => $bal,
+                'bankAccountId' => $bankId,
+                'bankAccountName' => $bankId !== '' ? ($bankNameMapBoot[$bankId] ?? '') : '',
                 'status' => $r['status'] ?? 'ISSUED',
                 'paymentStatus' => $r['payment_status'] ?? 'PENDING',
                 'items' => json_decode($r['items_json'] ?? '[]', true) ?: [],
@@ -8454,12 +8593,15 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
     try {
         $stmt = $pdo->query('SELECT * FROM `solar_sales_invoices` ORDER BY `created_at` DESC');
         $rows = $stmt->fetchAll();
-        $data['sales_invoices'] = array_map(function ($r) {
+        $data['sales_invoices'] = array_map(function ($r) use ($bankNameMapBoot) {
             $status = $r['payment_status'] ?? 'ISSUED';
             $gst = floatval($r['gst_amount'] ?? 0);
             $total = floatval($r['total_amount'] ?? 0);
             $paid = floatval($r['paid_amount'] ?? 0);
+            $returned = floatval($r['returned_amount'] ?? 0);
+            $refunded = floatval($r['refunded_amount'] ?? 0);
             $bal = floatval($r['balance_amount'] ?? 0);
+            $bankId = (string)($r['bank_account_id'] ?? '');
             return [
                 'id' => $r['id'],
                 'invoiceNumber' => $r['invoice_number'],
@@ -8483,8 +8625,12 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'paymentStatus' => $status,
                 'paidAmount' => $paid,
                 'amountPaid' => $paid,
+                'returnedAmount' => $returned,
+                'refundedAmount' => $refunded,
                 'balanceAmount' => $bal,
                 'balanceDue' => $bal,
+                'bankAccountId' => $bankId,
+                'bankAccountName' => $bankId !== '' ? ($bankNameMapBoot[$bankId] ?? '') : '',
                 'ewayBillNumber' => $r['eway_bill_number'] ?? '',
                 'ewayBillDetails' => json_decode($r['eway_bill_details_json'] ?? 'null', true),
                 'cgstAmount' => floatval($r['cgst_amount'] ?? 0),
@@ -8908,7 +9054,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
         }, $rows ?: []);
     } catch (Exception $e) { $bootstrapErrors[] = 'acl_audit_logs: ' . $e->getMessage(); }
 
-    // 28. Vendor Sales Invoices (Admin / Super Admin Only)
+    // 28. Vendor Sales Invoices (Admin / Super Admin Only) + Sales/Purchase Returns
     try {
         $bootUser = getAuthenticatedUserPhp($pdo);
         $bootRole = strtoupper(trim((string)($bootUser['role'] ?? '')));
@@ -8917,9 +9063,19 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
         } else {
             $data['vendor_sales_invoices'] = [];
         }
+        if ($bootUser && !isCustomerUserPhp($bootUser)) {
+            require_once __DIR__ . '/accounting.php';
+            $data['sales_returns'] = accGetSalesReturnsPhp($pdo);
+            $data['purchase_returns'] = accGetPurchaseReturnsPhp($pdo);
+        } else {
+            $data['sales_returns'] = [];
+            $data['purchase_returns'] = [];
+        }
     } catch (Exception $e) {
-        $data['vendor_sales_invoices'] = [];
-        error_log('Notice hydrating vendor_sales_invoices in bootstrap: ' . $e->getMessage());
+        if (!isset($data['vendor_sales_invoices'])) $data['vendor_sales_invoices'] = [];
+        if (!isset($data['sales_returns'])) $data['sales_returns'] = [];
+        if (!isset($data['purchase_returns'])) $data['purchase_returns'] = [];
+        error_log('Notice hydrating vendor_sales_invoices / returns in bootstrap: ' . $e->getMessage());
     }
 
     if (!empty($bootstrapErrors)) {
@@ -11785,20 +11941,160 @@ if (preg_match('#^/boms/([^/]+)/?$#', $cleanPath, $matches)) {
     }
 }
 
+// GET|POST /api/purchase-orders
+if (in_array($cleanPath, ['/purchase-orders', '/purchase-orders/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+
+    if ($method === 'GET') {
+        $bankMap = getBankAccountNameMapPhp($pdo);
+        $stmt = $pdo->query('SELECT * FROM `solar_purchase_orders` ORDER BY `created_at` DESC');
+        $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $items = array_map(function ($r) use ($bankMap) {
+            $receipts = json_decode($r['receipts_json'] ?? '[]', true) ?: [];
+            $total = floatval($r['total_amount'] ?? 0);
+            $paid = floatval($r['paid_amount'] ?? 0);
+            $returned = floatval($r['returned_amount'] ?? 0);
+            $refunded = floatval($r['refunded_amount'] ?? 0);
+            $netPaid = round(max(0.0, $paid - $refunded), 2);
+            $bal = isset($r['balance_amount']) && $r['balance_amount'] !== null && ($paid > 0 || $returned > 0 || floatval($r['balance_amount']) > 0)
+                ? round(max(0.0, floatval($r['balance_amount'])), 2)
+                : round(max(0.0, $total - $returned - $netPaid), 2);
+            $bankId = (string)($r['bank_account_id'] ?? '');
+            return [
+                'id' => $r['id'],
+                'purchaseNumber' => $r['po_number'],
+                'poNumber' => $r['po_number'],
+                'vendorId' => $r['vendor_id'],
+                'vendorName' => $r['vendor_name'],
+                'projectId' => $r['project_id'] ?? '',
+                'projectTitle' => $r['project_title'] ?? '',
+                'warehouseId' => $r['warehouse_id'] ?? '',
+                'warehouseName' => $r['warehouse_name'] ?? '',
+                'purchaseDate' => $r['po_date'],
+                'orderDate' => $r['po_date'],
+                'poDate' => $r['po_date'],
+                'expectedDeliveryDate' => $r['expected_delivery_date'] ?? '',
+                'paymentDueDate' => $r['payment_due_date'] ?? null,
+                'invoiceReference' => $r['invoice_reference'] ?? '',
+                'stockUpdated' => (bool)($r['stock_updated'] ?? 0),
+                'receivedDate' => $r['received_date'] ?? null,
+                'subtotal' => floatval($r['subtotal'] ?? 0),
+                'gstAmount' => floatval($r['gst_amount'] ?? 0),
+                'taxAmount' => floatval($r['gst_amount'] ?? 0),
+                'totalAmount' => $total,
+                'grandTotal' => $total,
+                'paidAmount' => $paid,
+                'returnedAmount' => $returned,
+                'refundedAmount' => $refunded,
+                'balanceAmount' => $bal,
+                'bankAccountId' => $bankId,
+                'bankAccountName' => $bankId !== '' ? ($bankMap[$bankId] ?? '') : '',
+                'status' => $r['status'] ?? 'ISSUED',
+                'paymentStatus' => $r['payment_status'] ?? 'PENDING',
+                'items' => json_decode($r['items_json'] ?? '[]', true) ?: [],
+                'deliveryReceipts' => $receipts,
+                'receipts' => $receipts,
+                'notes' => $r['notes'] ?? '',
+                'createdAt' => $r['created_at'],
+                'updatedAt' => $r['updated_at'] ?? $r['created_at']
+            ];
+        }, $rows);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $actor = requireAuthUserPhp($pdo);
+        if (isCustomerUserPhp($actor)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot manage purchase orders.']);
+            exit;
+        }
+        $saved = savePurchaseOrderToDb($pdo, $body);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// POST /api/purchase-orders/{id}/payments
+if ($method === 'POST' && preg_match('#^/purchase-orders/([^/]+)/payments/?$#', $cleanPath, $matches)) {
+    $poId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot record vendor payments.']);
+        exit;
+    }
+    require_once __DIR__ . '/accounting.php';
+    try {
+        $resData = accRecordPurchaseOrderPaymentPhp($pdo, $poId, $body, $actor);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $resData]);
+        exit;
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// PUT|POST|DELETE /api/purchase-orders/{id}
+if (preg_match('#^/purchase-orders/([^/]+)/?$#', $cleanPath, $matches)) {
+    $poId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot manage purchase orders.']);
+        exit;
+    }
+    if ($method === 'PUT' || $method === 'POST') {
+        $body['id'] = $poId;
+        $saved = savePurchaseOrderToDb($pdo, $body);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+    if ($method === 'DELETE') {
+        try {
+            deleteItemFromDb($pdo, 'purchase_orders', $poId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Purchase order deleted from MySQL.']);
+            exit;
+        } catch (Exception $e) {
+            $code = intval($e->getCode());
+            http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+            echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
+            exit;
+        }
+    }
+}
+
 // GET|POST /api/sales-invoices
 if (in_array($cleanPath, ['/sales-invoices', '/sales-invoices/'], true)) {
     $pdo = getDbConnection($dbConfig);
     ensureRequiredTables($pdo);
 
     if ($method === 'GET') {
+        $bankMap = getBankAccountNameMapPhp($pdo);
         $stmt = $pdo->query('SELECT * FROM `solar_sales_invoices` ORDER BY `created_at` DESC');
         $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
-        $items = array_map(function ($r) {
+        $items = array_map(function ($r) use ($bankMap) {
             $status = $r['payment_status'] ?? 'ISSUED';
             $gst = floatval($r['gst_amount'] ?? 0);
             $total = floatval($r['total_amount'] ?? 0);
             $paid = floatval($r['paid_amount'] ?? 0);
+            $returned = floatval($r['returned_amount'] ?? 0);
+            $refunded = floatval($r['refunded_amount'] ?? 0);
             $bal = floatval($r['balance_amount'] ?? 0);
+            $bankId = (string)($r['bank_account_id'] ?? '');
             return [
                 'id' => $r['id'],
                 'invoiceNumber' => $r['invoice_number'],
@@ -11822,8 +12118,12 @@ if (in_array($cleanPath, ['/sales-invoices', '/sales-invoices/'], true)) {
                 'paymentStatus' => $status,
                 'paidAmount' => $paid,
                 'amountPaid' => $paid,
+                'returnedAmount' => $returned,
+                'refundedAmount' => $refunded,
                 'balanceAmount' => $bal,
                 'balanceDue' => $bal,
+                'bankAccountId' => $bankId,
+                'bankAccountName' => $bankId !== '' ? ($bankMap[$bankId] ?? '') : '',
                 'ewayBillNumber' => $r['eway_bill_number'] ?? '',
                 'ewayBillDetails' => json_decode($r['eway_bill_details_json'] ?? 'null', true),
                 'cgstAmount' => floatval($r['cgst_amount'] ?? 0),
@@ -11853,9 +12153,34 @@ if (in_array($cleanPath, ['/sales-invoices', '/sales-invoices/'], true)) {
             echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to sales invoices.']);
             exit;
         }
-        $saved = saveSalesInvoiceToDb($pdo, $body);
+        $saved = saveSalesInvoiceToDb($pdo, $body, $actor);
         http_response_code(201);
         echo json_encode(['success' => true, 'data' => $saved]);
+        exit;
+    }
+}
+
+// POST /api/sales-invoices/{id}/payments
+if ($method === 'POST' && preg_match('#^/sales-invoices/([^/]+)/payments/?$#', $cleanPath, $matches)) {
+    $invId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot record payments.']);
+        exit;
+    }
+    require_once __DIR__ . '/accounting.php';
+    try {
+        $resData = accRecordSalesInvoicePaymentPhp($pdo, $invId, $body, $actor);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'data' => $resData]);
+        exit;
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
         exit;
     }
 }
@@ -11873,15 +12198,136 @@ if (preg_match('#^/sales-invoices/([^/]+)/?$#', $cleanPath, $matches)) {
     }
     if ($method === 'PUT' || $method === 'POST') {
         $body['id'] = $invId;
-        $saved = saveSalesInvoiceToDb($pdo, $body);
+        $saved = saveSalesInvoiceToDb($pdo, $body, $actor);
         http_response_code(200);
         echo json_encode(['success' => true, 'data' => $saved]);
         exit;
     }
     if ($method === 'DELETE') {
-        deleteItemFromDb($pdo, 'sales_invoices', $invId, $actor);
+        try {
+            deleteItemFromDb($pdo, 'sales_invoices', $invId, $actor);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => 'Sales invoice deleted from MySQL.']);
+            exit;
+        } catch (Exception $e) {
+            $code = intval($e->getCode());
+            http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+            echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
+            exit;
+        }
+    }
+}
+
+// GET|POST /api/sales-returns
+if (in_array($cleanPath, ['/sales-returns', '/sales-returns/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot manage sales returns.']);
+        exit;
+    }
+    require_once __DIR__ . '/accounting.php';
+    try {
+        if ($method === 'GET') {
+            $items = accGetSalesReturnsPhp($pdo);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+            exit;
+        }
+        if ($method === 'POST') {
+            $result = accCreateSalesReturnPhp($pdo, $body, $actor);
+            http_response_code(201);
+            echo json_encode(['success' => true, 'data' => $result]);
+            exit;
+        }
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// DELETE /api/sales-returns/{id}
+if ($method === 'DELETE' && preg_match('#^/sales-returns/([^/]+)/?$#', $cleanPath, $matches)) {
+    $srId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot delete sales returns.']);
+        exit;
+    }
+    require_once __DIR__ . '/accounting.php';
+    try {
+        accDeleteSalesReturnPhp($pdo, $srId, $actor);
         http_response_code(200);
-        echo json_encode(['success' => true, 'message' => 'Sales invoice deleted from MySQL.']);
+        echo json_encode(['success' => true, 'message' => 'Sales return reversed and deleted from MySQL.']);
+        exit;
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// GET|POST /api/purchase-returns
+if (in_array($cleanPath, ['/purchase-returns', '/purchase-returns/'], true)) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot manage purchase returns.']);
+        exit;
+    }
+    require_once __DIR__ . '/accounting.php';
+    try {
+        if ($method === 'GET') {
+            $items = accGetPurchaseReturnsPhp($pdo);
+            http_response_code(200);
+            echo json_encode(['success' => true, 'count' => count($items), 'data' => $items]);
+            exit;
+        }
+        if ($method === 'POST') {
+            $result = accCreatePurchaseReturnPhp($pdo, $body, $actor);
+            http_response_code(201);
+            echo json_encode(['success' => true, 'data' => $result]);
+            exit;
+        }
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// DELETE /api/purchase-returns/{id}
+if ($method === 'DELETE' && preg_match('#^/purchase-returns/([^/]+)/?$#', $cleanPath, $matches)) {
+    $prId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot delete purchase returns.']);
+        exit;
+    }
+    require_once __DIR__ . '/accounting.php';
+    try {
+        accDeletePurchaseReturnPhp($pdo, $prId, $actor);
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Purchase return reversed and deleted from MySQL.']);
+        exit;
+    } catch (Exception $e) {
+        $code = intval($e->getCode());
+        http_response_code(($code >= 400 && $code < 600) ? $code : 400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
         exit;
     }
 }

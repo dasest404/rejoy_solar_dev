@@ -43,8 +43,10 @@ export type AppView =
   | 'sales_bom'
   | 'sales_invoices'
   | 'vendor_sales_invoices'
+  | 'sales_returns'
   | 'purchase_vendors'
   | 'purchase_orders'
+  | 'purchase_returns'
   | 'inventory_products'
   | 'inventory_stock'
   | 'warehouse_management'
@@ -278,11 +280,17 @@ const getInitialViewFromPath = (): {
   if (path === '/vendor-sales-invoices' || path.endsWith('/vendor-sales-invoices')) {
     return { view: 'vendor_sales_invoices', filterKey: null };
   }
+  if (path === '/sales-returns' || path.endsWith('/sales-returns')) {
+    return { view: 'sales_returns', filterKey: null };
+  }
   if (path === '/vendors' || path.endsWith('/vendors')) {
     return { view: 'purchase_vendors', filterKey: null };
   }
   if (path === '/purchase-orders' || path.endsWith('/purchase-orders')) {
     return { view: 'purchase_orders', filterKey: null };
+  }
+  if (path === '/purchase-returns' || path.endsWith('/purchase-returns')) {
+    return { view: 'purchase_returns', filterKey: null };
   }
   if (path === '/products' || path.endsWith('/products')) {
     return { view: 'inventory_products', filterKey: null };
@@ -379,11 +387,17 @@ const getPathForView = (
     case 'vendor_sales_invoices':
       route = '/vendor-sales-invoices';
       break;
+    case 'sales_returns':
+      route = '/sales-returns';
+      break;
     case 'purchase_vendors':
       route = '/vendors';
       break;
     case 'purchase_orders':
       route = '/purchase-orders';
+      break;
+    case 'purchase_returns':
+      route = '/purchase-returns';
       break;
     case 'inventory_products':
       route = '/products';

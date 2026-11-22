@@ -142,6 +142,8 @@ export interface VendorBill {
   tdsAmount: number;
   totalAmount: number;
   paidAmount: number;
+  returnedAmount?: number;
+  refundedAmount?: number;
   balanceAmount: number;
   itcEligible: boolean;
   status: VendorBillStatus;

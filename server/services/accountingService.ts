@@ -426,7 +426,151 @@ class AccountingService {
     await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'einvoice_ack_no', "VARCHAR(64) DEFAULT ''");
     await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'einvoice_ack_date', "VARCHAR(64) DEFAULT ''");
     await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'einvoice_status', "VARCHAR(32) DEFAULT 'NOT_GENERATED'");
+    await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'returned_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'refunded_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    await this.addColumnIfMissing(pool, 'solar_vendor_sales_invoices', 'returned_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_vendor_sales_invoices', 'refunded_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_vendor_sales_invoices', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    await this.addColumnIfMissing(pool, 'solar_vendor_sales_payments', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+    await this.addColumnIfMissing(pool, 'solar_vendor_sales_payments', 'journal_entry_id', "VARCHAR(64) DEFAULT ''");
+
+    await this.addColumnIfMissing(pool, 'solar_purchase_orders', 'paid_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_purchase_orders', 'returned_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_purchase_orders', 'refunded_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_purchase_orders', 'balance_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_purchase_orders', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    await this.addColumnIfMissing(pool, 'solar_acc_vendor_bills', 'returned_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+    await this.addColumnIfMissing(pool, 'solar_acc_vendor_bills', 'refunded_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+
     await this.addColumnIfMissing(pool, 'solar_acc_fixed_assets', 'payment_bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`solar_sales_returns\` (
+        \`id\` VARCHAR(64) PRIMARY KEY,
+        \`return_number\` VARCHAR(64) NOT NULL UNIQUE,
+        \`return_date\` DATE NOT NULL,
+        \`target_type\` VARCHAR(32) NOT NULL DEFAULT 'CUSTOMER_INVOICE',
+        \`invoice_id\` VARCHAR(64) NOT NULL,
+        \`invoice_number\` VARCHAR(64) DEFAULT '',
+        \`party_id\` VARCHAR(64) DEFAULT '',
+        \`party_name\` VARCHAR(255) NOT NULL,
+        \`project_id\` VARCHAR(64) DEFAULT '',
+        \`project_title\` VARCHAR(255) DEFAULT '',
+        \`reason\` VARCHAR(500) DEFAULT '',
+        \`notes\` TEXT,
+        \`warehouse_id\` VARCHAR(64) DEFAULT '',
+        \`warehouse_name\` VARCHAR(255) DEFAULT '',
+        \`restock_inventory\` TINYINT(1) NOT NULL DEFAULT 1,
+        \`subtotal\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`cgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`sgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`igst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`settlement_mode\` VARCHAR(32) NOT NULL DEFAULT 'CREDIT_NOTE',
+        \`refund_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`bank_account_id\` VARCHAR(64) DEFAULT '',
+        \`bank_account_name\` VARCHAR(255) DEFAULT '',
+        \`credit_journal_entry_id\` VARCHAR(64) DEFAULT '',
+        \`refund_journal_entry_id\` VARCHAR(64) DEFAULT '',
+        \`status\` VARCHAR(32) NOT NULL DEFAULT 'POSTED',
+        \`created_by\` VARCHAR(255) DEFAULT '',
+        \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX \`idx_sr_invoice\` (\`target_type\`, \`invoice_id\`),
+        INDEX \`idx_sr_date\` (\`return_date\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`solar_sales_return_items\` (
+        \`id\` VARCHAR(64) PRIMARY KEY,
+        \`return_id\` VARCHAR(64) NOT NULL,
+        \`line_order\` INT NOT NULL DEFAULT 0,
+        \`product_id\` VARCHAR(64) DEFAULT NULL,
+        \`description\` VARCHAR(500) NOT NULL,
+        \`hsn_code\` VARCHAR(32) DEFAULT '',
+        \`unit\` VARCHAR(32) NOT NULL DEFAULT 'Nos',
+        \`original_quantity\` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        \`quantity\` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        \`rate\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`taxable_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`gst_rate\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+        \`cgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`sgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`igst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        INDEX \`idx_sri_return\` (\`return_id\`),
+        CONSTRAINT \`fk_sri_return\` FOREIGN KEY (\`return_id\`) REFERENCES \`solar_sales_returns\` (\`id\`) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`solar_purchase_returns\` (
+        \`id\` VARCHAR(64) PRIMARY KEY,
+        \`return_number\` VARCHAR(64) NOT NULL UNIQUE,
+        \`return_date\` DATE NOT NULL,
+        \`purchase_order_id\` VARCHAR(64) NOT NULL,
+        \`po_number\` VARCHAR(64) DEFAULT '',
+        \`vendor_bill_id\` VARCHAR(64) DEFAULT '',
+        \`vendor_id\` VARCHAR(64) DEFAULT '',
+        \`vendor_name\` VARCHAR(255) NOT NULL,
+        \`project_id\` VARCHAR(64) DEFAULT '',
+        \`project_title\` VARCHAR(255) DEFAULT '',
+        \`reason\` VARCHAR(500) DEFAULT '',
+        \`notes\` TEXT,
+        \`warehouse_id\` VARCHAR(64) DEFAULT '',
+        \`warehouse_name\` VARCHAR(255) DEFAULT '',
+        \`deduct_inventory\` TINYINT(1) NOT NULL DEFAULT 1,
+        \`subtotal\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`cgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`sgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`igst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`settlement_mode\` VARCHAR(32) NOT NULL DEFAULT 'DEBIT_NOTE',
+        \`refund_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`bank_account_id\` VARCHAR(64) DEFAULT '',
+        \`bank_account_name\` VARCHAR(255) DEFAULT '',
+        \`debit_journal_entry_id\` VARCHAR(64) DEFAULT '',
+        \`refund_journal_entry_id\` VARCHAR(64) DEFAULT '',
+        \`status\` VARCHAR(32) NOT NULL DEFAULT 'POSTED',
+        \`created_by\` VARCHAR(255) DEFAULT '',
+        \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX \`idx_pr_po\` (\`purchase_order_id\`),
+        INDEX \`idx_pr_date\` (\`return_date\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`solar_purchase_return_items\` (
+        \`id\` VARCHAR(64) PRIMARY KEY,
+        \`return_id\` VARCHAR(64) NOT NULL,
+        \`line_order\` INT NOT NULL DEFAULT 0,
+        \`product_id\` VARCHAR(64) DEFAULT NULL,
+        \`description\` VARCHAR(500) NOT NULL,
+        \`hsn_code\` VARCHAR(32) DEFAULT '',
+        \`unit\` VARCHAR(32) NOT NULL DEFAULT 'Nos',
+        \`original_quantity\` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        \`quantity\` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        \`rate\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`taxable_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`gst_rate\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+        \`cgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`sgst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`igst_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        INDEX \`idx_pri_return\` (\`return_id\`),
+        CONSTRAINT \`fk_pri_return\` FOREIGN KEY (\`return_id\`) REFERENCES \`solar_purchase_returns\` (\`id\`) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
 
     // Seed default Chart of Accounts if empty
     const [accCountRows]: any = await pool.query('SELECT COUNT(*) AS cnt FROM `solar_acc_accounts`');
@@ -858,6 +1002,8 @@ class AccountingService {
           tdsAmount: Number(vb.tds_amount) || 0,
           totalAmount: Number(vb.total_amount) || 0,
           paidAmount: Number(vb.paid_amount) || 0,
+          returnedAmount: Number(vb.returned_amount) || 0,
+          refundedAmount: Number(vb.refunded_amount) || 0,
           balanceAmount: Number(vb.balance_amount) || 0,
           itcEligible: vb.itc_eligible !== 0,
           status: vb.status || 'OPEN',
@@ -1298,8 +1444,11 @@ class AccountingService {
             if (oldInv) {
               const revPaid = round2(Math.max(0, Number(oldInv.paid_amount || 0) - oldAmount));
               const total = round2(Number(oldInv.total_amount || 0));
-              const revBal = round2(Math.max(0, total - revPaid));
-              const revStatus = revBal <= 0.01 ? 'PAID' : (revPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+              const returned = round2(Number(oldInv.returned_amount || 0));
+              const refunded = round2(Number(oldInv.refunded_amount || 0));
+              const netPaid = round2(Math.max(0, revPaid - refunded));
+              const revBal = round2(Math.max(0, total - returned - netPaid));
+              const revStatus = revBal <= 0.01 ? 'PAID' : (netPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
               await conn.query(
                 'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
                 [revPaid, revBal, revStatus, oldInv.id]
@@ -1343,13 +1492,17 @@ class AccountingService {
           customerName = customerName === 'Solar Customer' ? inv.customer_name : customerName;
           projectId = projectId || inv.project_id;
           if (status === 'PAID') {
+            await this.ensureSalesInvoiceJournalTx(conn, inv, settings, actor);
             const newPaid = round2(Number(inv.paid_amount || 0) + amount);
             const total = round2(Number(inv.total_amount || 0));
-            const newBal = round2(Math.max(0, total - newPaid));
+            const returned = round2(Number(inv.returned_amount || 0));
+            const refunded = round2(Number(inv.refunded_amount || 0));
+            const netPaid = round2(Math.max(0, newPaid - refunded));
+            const newBal = round2(Math.max(0, total - returned - netPaid));
             const newInvStatus = newBal <= 0.01 ? 'PAID' : 'PARTIAL';
             await conn.query(
-              'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
-              [newPaid, newBal, newInvStatus, inv.id]
+              'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = COALESCE(NULLIF(?, \'\'), `bank_account_id`) WHERE `id` = ?',
+              [newPaid, newBal, newInvStatus, data.bankAccountId || '', inv.id]
             );
           }
         }
@@ -1481,8 +1634,11 @@ class AccountingService {
           if (inv) {
             const newPaid = round2(Math.max(0, Number(inv.paid_amount || 0) - amt));
             const total = round2(Number(inv.total_amount || 0));
-            const newBal = round2(Math.max(0, total - newPaid));
-            const newStatus = newBal <= 0.01 ? 'PAID' : (newPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+            const returned = round2(Number(inv.returned_amount || 0));
+            const refunded = round2(Number(inv.refunded_amount || 0));
+            const netPaid = round2(Math.max(0, newPaid - refunded));
+            const newBal = round2(Math.max(0, total - returned - netPaid));
+            const newStatus = newBal <= 0.01 ? 'PAID' : (netPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
             await conn.query(
               'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
               [newPaid, newBal, newStatus, inv.id]
@@ -1805,7 +1961,10 @@ class AccountingService {
       );
 
       const newPaid = round2(Number(bill.paid_amount || 0) + amount);
-      const newBal = round2(Math.max(0, Number(bill.total_amount || 0) - newPaid));
+      const returned = round2(Number(bill.returned_amount || 0));
+      const refunded = round2(Number(bill.refunded_amount || 0));
+      const netPaidBill = round2(Math.max(0, newPaid - refunded));
+      const newBal = round2(Math.max(0, Number(bill.total_amount || 0) - returned - netPaidBill));
       const newStatus = newBal <= 0.01 ? 'PAID' : 'PARTIAL';
       await conn.query(
         'UPDATE `solar_acc_vendor_bills` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
@@ -1814,7 +1973,10 @@ class AccountingService {
 
       if (bill.po_id) {
         const poPayStatus = newStatus === 'PAID' ? 'PAID' : 'PARTIALLY_PAID';
-        await conn.query('UPDATE `solar_purchase_orders` SET `payment_status` = ? WHERE `id` = ?', [poPayStatus, bill.po_id]);
+        await conn.query(
+          'UPDATE `solar_purchase_orders` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = ? WHERE `id` = ?',
+          [newPaid, newBal, poPayStatus, bank.id, bill.po_id]
+        );
       }
 
       if (tdsDeducted > 0) {
@@ -1897,15 +2059,21 @@ class AccountingService {
       const bill = billRows?.[0];
       if (bill) {
         const newPaid = round2(Math.max(0, Number(bill.paid_amount || 0) - Number(vp.amount || 0)));
-        const newBal = round2(Math.max(0, Number(bill.total_amount || 0) - newPaid));
-        const newStatus = newBal <= 0.01 ? 'PAID' : (newPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+        const returned = round2(Number(bill.returned_amount || 0));
+        const refunded = round2(Number(bill.refunded_amount || 0));
+        const netPaidBill = round2(Math.max(0, newPaid - refunded));
+        const newBal = round2(Math.max(0, Number(bill.total_amount || 0) - returned - netPaidBill));
+        const newStatus = newBal <= 0.01 ? 'PAID' : (netPaidBill > 0.01 ? 'PARTIAL' : 'OPEN');
         await conn.query(
           'UPDATE `solar_acc_vendor_bills` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
           [newPaid, newBal, newStatus, bill.id]
         );
         if (bill.po_id) {
-          const poPayStatus = newStatus === 'PAID' ? 'PAID' : (newStatus === 'PARTIAL' ? 'PARTIALLY_PAID' : 'UNPAID');
-          await conn.query('UPDATE `solar_purchase_orders` SET `payment_status` = ? WHERE `id` = ?', [poPayStatus, bill.po_id]);
+          const poPayStatus = newStatus === 'PAID' ? 'PAID' : (newStatus === 'PARTIAL' ? 'PARTIALLY_PAID' : 'PENDING');
+          await conn.query(
+            'UPDATE `solar_purchase_orders` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+            [newPaid, newBal, poPayStatus, bill.po_id]
+          );
         }
       }
 
@@ -1999,6 +2167,9 @@ class AccountingService {
     const checks: Array<[string, string, any[]]> = [
       ['solar_payments', 'bank_account_id = ?', [id]],
       ['solar_acc_vendor_payments', 'bank_account_id = ?', [id]],
+      ['solar_vendor_sales_payments', 'bank_account_id = ?', [id]],
+      ['solar_sales_returns', 'bank_account_id = ?', [id]],
+      ['solar_purchase_returns', 'bank_account_id = ?', [id]],
       ['solar_acc_bank_transfers', 'from_account_id = ? OR to_account_id = ?', [id, id]],
       ['solar_acc_bank_reconciliations', 'bank_account_id = ?', [id]],
       ['solar_expenses', 'bank_account_id = ?', [id]],
@@ -2997,10 +3168,2131 @@ class AccountingService {
         breakdown.payslips++;
       }
 
-      const syncedCount = breakdown.salesInvoices + breakdown.customerReceipts + breakdown.expenses + breakdown.payslips;
-      await this.logAudit(conn, actor, 'LEDGER', 'SYNC_ERP_VOUCHERS', 'erp-sync', `${syncedCount} vouchers`, `Synced ${syncedCount} ERP vouchers into General Ledger`, breakdown);
+      // 5. Vendor Sales Invoices
+      const [vsiRows]: any = await conn.query(
+        "SELECT * FROM `solar_vendor_sales_invoices` WHERE `status` <> 'DRAFT'"
+      );
+      let vendorSalesInvoices = 0;
+      for (const inv of vsiRows || []) {
+        if (postedKeys.has(`VENDOR_SALES_INVOICE:${inv.id}`)) continue;
+        const ok = await this.ensureVendorSalesInvoiceJournalTx(conn, inv, settings, actor);
+        if (ok) {
+          postedKeys.add(`VENDOR_SALES_INVOICE:${inv.id}`);
+          vendorSalesInvoices++;
+        }
+      }
+
+      // 6. Vendor Sales Payments without journal_entry_id
+      const [vsPayRows]: any = await conn.query(
+        "SELECT vp.*, vsi.invoice_number, vsi.vendor_name FROM `solar_vendor_sales_payments` vp LEFT JOIN `solar_vendor_sales_invoices` vsi ON vsi.id = vp.invoice_id WHERE (vp.journal_entry_id IS NULL OR vp.journal_entry_id = '')"
+      );
+      let vendorSalesReceipts = 0;
+      for (const vp of vsPayRows || []) {
+        if (postedKeys.has(`VENDOR_SALES_RECEIPT:${vp.id}`)) continue;
+        const amt = round2(Number(vp.amount || 0));
+        if (amt <= 0) continue;
+        const bankCoa = vp.bank_account_id
+          ? await this.resolveBankCoaTx(conn, vp.bank_account_id, settings)
+          : (String(vp.payment_mode || '').toLowerCase().includes('cash')
+              ? (settings.default_cash_account_id || 'acc-1010')
+              : (settings.default_bank_account_id || 'acc-1020'));
+        const jeId = await this.insertAndPostJournalTx(
+          conn,
+          {
+            entryDate: safeDate(vp.payment_date),
+            referenceType: 'VENDOR_SALES_RECEIPT',
+            referenceId: vp.id,
+            referenceNumber: vp.invoice_number || vp.id,
+            narration: `Vendor Sales Receipt from ${vp.vendor_name || vp.vendor_id} against ${vp.invoice_number || vp.invoice_id}`,
+            status: 'POSTED',
+            lines: [
+              { accountId: bankCoa, description: vp.payment_mode || 'Vendor Sales Receipt', partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: amt, credit: 0 },
+              { accountId: settings.default_ar_account_id || 'acc-1100', description: `Receivable settlement - ${vp.invoice_number || vp.invoice_id}`, partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: 0, credit: amt }
+            ]
+          },
+          actor
+        );
+        await conn.query('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, vp.id]);
+        postedKeys.add(`VENDOR_SALES_RECEIPT:${vp.id}`);
+        vendorSalesReceipts++;
+      }
+
+      const syncedCount = breakdown.salesInvoices + breakdown.customerReceipts + breakdown.expenses + breakdown.payslips + vendorSalesInvoices + vendorSalesReceipts;
+      await this.logAudit(conn, actor, 'LEDGER', 'SYNC_ERP_VOUCHERS', 'erp-sync', `${syncedCount} vouchers`, `Synced ${syncedCount} ERP vouchers into General Ledger`, { ...breakdown, vendorSalesInvoices, vendorSalesReceipts });
       await conn.commit();
-      return { syncedCount, breakdown };
+      return { syncedCount, breakdown: { ...breakdown, vendorSalesInvoices, vendorSalesReceipts } };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  // ==========================================================
+  // BANK ACCOUNTS PUBLIC LOOKUP (ALL INTERNAL ERP STAFF)
+  // ==========================================================
+  public async getBankAccounts(pool: mysql.Pool): Promise<any[]> {
+    await this.ensureAccountingSchema(pool);
+    const [rows]: any = await pool.query(
+      'SELECT * FROM `solar_acc_bank_accounts` WHERE `is_active` = 1 ORDER BY `is_primary` DESC, `account_name` ASC'
+    );
+    return (rows || []).map((b: any) => ({
+      id: b.id,
+      accountName: b.account_name,
+      accountType: b.account_type || 'BANK',
+      bankName: b.bank_name || '',
+      accountNumber: b.account_number || '',
+      ifscCode: b.ifsc_code || '',
+      branch: b.branch || '',
+      coaAccountId: b.coa_account_id || '',
+      openingBalance: Number(b.opening_balance) || 0,
+      currentBalance: Number(b.current_balance) || 0,
+      isPrimary: Boolean(b.is_primary),
+      isActive: b.is_active !== 0
+    }));
+  }
+
+  private async resolveBankAccountTx(
+    conn: mysql.PoolConnection,
+    bankAccountId: string | undefined,
+    settings: any,
+    paymentMode?: string
+  ): Promise<{ bank: any; coaId: string }> {
+    const cleanId = String(bankAccountId || '').trim();
+    if (!cleanId) {
+      throw new Error('Please select a Cash/Bank account for this transaction.');
+    }
+    const [rows]: any = await conn.query('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1', [cleanId]);
+    const bank = rows?.[0];
+    if (!bank) {
+      throw new Error('Selected Cash/Bank account was not found.');
+    }
+    if (bank.is_active === 0) {
+      throw new Error(`Cash/Bank account "${bank.account_name}" is inactive.`);
+    }
+    const isCash = bank.account_type === 'CASH' || String(paymentMode || '').toLowerCase().includes('cash');
+    const coaId = bank.coa_account_id || (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
+    return { bank, coaId };
+  }
+
+  private async resolveBankCoaTx(conn: mysql.PoolConnection, bankAccountId: string, settings: any): Promise<string> {
+    const [rows]: any = await conn.query('SELECT `account_type`, `coa_account_id` FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1', [bankAccountId]);
+    const b = rows?.[0];
+    if (!b) return settings.default_bank_account_id || 'acc-1020';
+    return b.coa_account_id || (b.account_type === 'CASH' ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
+  }
+
+  private async ensureSalesInvoiceJournalTx(conn: mysql.PoolConnection, inv: any, settings: any, actor: any): Promise<string | null> {
+    const status = String(inv.payment_status || 'ISSUED').toUpperCase();
+    if (status === 'DRAFT' || status === 'CANCELLED') return null;
+    const total = round2(Number(inv.total_amount || 0));
+    if (total <= 0) return null;
+
+    const [existing]: any = await conn.query(
+      "SELECT `id` FROM `solar_acc_journal_entries` WHERE `reference_type` = 'SALES_INVOICE' AND `reference_id` = ? AND `status` IN ('POSTED', 'REVERSED') LIMIT 1",
+      [inv.id]
+    );
+    if (existing?.[0]?.id) return existing[0].id;
+
+    const gst = round2(Number(inv.gst_amount || 0));
+    const sub = round2(Number(inv.subtotal || 0));
+    const revAmount = round2(total - gst > 0 ? total - gst : sub);
+    const lines: any[] = [
+      {
+        accountId: settings.default_ar_account_id || 'acc-1100',
+        description: `Sales Invoice ${inv.invoice_number} - ${inv.customer_name}`,
+        projectId: inv.project_id || '',
+        projectTitle: inv.project_title || '',
+        partyType: 'CUSTOMER',
+        partyId: inv.customer_id || '',
+        partyName: inv.customer_name || '',
+        debit: total,
+        credit: 0
+      },
+      {
+        accountId: settings.default_sales_account_id || 'acc-4010',
+        description: `Solar EPC Revenue - ${inv.invoice_number}`,
+        projectId: inv.project_id || '',
+        projectTitle: inv.project_title || '',
+        partyType: 'CUSTOMER',
+        partyId: inv.customer_id || '',
+        partyName: inv.customer_name || '',
+        debit: 0,
+        credit: revAmount
+      }
+    ];
+    if (round2(total - revAmount) > 0) {
+      lines.push({
+        accountId: settings.default_output_gst_account_id || 'acc-2100',
+        description: `Output GST - ${inv.invoice_number}`,
+        projectId: inv.project_id || '',
+        debit: 0,
+        credit: round2(total - revAmount)
+      });
+    }
+    const lockDate = toSqlDate(settings.lock_date);
+    let entryDate = toSqlDate(inv.invoice_date) || todaySql();
+    if (lockDate && entryDate <= lockDate) entryDate = todaySql();
+    return await this.insertAndPostJournalTx(
+      conn,
+      {
+        entryDate,
+        referenceType: 'SALES_INVOICE',
+        referenceId: inv.id,
+        referenceNumber: inv.invoice_number,
+        narration: `Sales Invoice ${inv.invoice_number} (${inv.customer_name})`,
+        status: 'POSTED',
+        lines
+      },
+      actor
+    );
+  }
+
+  public async ensureSalesInvoiceJournal(pool: mysql.Pool, invoiceId: string, actor: any): Promise<string | null> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const [rows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1', [invoiceId]);
+      const inv = rows?.[0];
+      if (!inv) {
+        await conn.commit();
+        return null;
+      }
+      const jeId = await this.ensureSalesInvoiceJournalTx(conn, inv, settings, actor);
+      await conn.commit();
+      return jeId;
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  private async ensureVendorSalesInvoiceJournalTx(conn: mysql.PoolConnection, inv: any, settings: any, actor: any): Promise<string | null> {
+    const status = String(inv.status || 'ISSUED').toUpperCase();
+    if (status === 'DRAFT' || status === 'CANCELLED') return null;
+    const total = round2(Number(inv.total_amount || 0));
+    if (total <= 0) return null;
+
+    const [existing]: any = await conn.query(
+      "SELECT `id` FROM `solar_acc_journal_entries` WHERE `reference_type` = 'VENDOR_SALES_INVOICE' AND `reference_id` = ? AND `status` IN ('POSTED', 'REVERSED') LIMIT 1",
+      [inv.id]
+    );
+    if (existing?.[0]?.id) return existing[0].id;
+
+    const tax = round2(Number(inv.tax_amount ?? inv.gst_amount ?? 0));
+    const revAmount = round2(total - tax > 0 ? total - tax : Number(inv.subtotal || total));
+    const lines: any[] = [
+      {
+        accountId: settings.default_ar_account_id || 'acc-1100',
+        description: `Vendor Sales Invoice ${inv.invoice_number} - ${inv.vendor_name}`,
+        partyType: 'VENDOR',
+        partyId: inv.vendor_id || '',
+        partyName: inv.vendor_name || '',
+        debit: total,
+        credit: 0
+      },
+      {
+        accountId: 'acc-4030',
+        description: `Vendor Equipment Sales - ${inv.invoice_number}`,
+        partyType: 'VENDOR',
+        partyId: inv.vendor_id || '',
+        partyName: inv.vendor_name || '',
+        debit: 0,
+        credit: revAmount
+      }
+    ];
+    if (round2(total - revAmount) > 0) {
+      lines.push({
+        accountId: settings.default_output_gst_account_id || 'acc-2100',
+        description: `Output GST - ${inv.invoice_number}`,
+        partyType: 'VENDOR',
+        partyId: inv.vendor_id || '',
+        partyName: inv.vendor_name || '',
+        debit: 0,
+        credit: round2(total - revAmount)
+      });
+    }
+    const lockDate = toSqlDate(settings.lock_date);
+    let entryDate = toSqlDate(inv.invoice_date) || todaySql();
+    if (lockDate && entryDate <= lockDate) entryDate = todaySql();
+    return await this.insertAndPostJournalTx(
+      conn,
+      {
+        entryDate,
+        referenceType: 'VENDOR_SALES_INVOICE',
+        referenceId: inv.id,
+        referenceNumber: inv.invoice_number,
+        narration: `Vendor Sales Invoice ${inv.invoice_number} (${inv.vendor_name})`,
+        status: 'POSTED',
+        lines
+      },
+      actor
+    );
+  }
+
+  public async ensureVendorSalesInvoiceJournal(pool: mysql.Pool, invoiceId: string, actor: any): Promise<string | null> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const [rows]: any = await conn.query('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1', [invoiceId]);
+      const inv = rows?.[0];
+      if (!inv) {
+        await conn.commit();
+        return null;
+      }
+      const jeId = await this.ensureVendorSalesInvoiceJournalTx(conn, inv, settings, actor);
+      await conn.commit();
+      return jeId;
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  private async ensurePurchaseOrderBillTx(conn: mysql.PoolConnection, po: any, settings: any, actor: any): Promise<any> {
+    const [existingRows]: any = await conn.query(
+      'SELECT * FROM `solar_acc_vendor_bills` WHERE `po_id` = ? ORDER BY `created_at` ASC LIMIT 1',
+      [po.id]
+    );
+    if (existingRows?.[0]) return existingRows[0];
+
+    const totalAmount = round2(Number(po.total_amount || 0));
+    const subtotal = round2(Number(po.subtotal || totalAmount));
+    const gstAmount = round2(Number(po.gst_amount || 0));
+    const cgstAmount = round2(gstAmount / 2);
+    const sgstAmount = round2(gstAmount - cgstAmount);
+    const billDate = toSqlDate(po.po_date) || todaySql();
+    const dueDate = toSqlDate(po.payment_due_date || po.expected_delivery_date) || billDate;
+    const lockDate = toSqlDate(settings.lock_date);
+    const jeDate = lockDate && billDate <= lockDate ? todaySql() : billDate;
+
+    const billId = `vbill-${Date.now()}-${randHex(3)}`;
+    let billNumber = String(po.invoice_reference || po.po_number || billId).trim();
+    const [dupBill]: any = await conn.query('SELECT `id` FROM `solar_acc_vendor_bills` WHERE `bill_number` = ? LIMIT 1', [billNumber]);
+    if (dupBill?.length > 0) {
+      billNumber = `${billNumber}-${randHex(2)}`;
+    }
+
+    const paidAmount = round2(Number(po.paid_amount || 0));
+    const returnedAmount = round2(Number(po.returned_amount || 0));
+    const refundedAmount = round2(Number(po.refunded_amount || 0));
+    const netPaid = round2(Math.max(0, paidAmount - refundedAmount));
+    const balanceAmount = round2(Math.max(0, totalAmount - returnedAmount - netPaid));
+    const status = balanceAmount <= 0.01 && totalAmount > 0 ? 'PAID' : (netPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+
+    let journalEntryId = '';
+    if (totalAmount > 0) {
+      const expenseAccId = settings.default_cogs_account_id || 'acc-5010';
+      const jLines: any[] = [];
+      if (gstAmount > 0) {
+        jLines.push({
+          accountId: expenseAccId,
+          description: `PO ${po.po_number} - Materials`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: subtotal,
+          credit: 0
+        });
+        jLines.push({
+          accountId: settings.default_input_gst_account_id || 'acc-1150',
+          description: `Input GST ITC - PO ${po.po_number}`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: gstAmount,
+          credit: 0
+        });
+      } else {
+        jLines.push({
+          accountId: expenseAccId,
+          description: `PO ${po.po_number} - Materials`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: totalAmount,
+          credit: 0
+        });
+      }
+      jLines.push({
+        accountId: settings.default_ap_account_id || 'acc-2010',
+        description: `Payable to ${po.vendor_name} - PO ${po.po_number}`,
+        projectId: po.project_id || '',
+        projectTitle: po.project_title || '',
+        partyType: 'VENDOR',
+        partyId: po.vendor_id || '',
+        partyName: po.vendor_name || '',
+        debit: 0,
+        credit: totalAmount
+      });
+
+      journalEntryId = await this.insertAndPostJournalTx(
+        conn,
+        {
+          entryDate: jeDate,
+          referenceType: 'VENDOR_BILL',
+          referenceId: billId,
+          referenceNumber: billNumber,
+          narration: `Purchase Order ${po.po_number} (${po.vendor_name})`,
+          status: 'POSTED',
+          lines: jLines
+        },
+        actor
+      );
+    }
+
+    await conn.query(
+      `INSERT INTO \`solar_acc_vendor_bills\`
+       (\`id\`, \`bill_number\`, \`vendor_id\`, \`vendor_name\`, \`vendor_gst\`, \`po_id\`, \`po_number\`, \`project_id\`, \`project_title\`, \`bill_date\`, \`due_date\`, \`category\`, \`subtotal\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`gst_amount\`, \`tds_section\`, \`tds_rate\`, \`tds_amount\`, \`total_amount\`, \`paid_amount\`, \`returned_amount\`, \`refunded_amount\`, \`balance_amount\`, \`itc_eligible\`, \`status\`, \`expense_account_id\`, \`journal_entry_id\`, \`notes\`, \`items_json\`, \`created_by\`)
+       VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, 'Material Purchase', ?, ?, ?, 0, ?, '', 0, 0, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+      [
+        billId, billNumber, po.vendor_id || '', po.vendor_name || 'Vendor',
+        po.id, po.po_number, po.project_id || '', po.project_title || '',
+        billDate, dueDate, subtotal, cgstAmount, sgstAmount, gstAmount,
+        totalAmount, paidAmount, returnedAmount, refundedAmount, balanceAmount,
+        status, settings.default_cogs_account_id || 'acc-5010', journalEntryId, po.notes || '',
+        po.items_json || '[]', String(actor?.name || 'Admin')
+      ]
+    );
+
+    const [createdRows]: any = await conn.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1', [billId]);
+    return createdRows[0];
+  }
+
+  private async adjustProductStockTx(
+    conn: mysql.PoolConnection,
+    params: {
+      productId: string;
+      deltaQty: number;
+      warehouseId?: string;
+      warehouseName?: string;
+      movementType: 'SALES_RETURN' | 'PURCHASE_RETURN';
+      referenceNumber: string;
+      referenceId: string;
+      notes: string;
+      actorName: string;
+    }
+  ): Promise<void> {
+    if (!params.productId || !Number.isFinite(params.deltaQty) || params.deltaQty === 0) return;
+
+    const [rows]: any = await conn.query('SELECT * FROM `solar_products` WHERE `id` = ? FOR UPDATE', [params.productId]);
+    const prod = rows?.[0];
+    if (!prod) return;
+
+    const currentStock = Number(prod.current_stock || 0);
+    if (params.deltaQty < 0 && currentStock + params.deltaQty < -0.001) {
+      throw new Error(`Insufficient stock for "${prod.name}": available ${currentStock}, requested deduction ${Math.abs(params.deltaQty)}.`);
+    }
+
+    const nextStock = Math.round(Math.max(0, currentStock + params.deltaQty) * 1000) / 1000;
+    let warehouseStocks: Record<string, number> = {};
+    try {
+      if (prod.warehouse_stocks_json) warehouseStocks = JSON.parse(prod.warehouse_stocks_json) || {};
+    } catch {}
+
+    const targetWhId = String(params.warehouseId || prod.warehouse_id || '').trim();
+    const targetWhName = String(params.warehouseName || prod.warehouse_name || '').trim();
+    if (targetWhId) {
+      const prevWhQty = Number(warehouseStocks[targetWhId] ?? 0);
+      warehouseStocks[targetWhId] = Math.round(Math.max(0, prevWhQty + params.deltaQty) * 1000) / 1000;
+    }
+
+    await conn.query(
+      'UPDATE `solar_products` SET `current_stock` = ?, `warehouse_stocks_json` = ? WHERE `id` = ?',
+      [nextStock, JSON.stringify(warehouseStocks), prod.id]
+    );
+
+    const smId = `sm-${Date.now()}-${randHex(3)}`;
+    await conn.query(
+      `INSERT INTO \`solar_stock_movements\` (
+        \`id\`, \`product_id\`, \`product_name\`, \`sku\`, \`movement_type\`,
+        \`quantity\`, \`balance_after\`, \`reference_number\`, \`reference_id\`,
+        \`warehouse_id\`, \`warehouse_name\`, \`target_warehouse_id\`, \`target_warehouse_name\`,
+        \`notes\`, \`timestamp\`, \`performed_by\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, NOW(), ?)`,
+      [
+        smId,
+        prod.id,
+        prod.name,
+        prod.sku || '',
+        params.movementType,
+        params.deltaQty,
+        nextStock,
+        params.referenceNumber,
+        params.referenceId,
+        targetWhId,
+        targetWhName,
+        params.notes,
+        params.actorName
+      ]
+    );
+  }
+
+  // ==========================================================
+  // DIRECT SALES INVOICE PAYMENT (WITH BANK SELECTION + GL)
+  // ==========================================================
+  public async recordSalesInvoicePayment(pool: mysql.Pool, invoiceId: string, payload: any, actor: any): Promise<any> {
+    await this.ensureAccountingSchema(pool);
+    const amount = round2(Number(payload?.amount || 0));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const err: any = new Error('Payment amount must be greater than zero.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const payDate = toSqlDate(payload?.paymentDate || payload?.paidDate) || todaySql();
+      await this.assertNotLockedDate(conn, payDate);
+
+      const [invRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE', [invoiceId]);
+      const inv = invRows?.[0];
+      if (!inv) {
+        const err: any = new Error('Sales invoice not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const invStatus = String(inv.payment_status || 'ISSUED').toUpperCase();
+      if (invStatus === 'DRAFT' || invStatus === 'CANCELLED') {
+        const err: any = new Error(`Cannot record payment against a ${invStatus} invoice.`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const totalAmount = round2(Number(inv.total_amount || 0));
+      const paidAmount = round2(Number(inv.paid_amount || 0));
+      const returnedAmount = round2(Number(inv.returned_amount || 0));
+      const refundedAmount = round2(Number(inv.refunded_amount || 0));
+      const netPaid = round2(Math.max(0, paidAmount - refundedAmount));
+      const remaining = round2(Math.max(0, totalAmount - returnedAmount - netPaid));
+
+      if (amount > remaining + 0.01) {
+        const err: any = new Error(`Payment amount (₹${amount.toFixed(2)}) exceeds remaining balance due (₹${remaining.toFixed(2)}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const paymentMode = String(payload?.paymentMode || 'Bank NEFT/RTGS').trim();
+      const { bank, coaId } = await this.resolveBankAccountTx(conn, payload?.bankAccountId, settings, paymentMode);
+
+      await this.ensureSalesInvoiceJournalTx(conn, inv, settings, actor);
+
+      const receiptId = `pay-${Date.now()}-${randHex(3)}`;
+      const receiptNumber = String(payload?.receiptNumber || `RCPT-${payDate.slice(0, 4)}-${randDigits(4)}`).trim();
+      const referenceNo = String(payload?.referenceNo || payload?.transactionReference || '').trim();
+      const notes = String(payload?.notes || '').trim();
+
+      const jeId = await this.insertAndPostJournalTx(
+        conn,
+        {
+          entryDate: payDate,
+          referenceType: 'CUSTOMER_RECEIPT',
+          referenceId: receiptId,
+          referenceNumber: receiptNumber,
+          narration: `Receipt ${receiptNumber} from ${inv.customer_name} against Invoice ${inv.invoice_number} (${bank.account_name})`,
+          status: 'POSTED',
+          lines: [
+            {
+              accountId: coaId,
+              description: `${paymentMode} via ${bank.account_name}${referenceNo ? ` (${referenceNo})` : ''}`,
+              projectId: inv.project_id || '',
+              projectTitle: inv.project_title || '',
+              partyType: 'CUSTOMER',
+              partyId: inv.customer_id || '',
+              partyName: inv.customer_name || '',
+              debit: amount,
+              credit: 0
+            },
+            {
+              accountId: settings.default_ar_account_id || 'acc-1100',
+              description: `Receivable settlement - ${inv.invoice_number}`,
+              projectId: inv.project_id || '',
+              projectTitle: inv.project_title || '',
+              partyType: 'CUSTOMER',
+              partyId: inv.customer_id || '',
+              partyName: inv.customer_name || '',
+              debit: 0,
+              credit: amount
+            }
+          ]
+        },
+        actor
+      );
+
+      await conn.query(
+        `INSERT INTO \`solar_payments\`
+         (\`id\`, \`receipt_number\`, \`project_id\`, \`customer_id\`, \`customer_name\`, \`milestone\`, \`amount\`, \`status\`, \`due_date\`, \`paid_date\`, \`payment_mode\`, \`transaction_reference\`, \`notes\`, \`invoice_id\`, \`invoice_number\`, \`bank_account_id\`, \`journal_entry_id\`, \`tally_sync_status\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'PAID', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NOT SYNCED')`,
+        [
+          receiptId,
+          receiptNumber,
+          inv.project_id || '',
+          inv.customer_id || '',
+          inv.customer_name || 'Solar Customer',
+          `Against Invoice ${inv.invoice_number}`,
+          amount,
+          payDate,
+          payDate,
+          paymentMode,
+          referenceNo,
+          notes,
+          inv.id,
+          inv.invoice_number,
+          bank.id,
+          jeId
+        ]
+      );
+
+      await conn.query(
+        'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+        [amount, bank.id]
+      );
+
+      const nextPaid = round2(paidAmount + amount);
+      const nextNetPaid = round2(Math.max(0, nextPaid - refundedAmount));
+      const nextBalance = round2(Math.max(0, totalAmount - returnedAmount - nextNetPaid));
+      const nextStatus = nextBalance <= 0.01 ? 'PAID' : 'PARTIAL';
+
+      await conn.query(
+        'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = ? WHERE `id` = ?',
+        [nextPaid, nextBalance, nextStatus, bank.id, inv.id]
+      );
+
+      if (inv.project_id) {
+        await conn.query('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?', [inv.project_id]).catch(() => {});
+      }
+
+      await this.logAudit(
+        conn,
+        actor,
+        'CUSTOMER_PAYMENTS',
+        'RECORD_INVOICE_PAYMENT',
+        receiptId,
+        receiptNumber,
+        `Received ₹${amount.toFixed(2)} for Invoice ${inv.invoice_number} into ${bank.account_name}`
+      );
+      await conn.commit();
+      return {
+        invoiceId: inv.id,
+        receiptId,
+        receiptNumber,
+        amount,
+        bankAccountId: bank.id,
+        bankAccountName: bank.account_name,
+        paidAmount: nextPaid,
+        balanceAmount: nextBalance,
+        paymentStatus: nextStatus,
+        journalEntryId: jeId
+      };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  // ==========================================================
+  // VENDOR SALES INVOICE PAYMENT (WITH BANK SELECTION + GL)
+  // ==========================================================
+  public async recordVendorSalesInvoicePayment(pool: mysql.Pool, invoiceId: string, payload: any, actor: any): Promise<any> {
+    await this.ensureAccountingSchema(pool);
+    const amount = round2(Number(payload?.amount || 0));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const err: any = new Error('Payment amount must be greater than zero.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const payDate = toSqlDate(payload?.paymentDate) || todaySql();
+      await this.assertNotLockedDate(conn, payDate);
+
+      const [invRows]: any = await conn.query('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE', [invoiceId]);
+      const inv = invRows?.[0];
+      if (!inv) {
+        const err: any = new Error('Vendor sales invoice not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const totalAmount = round2(Number(inv.total_amount || 0));
+      const currentPaid = round2(Number(inv.paid_amount || 0));
+      const returnedAmount = round2(Number(inv.returned_amount || 0));
+      const refundedAmount = round2(Number(inv.refunded_amount || 0));
+      const netPaid = round2(Math.max(0, currentPaid - refundedAmount));
+      const remaining = round2(Math.max(0, totalAmount - returnedAmount - netPaid));
+
+      if (amount > remaining + 0.01) {
+        const err: any = new Error(`Payment amount (₹${amount.toFixed(2)}) exceeds remaining balance due (₹${remaining.toFixed(2)}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const paymentMode = String(payload?.paymentMode || 'Bank NEFT/RTGS').trim();
+      const { bank, coaId } = await this.resolveBankAccountTx(conn, payload?.bankAccountId, settings, paymentMode);
+
+      await this.ensureVendorSalesInvoiceJournalTx(conn, inv, settings, actor);
+
+      const paymentId = `vsip-${Date.now()}-${randHex(3)}`;
+      const referenceNo = String(payload?.referenceNo || '').trim();
+      const notes = String(payload?.notes || '').trim();
+      const actorName = String(actor?.name || actor?.email || 'Admin');
+
+      const jeId = await this.insertAndPostJournalTx(
+        conn,
+        {
+          entryDate: payDate,
+          referenceType: 'VENDOR_SALES_RECEIPT',
+          referenceId: paymentId,
+          referenceNumber: inv.invoice_number,
+          narration: `Vendor Sales Receipt from ${inv.vendor_name} for ${inv.invoice_number} (${bank.account_name})`,
+          status: 'POSTED',
+          lines: [
+            {
+              accountId: coaId,
+              description: `${paymentMode} via ${bank.account_name}${referenceNo ? ` (${referenceNo})` : ''}`,
+              partyType: 'VENDOR',
+              partyId: inv.vendor_id || '',
+              partyName: inv.vendor_name || '',
+              debit: amount,
+              credit: 0
+            },
+            {
+              accountId: settings.default_ar_account_id || 'acc-1100',
+              description: `Vendor Sales Receivable settlement - ${inv.invoice_number}`,
+              partyType: 'VENDOR',
+              partyId: inv.vendor_id || '',
+              partyName: inv.vendor_name || '',
+              debit: 0,
+              credit: amount
+            }
+          ]
+        },
+        actor
+      );
+
+      await conn.query(
+        `INSERT INTO \`solar_vendor_sales_payments\`
+         (\`id\`, \`invoice_id\`, \`vendor_id\`, \`payment_date\`, \`amount\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`bank_account_id\`, \`journal_entry_id\`, \`recorded_by\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [paymentId, invoiceId, inv.vendor_id, payDate, amount, paymentMode, referenceNo, notes, bank.id, jeId, actorName]
+      );
+
+      await conn.query(
+        'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+        [amount, bank.id]
+      );
+
+      const nextPaid = round2(currentPaid + amount);
+      const nextNetPaid = round2(Math.max(0, nextPaid - refundedAmount));
+      const nextBalance = round2(Math.max(0, totalAmount - returnedAmount - nextNetPaid));
+      const dueDate = toSqlDate(inv.due_date) || '';
+      const today = todaySql();
+      const nextStatus =
+        nextBalance <= 0.01 && totalAmount > 0
+          ? 'PAID'
+          : nextNetPaid > 0.01
+          ? 'PARTIALLY_PAID'
+          : dueDate && dueDate < today
+          ? 'OVERDUE'
+          : 'ISSUED';
+
+      await conn.query(
+        'UPDATE `solar_vendor_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ?, `bank_account_id` = ?, `updated_by` = ? WHERE `id` = ?',
+        [nextPaid, nextBalance, nextStatus, bank.id, actorName, invoiceId]
+      );
+
+      await this.logAudit(
+        conn,
+        actor,
+        'VENDOR_SALES',
+        'RECORD_VSI_PAYMENT',
+        paymentId,
+        inv.invoice_number,
+        `Received ₹${amount.toFixed(2)} for Vendor Sales Invoice ${inv.invoice_number} into ${bank.account_name}`
+      );
+      await conn.commit();
+      return { paymentId, bankAccountId: bank.id, bankAccountName: bank.account_name, journalEntryId: jeId, nextPaid, nextBalance, nextStatus };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  // ==========================================================
+  // DIRECT PURCHASE ORDER PAYMENT (WITH BANK SELECTION + TDS + GL)
+  // ==========================================================
+  public async recordPurchaseOrderPayment(pool: mysql.Pool, poId: string, payload: any, actor: any): Promise<any> {
+    await this.ensureAccountingSchema(pool);
+    const amount = round2(Number(payload?.amount || 0));
+    const tdsDeducted = round2(Number(payload?.tdsDeducted || 0));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const err: any = new Error('Payment amount must be greater than zero.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (tdsDeducted < 0 || tdsDeducted >= amount) {
+      const err: any = new Error('TDS deducted must be >= 0 and less than gross payment amount.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const netPaid = round2(amount - tdsDeducted);
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const payDate = toSqlDate(payload?.paymentDate) || todaySql();
+      await this.assertNotLockedDate(conn, payDate);
+
+      const [poRows]: any = await conn.query('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? FOR UPDATE', [poId]);
+      const po = poRows?.[0];
+      if (!po) {
+        const err: any = new Error('Purchase order not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (String(po.status || '').toUpperCase() === 'CANCELLED') {
+        const err: any = new Error('Cannot record payment for a cancelled purchase order.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const totalAmount = round2(Number(po.total_amount || 0));
+      const paidAmount = round2(Number(po.paid_amount || 0));
+      const returnedAmount = round2(Number(po.returned_amount || 0));
+      const refundedAmount = round2(Number(po.refunded_amount || 0));
+      const netAlreadyPaid = round2(Math.max(0, paidAmount - refundedAmount));
+      const remaining = round2(Math.max(0, totalAmount - returnedAmount - netAlreadyPaid));
+
+      if (amount > remaining + 0.01) {
+        const err: any = new Error(`Payment amount (₹${amount.toFixed(2)}) exceeds remaining PO payable balance (₹${remaining.toFixed(2)}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const paymentMode = String(payload?.paymentMode || 'Bank NEFT/RTGS').trim();
+      const { bank, coaId } = await this.resolveBankAccountTx(conn, payload?.bankAccountId, settings, paymentMode);
+
+      const bill = await this.ensurePurchaseOrderBillTx(conn, po, settings, actor);
+
+      const payId = `vpay-${Date.now()}-${randHex(3)}`;
+      const paymentNumber = String(payload?.paymentNumber || `VPAY-${payDate.slice(0, 4)}-${randDigits(4)}`).trim();
+      const referenceNo = String(payload?.referenceNo || '').trim();
+      const notes = String(payload?.notes || '').trim();
+
+      const jLines: any[] = [
+        {
+          accountId: settings.default_ap_account_id || 'acc-2010',
+          description: `PO ${po.po_number} payment to ${po.vendor_name}`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: amount,
+          credit: 0
+        },
+        {
+          accountId: coaId,
+          description: `Paid via ${bank.account_name} (${paymentMode})${referenceNo ? ` Ref: ${referenceNo}` : ''}`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: 0,
+          credit: netPaid
+        }
+      ];
+      if (tdsDeducted > 0) {
+        jLines.push({
+          accountId: settings.default_tds_account_id || 'acc-2150',
+          description: `TDS ${payload?.tdsSection || '194C'} deducted from ${po.vendor_name}`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: 0,
+          credit: tdsDeducted
+        });
+      }
+
+      const jeId = await this.insertAndPostJournalTx(
+        conn,
+        {
+          entryDate: payDate,
+          referenceType: 'VENDOR_PAYMENT',
+          referenceId: payId,
+          referenceNumber: paymentNumber,
+          narration: `Vendor payment ${paymentNumber} to ${po.vendor_name} for PO ${po.po_number} (${bank.account_name})`,
+          status: 'POSTED',
+          lines: jLines
+        },
+        actor
+      );
+
+      await conn.query(
+        `INSERT INTO \`solar_acc_vendor_payments\`
+         (\`id\`, \`payment_number\`, \`bill_id\`, \`vendor_id\`, \`vendor_name\`, \`payment_date\`, \`amount\`, \`tds_deducted\`, \`net_paid\`, \`bank_account_id\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`journal_entry_id\`, \`recorded_by\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          payId, paymentNumber, bill.id, po.vendor_id || '', po.vendor_name || 'Vendor', payDate,
+          amount, tdsDeducted, netPaid, bank.id, paymentMode, referenceNo, notes, jeId, String(actor?.name || 'Admin')
+        ]
+      );
+
+      await conn.query(
+        'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+        [netPaid, bank.id]
+      );
+
+      const nextPaid = round2(paidAmount + amount);
+      const nextNetPaid = round2(Math.max(0, nextPaid - refundedAmount));
+      const nextBalance = round2(Math.max(0, totalAmount - returnedAmount - nextNetPaid));
+      const nextBillStatus = nextBalance <= 0.01 ? 'PAID' : 'PARTIAL';
+      const nextPoPayStatus = nextBalance <= 0.01 ? 'PAID' : 'PARTIALLY_PAID';
+
+      await conn.query(
+        'UPDATE `solar_acc_vendor_bills` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
+        [nextPaid, nextBalance, nextBillStatus, bill.id]
+      );
+      await conn.query(
+        'UPDATE `solar_purchase_orders` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = ? WHERE `id` = ?',
+        [nextPaid, nextBalance, nextPoPayStatus, bank.id, po.id]
+      );
+
+      if (tdsDeducted > 0) {
+        const [vRows]: any = await conn.query('SELECT `pan_number` FROM `solar_vendors` WHERE `id` = ? LIMIT 1', [po.vendor_id || '']);
+        const pan = vRows?.[0]?.pan_number || '';
+        const tdsRate = round2((tdsDeducted / Math.max(1, amount)) * 100);
+        await conn.query(
+          `INSERT INTO \`solar_acc_tds_entries\`
+           (\`id\`, \`section\`, \`party_type\`, \`party_id\`, \`party_name\`, \`pan_number\`, \`source_type\`, \`source_id\`, \`source_number\`, \`deduction_date\`, \`gross_amount\`, \`tds_rate\`, \`tds_amount\`, \`status\`)
+           VALUES (?, ?, 'VENDOR', ?, ?, ?, 'VENDOR_PAYMENT', ?, ?, ?, ?, ?, ?, 'DEDUCTED')`,
+          [
+            `tds-${Date.now()}-${randHex(3)}`,
+            payload?.tdsSection || '194C',
+            po.vendor_id || '',
+            po.vendor_name || 'Vendor',
+            pan,
+            payId,
+            paymentNumber,
+            payDate,
+            amount,
+            tdsRate,
+            tdsDeducted
+          ]
+        );
+      }
+
+      await this.logAudit(
+        conn,
+        actor,
+        'VENDOR_PAYMENTS',
+        'RECORD_PO_PAYMENT',
+        payId,
+        paymentNumber,
+        `Paid ₹${netPaid.toFixed(2)} for PO ${po.po_number} via ${bank.account_name}`
+      );
+      await conn.commit();
+      return {
+        purchaseOrderId: po.id,
+        billId: bill.id,
+        paymentId: payId,
+        paymentNumber,
+        amount,
+        tdsDeducted,
+        netPaid,
+        bankAccountId: bank.id,
+        bankAccountName: bank.account_name,
+        paidAmount: nextPaid,
+        balanceAmount: nextBalance,
+        paymentStatus: nextPoPayStatus,
+        journalEntryId: jeId
+      };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  // ==========================================================
+  // SALES RETURNS (CREDIT NOTES + INVENTORY RESTOCK + BANK REFUND + GL)
+  // ==========================================================
+  public async getSalesReturns(pool: mysql.Pool): Promise<any[]> {
+    await this.ensureAccountingSchema(pool);
+    const [rows]: any = await pool.query('SELECT * FROM `solar_sales_returns` ORDER BY `return_date` DESC, `created_at` DESC');
+    if (!rows || rows.length === 0) return [];
+    const [itemRows]: any = await pool.query('SELECT * FROM `solar_sales_return_items` ORDER BY `line_order` ASC, `id` ASC');
+    const itemsByReturn = new Map<string, any[]>();
+    for (const it of itemRows || []) {
+      const list = itemsByReturn.get(it.return_id) || [];
+      list.push({
+        id: it.id,
+        productId: it.product_id || undefined,
+        description: it.description,
+        hsnCode: it.hsn_code || '',
+        unit: it.unit || 'Nos',
+        originalQuantity: Number(it.original_quantity) || 0,
+        quantity: Number(it.quantity) || 0,
+        rate: Number(it.rate) || 0,
+        taxableAmount: Number(it.taxable_amount) || 0,
+        gstRate: Number(it.gst_rate) || 0,
+        cgstAmount: Number(it.cgst_amount) || 0,
+        sgstAmount: Number(it.sgst_amount) || 0,
+        igstAmount: Number(it.igst_amount) || 0,
+        taxAmount: Number(it.tax_amount) || 0,
+        totalAmount: Number(it.total_amount) || 0
+      });
+      itemsByReturn.set(it.return_id, list);
+    }
+    return (rows || []).map((r: any) => ({
+      id: r.id,
+      returnNumber: r.return_number,
+      returnDate: toSqlDate(r.return_date) || '',
+      targetType: r.target_type === 'VENDOR_INVOICE' ? 'VENDOR_INVOICE' : 'CUSTOMER_INVOICE',
+      invoiceId: r.invoice_id,
+      invoiceNumber: r.invoice_number || '',
+      partyId: r.party_id || '',
+      partyName: r.party_name,
+      projectId: r.project_id || '',
+      projectTitle: r.project_title || '',
+      reason: r.reason || '',
+      notes: r.notes || '',
+      warehouseId: r.warehouse_id || '',
+      warehouseName: r.warehouse_name || '',
+      restockInventory: Boolean(r.restock_inventory),
+      items: itemsByReturn.get(r.id) || [],
+      subtotal: Number(r.subtotal) || 0,
+      cgstAmount: Number(r.cgst_amount) || 0,
+      sgstAmount: Number(r.sgst_amount) || 0,
+      igstAmount: Number(r.igst_amount) || 0,
+      taxAmount: Number(r.tax_amount) || 0,
+      totalAmount: Number(r.total_amount) || 0,
+      settlementMode: r.settlement_mode === 'BANK_REFUND' ? 'BANK_REFUND' : 'CREDIT_NOTE',
+      refundAmount: Number(r.refund_amount) || 0,
+      bankAccountId: r.bank_account_id || '',
+      bankAccountName: r.bank_account_name || '',
+      creditJournalEntryId: r.credit_journal_entry_id || '',
+      refundJournalEntryId: r.refund_journal_entry_id || '',
+      status: r.status || 'POSTED',
+      createdBy: r.created_by || '',
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }));
+  }
+
+  public async createSalesReturn(pool: mysql.Pool, payload: any, actor: any): Promise<any> {
+    await this.ensureAccountingSchema(pool);
+    const targetType = payload?.targetType === 'VENDOR_INVOICE' ? 'VENDOR_INVOICE' : 'CUSTOMER_INVOICE';
+    const invoiceId = String(payload?.invoiceId || '').trim();
+    if (!invoiceId) {
+      const err: any = new Error('Source invoice is required for a sales return.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+    const submittedItems = rawItems.filter((it: any) => Number(it?.quantity || 0) > 0);
+    if (submittedItems.length === 0) {
+      const err: any = new Error('Specify return quantity greater than 0 for at least one line item.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const returnDate = toSqlDate(payload?.returnDate) || todaySql();
+      await this.assertNotLockedDate(conn, returnDate);
+
+      let inv: any = null;
+      let origItems: any[] = [];
+      let isInterState = false;
+      let partyId = '';
+      let partyName = '';
+      let projectId = '';
+      let projectTitle = '';
+      let defaultWarehouseId = '';
+
+      if (targetType === 'CUSTOMER_INVOICE') {
+        const [invRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE', [invoiceId]);
+        inv = invRows?.[0];
+        if (!inv) {
+          const err: any = new Error('Customer sales invoice not found.');
+          err.statusCode = 404;
+          throw err;
+        }
+        const st = String(inv.payment_status || 'ISSUED').toUpperCase();
+        if (st === 'DRAFT' || st === 'CANCELLED') {
+          const err: any = new Error(`Cannot process sales return against a ${st} invoice.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        try {
+          origItems = inv.items_json ? JSON.parse(inv.items_json) : [];
+        } catch {
+          origItems = [];
+        }
+        isInterState = Number(inv.igst_amount || 0) > 0;
+        partyId = inv.customer_id || '';
+        partyName = inv.customer_name || 'Solar Customer';
+        projectId = inv.project_id || '';
+        projectTitle = inv.project_title || '';
+        defaultWarehouseId = inv.warehouse_id || '';
+      } else {
+        const [invRows]: any = await conn.query('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE', [invoiceId]);
+        inv = invRows?.[0];
+        if (!inv) {
+          const err: any = new Error('Vendor sales invoice not found.');
+          err.statusCode = 404;
+          throw err;
+        }
+        const st = String(inv.status || 'ISSUED').toUpperCase();
+        if (st === 'DRAFT' || st === 'CANCELLED') {
+          const err: any = new Error(`Cannot process sales return against a ${st} vendor sales invoice.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        const [vsiItems]: any = await conn.query(
+          'SELECT * FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ? ORDER BY `line_order` ASC',
+          [invoiceId]
+        );
+        origItems = (vsiItems || []).map((r: any) => ({
+          productId: r.product_id || undefined,
+          description: r.description,
+          hsnCode: r.hsn_code || '',
+          unit: r.unit || 'NOS',
+          quantity: Number(r.quantity) || 0,
+          rate: Number(r.rate) || 0,
+          taxableAmount: Number(r.taxable_amount) || 0,
+          gstRate: Number(r.gst_rate) || 0
+        }));
+        isInterState = inv.supply_type === 'INTER_STATE' || Number(inv.igst_amount || 0) > 0;
+        partyId = inv.vendor_id || '';
+        partyName = inv.vendor_name || 'Vendor';
+      }
+
+      // Compute previously returned quantities per item key
+      const [prevItemRows]: any = await conn.query(
+        `SELECT sri.\`product_id\`, sri.\`description\`, SUM(sri.\`quantity\`) AS prev_qty
+         FROM \`solar_sales_return_items\` sri
+         INNER JOIN \`solar_sales_returns\` sr ON sr.\`id\` = sri.\`return_id\`
+         WHERE sr.\`target_type\` = ? AND sr.\`invoice_id\` = ? AND sr.\`status\` = 'POSTED'
+         GROUP BY sri.\`product_id\`, sri.\`description\``,
+        [targetType, invoiceId]
+      );
+      const prevByKey = new Map<string, number>();
+      for (const r of prevItemRows || []) {
+        const key = r.product_id ? `pid:${r.product_id}` : `desc:${String(r.description || '').trim().toLowerCase()}`;
+        prevByKey.set(key, (prevByKey.get(key) || 0) + (Number(r.prev_qty) || 0));
+      }
+
+      let subtotal = 0;
+      let cgstTotal = 0;
+      let sgstTotal = 0;
+      let igstTotal = 0;
+      const computedLines: any[] = [];
+
+      for (const subItem of submittedItems) {
+        const reqPid = String(subItem?.productId || '').trim();
+        const reqDesc = String(subItem?.description || '').trim();
+        const qty = Math.round(Number(subItem.quantity) * 1000) / 1000;
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        const match = origItems.find((oi: any) =>
+          (reqPid && String(oi.productId || '') === reqPid) ||
+          (reqDesc && String(oi.description || oi.productName || oi.name || '').trim().toLowerCase() === reqDesc.toLowerCase())
+        );
+        if (!match) {
+          const err: any = new Error(`Return item "${reqDesc || reqPid}" does not match any line item on invoice ${inv.invoice_number}.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const origQty = Number(match.quantity || 0);
+        const itemKey = (match.productId || reqPid)
+          ? `pid:${match.productId || reqPid}`
+          : `desc:${String(match.description || match.productName || match.name || reqDesc).trim().toLowerCase()}`;
+        const prevQty = prevByKey.get(itemKey) || 0;
+        const maxRemainingQty = Math.round(Math.max(0, origQty - prevQty) * 1000) / 1000;
+        if (qty > maxRemainingQty + 0.001) {
+          const err: any = new Error(
+            `Return quantity (${qty}) for "${match.description || match.productName || reqDesc}" exceeds remaining returnable quantity (${maxRemainingQty}).`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+        prevByKey.set(itemKey, prevQty + qty);
+
+        const origRate = Number(match.rate ?? match.unitPrice ?? 0);
+        const origTaxable = Number(match.taxableAmount ?? match.total ?? (origQty * origRate));
+        const effectiveUnitRate = origQty > 0 ? (origTaxable / origQty) : origRate;
+        const lineTaxable = round2(qty * effectiveUnitRate);
+        const gstRate = Number(match.gstRate ?? match.taxRatePercent ?? (Number(inv.subtotal || 0) > 0 ? round2((Number(inv.tax_amount ?? inv.gst_amount ?? 0) / Number(inv.subtotal)) * 100) : 0));
+        const lineTax = round2((lineTaxable * gstRate) / 100);
+        const lineIgst = isInterState ? lineTax : 0;
+        const lineCgst = isInterState ? 0 : round2(lineTax / 2);
+        const lineSgst = isInterState ? 0 : round2(lineTax - lineCgst);
+        const lineTotal = round2(lineTaxable + lineTax);
+
+        subtotal = round2(subtotal + lineTaxable);
+        cgstTotal = round2(cgstTotal + lineCgst);
+        sgstTotal = round2(sgstTotal + lineSgst);
+        igstTotal = round2(igstTotal + lineIgst);
+
+        computedLines.push({
+          productId: match.productId || reqPid || null,
+          description: String(match.description || match.productName || match.name || reqDesc),
+          hsnCode: String(match.hsnCode || ''),
+          unit: String(match.unit || 'Nos'),
+          originalQuantity: origQty,
+          quantity: qty,
+          rate: round2(effectiveUnitRate),
+          taxableAmount: lineTaxable,
+          gstRate,
+          cgstAmount: lineCgst,
+          sgstAmount: lineSgst,
+          igstAmount: lineIgst,
+          taxAmount: lineTax,
+          totalAmount: lineTotal
+        });
+      }
+
+      if (computedLines.length === 0) {
+        const err: any = new Error('No valid returnable line items found.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const taxAmount = round2(cgstTotal + sgstTotal + igstTotal);
+      const totalAmount = round2(subtotal + taxAmount);
+
+      const invTotal = round2(Number(inv.total_amount || 0));
+      const invPaid = round2(Number(inv.paid_amount || 0));
+      const invReturned = round2(Number(inv.returned_amount || 0));
+      const invRefunded = round2(Number(inv.refunded_amount || 0));
+      const remainingReturnValue = round2(Math.max(0, invTotal - invReturned));
+      if (totalAmount > remainingReturnValue + 0.05) {
+        const err: any = new Error(`Return total (₹${totalAmount.toFixed(2)}) exceeds remaining non-returned invoice value (₹${remainingReturnValue.toFixed(2)}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const settlementMode = payload?.settlementMode === 'BANK_REFUND' ? 'BANK_REFUND' : 'CREDIT_NOTE';
+      const refundAmount = settlementMode === 'BANK_REFUND' ? round2(Number(payload?.refundAmount ?? totalAmount)) : 0;
+      const netPaidSoFar = round2(Math.max(0, invPaid - invRefunded));
+
+      let bank: any = null;
+      let bankCoaId = '';
+      if (settlementMode === 'BANK_REFUND') {
+        if (netPaidSoFar <= 0) {
+          const err: any = new Error('Cannot issue a Cash/Bank refund because no net payment has been received on this invoice. Use Credit Note adjustment instead.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+          const err: any = new Error('Refund amount must be greater than zero for Bank Refund settlement.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (refundAmount > totalAmount + 0.01) {
+          const err: any = new Error(`Refund amount (₹${refundAmount.toFixed(2)}) cannot exceed Credit Note total (₹${totalAmount.toFixed(2)}).`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (refundAmount > netPaidSoFar + 0.01) {
+          const err: any = new Error(`Refund amount (₹${refundAmount.toFixed(2)}) exceeds net paid amount available for refund (₹${netPaidSoFar.toFixed(2)}).`);
+          err.statusCode = 400;
+          throw err;
+        }
+        const resolved = await this.resolveBankAccountTx(conn, payload?.bankAccountId, settings);
+        bank = resolved.bank;
+        bankCoaId = resolved.coaId;
+      }
+
+      // Ensure source invoice JE exists first
+      if (targetType === 'CUSTOMER_INVOICE') {
+        await this.ensureSalesInvoiceJournalTx(conn, inv, settings, actor);
+      } else {
+        await this.ensureVendorSalesInvoiceJournalTx(conn, inv, settings, actor);
+      }
+
+      const id = `sr-${Date.now()}-${randHex(3)}`;
+      const returnNumber = String(payload?.returnNumber || `CN-${returnDate.slice(0, 4)}-${randDigits(4)}`).trim();
+      const restockInventory = payload?.restockInventory !== false;
+      const warehouseId = String(payload?.warehouseId || defaultWarehouseId || '').trim();
+      const warehouseName = String(payload?.warehouseName || '').trim();
+      const actorName = String(actor?.name || actor?.email || 'Admin');
+
+      // 1. Post Credit Note Journal Entry: Dr Revenue (+ Dr Output GST) / Cr AR
+      const revAccId = targetType === 'VENDOR_INVOICE' ? 'acc-4030' : (settings.default_sales_account_id || 'acc-4010');
+      const cnLines: any[] = [
+        {
+          accountId: revAccId,
+          description: `Sales Return ${returnNumber} against ${inv.invoice_number}`,
+          projectId,
+          projectTitle,
+          partyType: targetType === 'VENDOR_INVOICE' ? 'VENDOR' : 'CUSTOMER',
+          partyId,
+          partyName,
+          debit: subtotal,
+          credit: 0
+        }
+      ];
+      if (taxAmount > 0) {
+        cnLines.push({
+          accountId: settings.default_output_gst_account_id || 'acc-2100',
+          description: `Output GST Reversal - ${returnNumber}`,
+          projectId,
+          projectTitle,
+          partyType: targetType === 'VENDOR_INVOICE' ? 'VENDOR' : 'CUSTOMER',
+          partyId,
+          partyName,
+          debit: taxAmount,
+          credit: 0
+        });
+      }
+      cnLines.push({
+        accountId: settings.default_ar_account_id || 'acc-1100',
+        description: `Credit Note ${returnNumber} - ${partyName}`,
+        projectId,
+        projectTitle,
+        partyType: targetType === 'VENDOR_INVOICE' ? 'VENDOR' : 'CUSTOMER',
+        partyId,
+        partyName,
+        debit: 0,
+        credit: totalAmount
+      });
+
+      const creditJournalEntryId = await this.insertAndPostJournalTx(
+        conn,
+        {
+          entryDate: returnDate,
+          referenceType: 'SALES_RETURN',
+          referenceId: id,
+          referenceNumber: returnNumber,
+          narration: `Sales Return ${returnNumber} against ${inv.invoice_number} (${partyName})`,
+          status: 'POSTED',
+          lines: cnLines
+        },
+        actor
+      );
+
+      // 2. Optional Bank Refund Journal Entry + Bank Balance update
+      let refundJournalEntryId = '';
+      if (settlementMode === 'BANK_REFUND' && bank && refundAmount > 0) {
+        await conn.query(
+          'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+          [refundAmount, bank.id]
+        );
+        refundJournalEntryId = await this.insertAndPostJournalTx(
+          conn,
+          {
+            entryDate: returnDate,
+            referenceType: 'SALES_RETURN_REFUND',
+            referenceId: id,
+            referenceNumber: returnNumber,
+            narration: `Sales Return Refund ${returnNumber} to ${partyName} via ${bank.account_name}`,
+            status: 'POSTED',
+            lines: [
+              {
+                accountId: settings.default_ar_account_id || 'acc-1100',
+                description: `Customer Refund ${returnNumber} - ${partyName}`,
+                projectId,
+                projectTitle,
+                partyType: targetType === 'VENDOR_INVOICE' ? 'VENDOR' : 'CUSTOMER',
+                partyId,
+                partyName,
+                debit: refundAmount,
+                credit: 0
+              },
+              {
+                accountId: bankCoaId,
+                description: `Refund paid via ${bank.account_name}`,
+                projectId,
+                projectTitle,
+                partyType: targetType === 'VENDOR_INVOICE' ? 'VENDOR' : 'CUSTOMER',
+                partyId,
+                partyName,
+                debit: 0,
+                credit: refundAmount
+              }
+            ]
+          },
+          actor
+        );
+      }
+
+      // 3. Persist Sales Return header & lines
+      await conn.query(
+        `INSERT INTO \`solar_sales_returns\`
+         (\`id\`, \`return_number\`, \`return_date\`, \`target_type\`, \`invoice_id\`, \`invoice_number\`, \`party_id\`, \`party_name\`, \`project_id\`, \`project_title\`, \`reason\`, \`notes\`, \`warehouse_id\`, \`warehouse_name\`, \`restock_inventory\`, \`subtotal\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`tax_amount\`, \`total_amount\`, \`settlement_mode\`, \`refund_amount\`, \`bank_account_id\`, \`bank_account_name\`, \`credit_journal_entry_id\`, \`refund_journal_entry_id\`, \`status\`, \`created_by\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'POSTED', ?)`,
+        [
+          id, returnNumber, returnDate, targetType, inv.id, inv.invoice_number, partyId, partyName,
+          projectId, projectTitle, String(payload?.reason || '').trim(), String(payload?.notes || '').trim(),
+          warehouseId, warehouseName, restockInventory ? 1 : 0, subtotal, cgstTotal, sgstTotal, igstTotal, taxAmount, totalAmount,
+          settlementMode, refundAmount, bank?.id || '', bank?.account_name || '', creditJournalEntryId, refundJournalEntryId, actorName
+        ]
+      );
+
+      for (let i = 0; i < computedLines.length; i++) {
+        const li = computedLines[i];
+        await conn.query(
+          `INSERT INTO \`solar_sales_return_items\`
+           (\`id\`, \`return_id\`, \`line_order\`, \`product_id\`, \`description\`, \`hsn_code\`, \`unit\`, \`original_quantity\`, \`quantity\`, \`rate\`, \`taxable_amount\`, \`gst_rate\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`tax_amount\`, \`total_amount\`)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            `sri-${id}-${i}`, id, i, li.productId || null, li.description, li.hsnCode, li.unit,
+            li.originalQuantity, li.quantity, li.rate, li.taxableAmount, li.gstRate,
+            li.cgstAmount, li.sgstAmount, li.igstAmount, li.taxAmount, li.totalAmount
+          ]
+        );
+        if (restockInventory && li.productId) {
+          await this.adjustProductStockTx(conn, {
+            productId: li.productId,
+            deltaQty: li.quantity,
+            warehouseId,
+            warehouseName,
+            movementType: 'SALES_RETURN',
+            referenceNumber: returnNumber,
+            referenceId: id,
+            notes: `Sales Return ${returnNumber} against ${inv.invoice_number}`,
+            actorName
+          });
+        }
+      }
+
+      // 4. Update source invoice returned/refunded/balance/status
+      const nextReturned = round2(invReturned + totalAmount);
+      const nextRefunded = round2(invRefunded + refundAmount);
+      const nextNetPaid = round2(Math.max(0, invPaid - nextRefunded));
+      const nextBalance = round2(Math.max(0, invTotal - nextReturned - nextNetPaid));
+
+      if (targetType === 'CUSTOMER_INVOICE') {
+        const nextStatus = nextBalance <= 0.01 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+        await conn.query(
+          'UPDATE `solar_sales_invoices` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+          [nextReturned, nextRefunded, nextBalance, nextStatus, inv.id]
+        );
+        if (projectId) {
+          await conn.query('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?', [projectId]).catch(() => {});
+        }
+      } else {
+        const dueDate = toSqlDate(inv.due_date) || '';
+        const today = todaySql();
+        const nextStatus =
+          nextBalance <= 0.01 && invTotal > 0
+            ? 'PAID'
+            : nextNetPaid > 0.01
+            ? 'PARTIALLY_PAID'
+            : dueDate && dueDate < today
+            ? 'OVERDUE'
+            : 'ISSUED';
+        await conn.query(
+          'UPDATE `solar_vendor_sales_invoices` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
+          [nextReturned, nextRefunded, nextBalance, nextStatus, inv.id]
+        );
+      }
+
+      await this.logAudit(
+        conn,
+        actor,
+        'SALES_RETURNS',
+        'CREATE_SALES_RETURN',
+        id,
+        returnNumber,
+        `Recorded Sales Return ${returnNumber} (₹${totalAmount.toFixed(2)}${refundAmount > 0 ? `, Refund ₹${refundAmount.toFixed(2)}` : ''}) against ${inv.invoice_number}`
+      );
+      await conn.commit();
+      return { id, returnNumber, totalAmount, refundAmount, creditJournalEntryId, refundJournalEntryId };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async deleteSalesReturn(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_sales_returns` WHERE `id` = ? FOR UPDATE', [id]);
+      const sr = rows?.[0];
+      if (!sr) {
+        const err: any = new Error('Sales return not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      await this.assertNotLockedDate(conn, toSqlDate(sr.return_date) || todaySql());
+
+      const [items]: any = await conn.query('SELECT * FROM `solar_sales_return_items` WHERE `return_id` = ?', [id]);
+      const actorName = String(actor?.name || actor?.email || 'Admin');
+
+      if (sr.restock_inventory) {
+        for (const li of items || []) {
+          if (li.product_id) {
+            await this.adjustProductStockTx(conn, {
+              productId: li.product_id,
+              deltaQty: -Number(li.quantity || 0),
+              warehouseId: sr.warehouse_id || '',
+              warehouseName: sr.warehouse_name || '',
+              movementType: 'SALES_RETURN',
+              referenceNumber: `REV-${sr.return_number}`,
+              referenceId: `${id}-REV`,
+              notes: `Reversed Sales Return ${sr.return_number}`,
+              actorName
+            });
+          }
+        }
+        await conn.query('DELETE FROM `solar_stock_movements` WHERE `reference_id` IN (?, ?)', [id, `${id}-REV`]);
+      }
+
+      if (sr.bank_account_id && Number(sr.refund_amount || 0) > 0) {
+        await conn.query(
+          'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+          [round2(Number(sr.refund_amount || 0)), sr.bank_account_id]
+        );
+      }
+
+      const retAmt = round2(Number(sr.total_amount || 0));
+      const refAmt = round2(Number(sr.refund_amount || 0));
+
+      if (sr.target_type === 'VENDOR_INVOICE') {
+        const [invRows]: any = await conn.query('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE', [sr.invoice_id]);
+        const inv = invRows?.[0];
+        if (inv) {
+          const total = round2(Number(inv.total_amount || 0));
+          const paid = round2(Number(inv.paid_amount || 0));
+          const nextReturned = round2(Math.max(0, Number(inv.returned_amount || 0) - retAmt));
+          const nextRefunded = round2(Math.max(0, Number(inv.refunded_amount || 0) - refAmt));
+          const nextNetPaid = round2(Math.max(0, paid - nextRefunded));
+          const nextBal = round2(Math.max(0, total - nextReturned - nextNetPaid));
+          const dueDate = toSqlDate(inv.due_date) || '';
+          const today = todaySql();
+          const nextStatus =
+            nextBal <= 0.01 && total > 0
+              ? 'PAID'
+              : nextNetPaid > 0.01
+              ? 'PARTIALLY_PAID'
+              : dueDate && dueDate < today
+              ? 'OVERDUE'
+              : 'ISSUED';
+          await conn.query(
+            'UPDATE `solar_vendor_sales_invoices` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
+            [nextReturned, nextRefunded, nextBal, nextStatus, inv.id]
+          );
+        }
+      } else {
+        const [invRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE', [sr.invoice_id]);
+        const inv = invRows?.[0];
+        if (inv) {
+          const total = round2(Number(inv.total_amount || 0));
+          const paid = round2(Number(inv.paid_amount || 0));
+          const nextReturned = round2(Math.max(0, Number(inv.returned_amount || 0) - retAmt));
+          const nextRefunded = round2(Math.max(0, Number(inv.refunded_amount || 0) - refAmt));
+          const nextNetPaid = round2(Math.max(0, paid - nextRefunded));
+          const nextBal = round2(Math.max(0, total - nextReturned - nextNetPaid));
+          const nextStatus = nextBal <= 0.01 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+          await conn.query(
+            'UPDATE `solar_sales_invoices` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+            [nextReturned, nextRefunded, nextBal, nextStatus, inv.id]
+          );
+        }
+      }
+
+      const jeIds = [sr.credit_journal_entry_id, sr.refund_journal_entry_id].filter(Boolean);
+      if (jeIds.length > 0) {
+        const placeholders = jeIds.map(() => '?').join(',');
+        await conn.query(`DELETE FROM \`solar_acc_journal_entries\` WHERE \`id\` IN (${placeholders})`, jeIds);
+        await this.recalculateAccountBalances(conn);
+      }
+
+      await conn.query('DELETE FROM `solar_sales_returns` WHERE `id` = ?', [id]);
+      await this.logAudit(
+        conn,
+        actor,
+        'SALES_RETURNS',
+        'DELETE_SALES_RETURN',
+        id,
+        sr.return_number,
+        `Deleted & reversed Sales Return ${sr.return_number} (₹${retAmt.toFixed(2)})`
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  // ==========================================================
+  // PURCHASE RETURNS (DEBIT NOTES + INVENTORY DEDUCTION + VENDOR REFUND + GL)
+  // ==========================================================
+  public async getPurchaseReturns(pool: mysql.Pool): Promise<any[]> {
+    await this.ensureAccountingSchema(pool);
+    const [rows]: any = await pool.query('SELECT * FROM `solar_purchase_returns` ORDER BY `return_date` DESC, `created_at` DESC');
+    if (!rows || rows.length === 0) return [];
+    const [itemRows]: any = await pool.query('SELECT * FROM `solar_purchase_return_items` ORDER BY `line_order` ASC, `id` ASC');
+    const itemsByReturn = new Map<string, any[]>();
+    for (const it of itemRows || []) {
+      const list = itemsByReturn.get(it.return_id) || [];
+      list.push({
+        id: it.id,
+        productId: it.product_id || undefined,
+        description: it.description,
+        hsnCode: it.hsn_code || '',
+        unit: it.unit || 'Nos',
+        originalQuantity: Number(it.original_quantity) || 0,
+        quantity: Number(it.quantity) || 0,
+        rate: Number(it.rate) || 0,
+        taxableAmount: Number(it.taxable_amount) || 0,
+        gstRate: Number(it.gst_rate) || 0,
+        cgstAmount: Number(it.cgst_amount) || 0,
+        sgstAmount: Number(it.sgst_amount) || 0,
+        igstAmount: Number(it.igst_amount) || 0,
+        taxAmount: Number(it.tax_amount) || 0,
+        totalAmount: Number(it.total_amount) || 0
+      });
+      itemsByReturn.set(it.return_id, list);
+    }
+    return (rows || []).map((r: any) => ({
+      id: r.id,
+      returnNumber: r.return_number,
+      returnDate: toSqlDate(r.return_date) || '',
+      purchaseOrderId: r.purchase_order_id,
+      poNumber: r.po_number || '',
+      vendorBillId: r.vendor_bill_id || '',
+      vendorId: r.vendor_id || '',
+      vendorName: r.vendor_name,
+      projectId: r.project_id || '',
+      projectTitle: r.project_title || '',
+      reason: r.reason || '',
+      notes: r.notes || '',
+      warehouseId: r.warehouse_id || '',
+      warehouseName: r.warehouse_name || '',
+      deductInventory: Boolean(r.deduct_inventory),
+      items: itemsByReturn.get(r.id) || [],
+      subtotal: Number(r.subtotal) || 0,
+      cgstAmount: Number(r.cgst_amount) || 0,
+      sgstAmount: Number(r.sgst_amount) || 0,
+      igstAmount: Number(r.igst_amount) || 0,
+      taxAmount: Number(r.tax_amount) || 0,
+      totalAmount: Number(r.total_amount) || 0,
+      settlementMode: r.settlement_mode === 'VENDOR_REFUND' ? 'VENDOR_REFUND' : 'DEBIT_NOTE',
+      refundAmount: Number(r.refund_amount) || 0,
+      bankAccountId: r.bank_account_id || '',
+      bankAccountName: r.bank_account_name || '',
+      debitJournalEntryId: r.debit_journal_entry_id || '',
+      refundJournalEntryId: r.refund_journal_entry_id || '',
+      status: r.status || 'POSTED',
+      createdBy: r.created_by || '',
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }));
+  }
+
+  public async createPurchaseReturn(pool: mysql.Pool, payload: any, actor: any): Promise<any> {
+    await this.ensureAccountingSchema(pool);
+    const poId = String(payload?.purchaseOrderId || '').trim();
+    if (!poId) {
+      const err: any = new Error('Source Purchase Order is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+    const submittedItems = rawItems.filter((it: any) => Number(it?.quantity || 0) > 0);
+    if (submittedItems.length === 0) {
+      const err: any = new Error('Specify return quantity greater than 0 for at least one line item.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const settings = await this.getSettingsRow(conn);
+      const returnDate = toSqlDate(payload?.returnDate) || todaySql();
+      await this.assertNotLockedDate(conn, returnDate);
+
+      const [poRows]: any = await conn.query('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? FOR UPDATE', [poId]);
+      const po = poRows?.[0];
+      if (!po) {
+        const err: any = new Error('Purchase order not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const poStatus = String(po.status || 'ISSUED').toUpperCase();
+      if (poStatus === 'CANCELLED' || poStatus === 'DRAFT') {
+        const err: any = new Error(`Cannot record purchase return against a ${poStatus} purchase order.`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      let origItems: any[] = [];
+      try {
+        origItems = po.items_json ? JSON.parse(po.items_json) : [];
+      } catch {
+        origItems = [];
+      }
+      const anyReceived = origItems.some((it: any) => Number(it?.receivedQuantity || 0) > 0);
+      const poEffGst = Number(po.subtotal || 0) > 0 ? round2((Number(po.gst_amount || 0) / Number(po.subtotal)) * 100) : 18;
+
+      const [prevItemRows]: any = await conn.query(
+        `SELECT pri.\`product_id\`, pri.\`description\`, SUM(pri.\`quantity\`) AS prev_qty
+         FROM \`solar_purchase_return_items\` pri
+         INNER JOIN \`solar_purchase_returns\` pr ON pr.\`id\` = pri.\`return_id\`
+         WHERE pr.\`purchase_order_id\` = ? AND pr.\`status\` = 'POSTED'
+         GROUP BY pri.\`product_id\`, pri.\`description\``,
+        [poId]
+      );
+      const prevByKey = new Map<string, number>();
+      for (const r of prevItemRows || []) {
+        const key = r.product_id ? `pid:${r.product_id}` : `desc:${String(r.description || '').trim().toLowerCase()}`;
+        prevByKey.set(key, (prevByKey.get(key) || 0) + (Number(r.prev_qty) || 0));
+      }
+
+      let subtotal = 0;
+      let cgstTotal = 0;
+      let sgstTotal = 0;
+      const computedLines: any[] = [];
+
+      for (const subItem of submittedItems) {
+        const reqPid = String(subItem?.productId || '').trim();
+        const reqDesc = String(subItem?.description || '').trim();
+        const qty = Math.round(Number(subItem.quantity) * 1000) / 1000;
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        const match = origItems.find((oi: any) =>
+          (reqPid && String(oi.productId || '') === reqPid) ||
+          (reqDesc && String(oi.productName || oi.description || oi.name || '').trim().toLowerCase() === reqDesc.toLowerCase())
+        );
+        if (!match) {
+          const err: any = new Error(`Return item "${reqDesc || reqPid}" does not match any line item on PO ${po.po_number}.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const baseQty = anyReceived
+          ? Number(match.receivedQuantity || 0)
+          : Number(match.orderedQuantity ?? match.quantity ?? 0);
+        const itemKey = (match.productId || reqPid)
+          ? `pid:${match.productId || reqPid}`
+          : `desc:${String(match.productName || match.description || match.name || reqDesc).trim().toLowerCase()}`;
+        const prevQty = prevByKey.get(itemKey) || 0;
+        const maxRemainingQty = Math.round(Math.max(0, baseQty - prevQty) * 1000) / 1000;
+        if (qty > maxRemainingQty + 0.001) {
+          const err: any = new Error(
+            `Return quantity (${qty}) for "${match.productName || match.description || reqDesc}" exceeds remaining returnable quantity (${maxRemainingQty}).`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
+        prevByKey.set(itemKey, prevQty + qty);
+
+        const rate = round2(Number(match.unitPrice ?? match.rate ?? 0));
+        const lineTaxable = round2(qty * rate);
+        const gstRate = Number(match.gstRate ?? match.taxRatePercent ?? poEffGst);
+        const lineTax = round2((lineTaxable * gstRate) / 100);
+        const lineCgst = round2(lineTax / 2);
+        const lineSgst = round2(lineTax - lineCgst);
+        const lineTotal = round2(lineTaxable + lineTax);
+
+        subtotal = round2(subtotal + lineTaxable);
+        cgstTotal = round2(cgstTotal + lineCgst);
+        sgstTotal = round2(sgstTotal + lineSgst);
+
+        computedLines.push({
+          productId: match.productId || reqPid || null,
+          description: String(match.productName || match.description || match.name || reqDesc),
+          hsnCode: String(match.hsnCode || ''),
+          unit: String(match.unit || 'Nos'),
+          originalQuantity: baseQty,
+          quantity: qty,
+          rate,
+          taxableAmount: lineTaxable,
+          gstRate,
+          cgstAmount: lineCgst,
+          sgstAmount: lineSgst,
+          igstAmount: 0,
+          taxAmount: lineTax,
+          totalAmount: lineTotal
+        });
+      }
+
+      if (computedLines.length === 0) {
+        const err: any = new Error('No valid returnable line items found.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const taxAmount = round2(cgstTotal + sgstTotal);
+      const totalAmount = round2(subtotal + taxAmount);
+
+      const poTotal = round2(Number(po.total_amount || 0));
+      const poPaid = round2(Number(po.paid_amount || 0));
+      const poReturned = round2(Number(po.returned_amount || 0));
+      const poRefunded = round2(Number(po.refunded_amount || 0));
+      const remainingReturnValue = round2(Math.max(0, poTotal - poReturned));
+      if (totalAmount > remainingReturnValue + 0.05) {
+        const err: any = new Error(`Return total (₹${totalAmount.toFixed(2)}) exceeds remaining non-returned PO value (₹${remainingReturnValue.toFixed(2)}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const settlementMode = payload?.settlementMode === 'VENDOR_REFUND' ? 'VENDOR_REFUND' : 'DEBIT_NOTE';
+      const refundAmount = settlementMode === 'VENDOR_REFUND' ? round2(Number(payload?.refundAmount ?? totalAmount)) : 0;
+      const netPaidSoFar = round2(Math.max(0, poPaid - poRefunded));
+
+      let bank: any = null;
+      let bankCoaId = '';
+      if (settlementMode === 'VENDOR_REFUND') {
+        if (netPaidSoFar <= 0) {
+          const err: any = new Error('Cannot record a vendor refund because no net payment has been made on this PO. Use Debit Note adjustment instead.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+          const err: any = new Error('Refund amount must be greater than zero for Vendor Refund settlement.');
+          err.statusCode = 400;
+          throw err;
+        }
+        if (refundAmount > totalAmount + 0.01) {
+          const err: any = new Error(`Refund amount (₹${refundAmount.toFixed(2)}) cannot exceed Debit Note total (₹${totalAmount.toFixed(2)}).`);
+          err.statusCode = 400;
+          throw err;
+        }
+        if (refundAmount > netPaidSoFar + 0.01) {
+          const err: any = new Error(`Refund amount (₹${refundAmount.toFixed(2)}) exceeds net paid amount available for refund (₹${netPaidSoFar.toFixed(2)}).`);
+          err.statusCode = 400;
+          throw err;
+        }
+        const resolved = await this.resolveBankAccountTx(conn, payload?.bankAccountId, settings);
+        bank = resolved.bank;
+        bankCoaId = resolved.coaId;
+      }
+
+      const bill = await this.ensurePurchaseOrderBillTx(conn, po, settings, actor);
+
+      const id = `pr-${Date.now()}-${randHex(3)}`;
+      const returnNumber = String(payload?.returnNumber || `DN-${returnDate.slice(0, 4)}-${randDigits(4)}`).trim();
+      const deductInventory = payload?.deductInventory !== false;
+      const warehouseId = String(payload?.warehouseId || po.warehouse_id || '').trim();
+      const warehouseName = String(payload?.warehouseName || po.warehouse_name || '').trim();
+      const actorName = String(actor?.name || actor?.email || 'Admin');
+
+      // Deduct stock first if enabled so insufficient stock aborts cleanly before GL posting
+      if (deductInventory) {
+        for (const li of computedLines) {
+          if (li.productId) {
+            await this.adjustProductStockTx(conn, {
+              productId: li.productId,
+              deltaQty: -li.quantity,
+              warehouseId,
+              warehouseName,
+              movementType: 'PURCHASE_RETURN',
+              referenceNumber: returnNumber,
+              referenceId: id,
+              notes: `Purchase Return ${returnNumber} to ${po.vendor_name} (PO ${po.po_number})`,
+              actorName
+            });
+          }
+        }
+      }
+
+      // 1. Post Debit Note Journal Entry: Dr AP / Cr COGS (+ Cr Input GST ITC)
+      const dnLines: any[] = [
+        {
+          accountId: settings.default_ap_account_id || 'acc-2010',
+          description: `Debit Note ${returnNumber} - ${po.vendor_name} (PO ${po.po_number})`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: totalAmount,
+          credit: 0
+        },
+        {
+          accountId: settings.default_cogs_account_id || 'acc-5010',
+          description: `Purchase Return ${returnNumber} - Material Credit`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: 0,
+          credit: subtotal
+        }
+      ];
+      if (taxAmount > 0) {
+        dnLines.push({
+          accountId: settings.default_input_gst_account_id || 'acc-1150',
+          description: `Input GST ITC Reversal - ${returnNumber}`,
+          projectId: po.project_id || '',
+          projectTitle: po.project_title || '',
+          partyType: 'VENDOR',
+          partyId: po.vendor_id || '',
+          partyName: po.vendor_name || '',
+          debit: 0,
+          credit: taxAmount
+        });
+      }
+
+      const debitJournalEntryId = await this.insertAndPostJournalTx(
+        conn,
+        {
+          entryDate: returnDate,
+          referenceType: 'PURCHASE_RETURN',
+          referenceId: id,
+          referenceNumber: returnNumber,
+          narration: `Purchase Return ${returnNumber} against PO ${po.po_number} (${po.vendor_name})`,
+          status: 'POSTED',
+          lines: dnLines
+        },
+        actor
+      );
+
+      // 2. Optional Vendor Refund Journal Entry + Bank Balance increase
+      let refundJournalEntryId = '';
+      if (settlementMode === 'VENDOR_REFUND' && bank && refundAmount > 0) {
+        await conn.query(
+          'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+          [refundAmount, bank.id]
+        );
+        refundJournalEntryId = await this.insertAndPostJournalTx(
+          conn,
+          {
+            entryDate: returnDate,
+            referenceType: 'PURCHASE_RETURN_REFUND',
+            referenceId: id,
+            referenceNumber: returnNumber,
+            narration: `Vendor Refund ${returnNumber} from ${po.vendor_name} into ${bank.account_name}`,
+            status: 'POSTED',
+            lines: [
+              {
+                accountId: bankCoaId,
+                description: `Vendor refund received in ${bank.account_name}`,
+                projectId: po.project_id || '',
+                projectTitle: po.project_title || '',
+                partyType: 'VENDOR',
+                partyId: po.vendor_id || '',
+                partyName: po.vendor_name || '',
+                debit: refundAmount,
+                credit: 0
+              },
+              {
+                accountId: settings.default_ap_account_id || 'acc-2010',
+                description: `Vendor refund adjustment ${returnNumber} - ${po.vendor_name}`,
+                projectId: po.project_id || '',
+                projectTitle: po.project_title || '',
+                partyType: 'VENDOR',
+                partyId: po.vendor_id || '',
+                partyName: po.vendor_name || '',
+                debit: 0,
+                credit: refundAmount
+              }
+            ]
+          },
+          actor
+        );
+      }
+
+      // 3. Persist Purchase Return header & lines
+      await conn.query(
+        `INSERT INTO \`solar_purchase_returns\`
+         (\`id\`, \`return_number\`, \`return_date\`, \`purchase_order_id\`, \`po_number\`, \`vendor_bill_id\`, \`vendor_id\`, \`vendor_name\`, \`project_id\`, \`project_title\`, \`reason\`, \`notes\`, \`warehouse_id\`, \`warehouse_name\`, \`deduct_inventory\`, \`subtotal\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`tax_amount\`, \`total_amount\`, \`settlement_mode\`, \`refund_amount\`, \`bank_account_id\`, \`bank_account_name\`, \`debit_journal_entry_id\`, \`refund_journal_entry_id\`, \`status\`, \`created_by\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'POSTED', ?)`,
+        [
+          id, returnNumber, returnDate, po.id, po.po_number, bill?.id || '', po.vendor_id || '', po.vendor_name || 'Vendor',
+          po.project_id || '', po.project_title || '', String(payload?.reason || '').trim(), String(payload?.notes || '').trim(),
+          warehouseId, warehouseName, deductInventory ? 1 : 0, subtotal, cgstTotal, sgstTotal, 0, taxAmount, totalAmount,
+          settlementMode, refundAmount, bank?.id || '', bank?.account_name || '', debitJournalEntryId, refundJournalEntryId, actorName
+        ]
+      );
+
+      for (let i = 0; i < computedLines.length; i++) {
+        const li = computedLines[i];
+        await conn.query(
+          `INSERT INTO \`solar_purchase_return_items\`
+           (\`id\`, \`return_id\`, \`line_order\`, \`product_id\`, \`description\`, \`hsn_code\`, \`unit\`, \`original_quantity\`, \`quantity\`, \`rate\`, \`taxable_amount\`, \`gst_rate\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`tax_amount\`, \`total_amount\`)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            `pri-${id}-${i}`, id, i, li.productId || null, li.description, li.hsnCode, li.unit,
+            li.originalQuantity, li.quantity, li.rate, li.taxableAmount, li.gstRate,
+            li.cgstAmount, li.sgstAmount, li.igstAmount, li.taxAmount, li.totalAmount
+          ]
+        );
+      }
+
+      // 4. Update PO and linked Vendor Bill balances
+      const nextReturned = round2(poReturned + totalAmount);
+      const nextRefunded = round2(poRefunded + refundAmount);
+      const nextNetPaid = round2(Math.max(0, poPaid - nextRefunded));
+      const nextBalance = round2(Math.max(0, poTotal - nextReturned - nextNetPaid));
+      const nextPoPayStatus = nextBalance <= 0.01 && poTotal > 0 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING');
+
+      await conn.query(
+        'UPDATE `solar_purchase_orders` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+        [nextReturned, nextRefunded, nextBalance, nextPoPayStatus, po.id]
+      );
+
+      if (bill) {
+        const nextBillStatus = nextBalance <= 0.01 && Number(bill.total_amount || 0) > 0 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+        await conn.query(
+          'UPDATE `solar_acc_vendor_bills` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
+          [nextReturned, nextRefunded, nextBalance, nextBillStatus, bill.id]
+        );
+      }
+
+      await this.logAudit(
+        conn,
+        actor,
+        'PURCHASE_RETURNS',
+        'CREATE_PURCHASE_RETURN',
+        id,
+        returnNumber,
+        `Recorded Purchase Return ${returnNumber} (₹${totalAmount.toFixed(2)}${refundAmount > 0 ? `, Vendor Refund ₹${refundAmount.toFixed(2)}` : ''}) for PO ${po.po_number}`
+      );
+      await conn.commit();
+      return { id, returnNumber, totalAmount, refundAmount, debitJournalEntryId, refundJournalEntryId };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async deletePurchaseReturn(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_purchase_returns` WHERE `id` = ? FOR UPDATE', [id]);
+      const pr = rows?.[0];
+      if (!pr) {
+        const err: any = new Error('Purchase return not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      await this.assertNotLockedDate(conn, toSqlDate(pr.return_date) || todaySql());
+
+      const [items]: any = await conn.query('SELECT * FROM `solar_purchase_return_items` WHERE `return_id` = ?', [id]);
+      const actorName = String(actor?.name || actor?.email || 'Admin');
+
+      if (pr.deduct_inventory) {
+        for (const li of items || []) {
+          if (li.product_id) {
+            await this.adjustProductStockTx(conn, {
+              productId: li.product_id,
+              deltaQty: Number(li.quantity || 0),
+              warehouseId: pr.warehouse_id || '',
+              warehouseName: pr.warehouse_name || '',
+              movementType: 'PURCHASE_RETURN',
+              referenceNumber: `REV-${pr.return_number}`,
+              referenceId: `${id}-REV`,
+              notes: `Reversed Purchase Return ${pr.return_number}`,
+              actorName
+            });
+          }
+        }
+        await conn.query('DELETE FROM `solar_stock_movements` WHERE `reference_id` IN (?, ?)', [id, `${id}-REV`]);
+      }
+
+      if (pr.bank_account_id && Number(pr.refund_amount || 0) > 0) {
+        await conn.query(
+          'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+          [round2(Number(pr.refund_amount || 0)), pr.bank_account_id]
+        );
+      }
+
+      const retAmt = round2(Number(pr.total_amount || 0));
+      const refAmt = round2(Number(pr.refund_amount || 0));
+
+      const [poRows]: any = await conn.query('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? FOR UPDATE', [pr.purchase_order_id]);
+      const po = poRows?.[0];
+      if (po) {
+        const total = round2(Number(po.total_amount || 0));
+        const paid = round2(Number(po.paid_amount || 0));
+        const nextReturned = round2(Math.max(0, Number(po.returned_amount || 0) - retAmt));
+        const nextRefunded = round2(Math.max(0, Number(po.refunded_amount || 0) - refAmt));
+        const nextNetPaid = round2(Math.max(0, paid - nextRefunded));
+        const nextBal = round2(Math.max(0, total - nextReturned - nextNetPaid));
+        const nextStatus = nextBal <= 0.01 && total > 0 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING');
+        await conn.query(
+          'UPDATE `solar_purchase_orders` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+          [nextReturned, nextRefunded, nextBal, nextStatus, po.id]
+        );
+      }
+
+      if (pr.vendor_bill_id) {
+        const [billRows]: any = await conn.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? FOR UPDATE', [pr.vendor_bill_id]);
+        const bill = billRows?.[0];
+        if (bill) {
+          const total = round2(Number(bill.total_amount || 0));
+          const paid = round2(Number(bill.paid_amount || 0));
+          const nextReturned = round2(Math.max(0, Number(bill.returned_amount || 0) - retAmt));
+          const nextRefunded = round2(Math.max(0, Number(bill.refunded_amount || 0) - refAmt));
+          const nextNetPaid = round2(Math.max(0, paid - nextRefunded));
+          const nextBal = round2(Math.max(0, total - nextReturned - nextNetPaid));
+          const nextBillStatus = nextBal <= 0.01 && total > 0 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+          await conn.query(
+            'UPDATE `solar_acc_vendor_bills` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
+            [nextReturned, nextRefunded, nextBal, nextBillStatus, bill.id]
+          );
+        }
+      }
+
+      const jeIds = [pr.debit_journal_entry_id, pr.refund_journal_entry_id].filter(Boolean);
+      if (jeIds.length > 0) {
+        const placeholders = jeIds.map(() => '?').join(',');
+        await conn.query(`DELETE FROM \`solar_acc_journal_entries\` WHERE \`id\` IN (${placeholders})`, jeIds);
+        await this.recalculateAccountBalances(conn);
+      }
+
+      await conn.query('DELETE FROM `solar_purchase_returns` WHERE `id` = ?', [id]);
+      await this.logAudit(
+        conn,
+        actor,
+        'PURCHASE_RETURNS',
+        'DELETE_PURCHASE_RETURN',
+        id,
+        pr.return_number,
+        `Deleted & reversed Purchase Return ${pr.return_number} (₹${retAmt.toFixed(2)})`
+      );
+      await conn.commit();
     } catch (err) {
       await conn.rollback();
       throw err;

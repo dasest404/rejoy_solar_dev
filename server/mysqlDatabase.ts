@@ -265,6 +265,11 @@ class MySqlDatabaseManager {
           invoice_reference: "VARCHAR(128) DEFAULT ''",
           stock_updated: "TINYINT(1) DEFAULT 0",
           received_date: "DATE DEFAULT NULL",
+          paid_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          returned_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          refunded_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          balance_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          bank_account_id: "VARCHAR(64) DEFAULT ''",
           updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
         },
         solar_boms: {
@@ -314,6 +319,9 @@ class MySqlDatabaseManager {
           einvoice_ack_no: "VARCHAR(64) DEFAULT ''",
           einvoice_ack_date: "VARCHAR(64) DEFAULT ''",
           einvoice_status: "VARCHAR(32) DEFAULT 'NOT_GENERATED'",
+          returned_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          refunded_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          bank_account_id: "VARCHAR(64) DEFAULT ''",
           updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
         },
         solar_warehouses: {
@@ -5269,12 +5277,24 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('purchase_orders');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_purchase_orders` ORDER BY `created_at` DESC');
+    const [bankRows]: any = await this.pool!.query('SELECT `id`, `account_name` FROM `solar_acc_bank_accounts`').catch(() => [[]]);
+    const bankMap = new Map<string, string>((bankRows || []).map((b: any) => [b.id, b.account_name]));
     const mapped = (rows as any[]).map(r => {
       const poDate = this.toSqlDate(r.po_date) || '';
       const expDate = this.toSqlDate(r.expected_delivery_date) || '';
       const payDue = this.toSqlDate(r.payment_due_date) || undefined;
       const recDate = this.toSqlDate(r.received_date) || undefined;
       const receipts = r.receipts_json ? JSON.parse(r.receipts_json) : [];
+      const totalAmount = roundCurrency(Number(r.total_amount) || 0);
+      const paidAmount = roundCurrency(Number(r.paid_amount) || 0);
+      const returnedAmount = roundCurrency(Number(r.returned_amount) || 0);
+      const refundedAmount = roundCurrency(Number(r.refunded_amount) || 0);
+      const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
+      const balanceAmount = roundCurrency(
+        r.balance_amount !== undefined && r.balance_amount !== null && (paidAmount > 0 || returnedAmount > 0 || Number(r.balance_amount) > 0)
+          ? Math.max(0, Number(r.balance_amount))
+          : (String(r.payment_status || '').toUpperCase() === 'PAID' ? 0 : Math.max(0, totalAmount - returnedAmount - netPaid))
+      );
       return {
         id: r.id,
         purchaseNumber: r.po_number,
@@ -5296,8 +5316,14 @@ class MySqlDatabaseManager {
         subtotal: Number(r.subtotal) || 0,
         gstAmount: Number(r.gst_amount) || 0,
         taxAmount: Number(r.gst_amount) || 0,
-        totalAmount: Number(r.total_amount) || 0,
-        grandTotal: Number(r.total_amount) || 0,
+        totalAmount,
+        grandTotal: totalAmount,
+        paidAmount,
+        returnedAmount,
+        refundedAmount,
+        balanceAmount,
+        bankAccountId: r.bank_account_id || '',
+        bankAccountName: r.bank_account_id ? (bankMap.get(r.bank_account_id) || '') : '',
         status: r.status || 'ISSUED',
         paymentStatus: r.payment_status || 'PENDING',
         items: r.items_json ? JSON.parse(r.items_json) : [],
@@ -5336,11 +5362,20 @@ class MySqlDatabaseManager {
     const rawItems = item.items ?? (existing?.items_json ? JSON.parse(existing.items_json) : []);
     const itemsArr = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
     const itemsJson = typeof rawItems === 'string' ? rawItems : JSON.stringify(rawItems);
-    const subtotal = Number(item.subtotal ?? existing?.subtotal) || 0;
-    const gstAmount = Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0;
-    const totalAmount = Number(item.totalAmount ?? item.grandTotal ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount);
+    const subtotal = roundCurrency(Number(item.subtotal ?? existing?.subtotal) || 0);
+    const gstAmount = roundCurrency(Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0);
+    const totalAmount = roundCurrency(Number(item.totalAmount ?? item.grandTotal ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount));
     const status = item.status ?? existing?.status ?? 'ISSUED';
-    const paymentStatus = item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'PENDING';
+    const paidAmount = roundCurrency(Number(existing ? existing.paid_amount : (item.paidAmount ?? 0)) || 0);
+    const returnedAmount = roundCurrency(Number(existing?.returned_amount ?? item.returnedAmount ?? 0) || 0);
+    const refundedAmount = roundCurrency(Number(existing?.refunded_amount ?? item.refundedAmount ?? 0) || 0);
+    const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
+    const balanceAmount = roundCurrency(Math.max(0, totalAmount - returnedAmount - netPaid));
+    const requestedPayStatus = item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'PENDING';
+    const paymentStatus = existing && (paidAmount > 0 || returnedAmount > 0)
+      ? (balanceAmount <= 0.01 && totalAmount > 0 ? 'PAID' : (netPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING'))
+      : requestedPayStatus;
+    const bankAccountId = String(item.bankAccountId ?? existing?.bank_account_id ?? '').trim();
     const rawReceipts = item.deliveryReceipts ?? item.receipts ?? (existing?.receipts_json ? JSON.parse(existing.receipts_json) : []);
     const receiptsArr = typeof rawReceipts === 'string' ? JSON.parse(rawReceipts) : rawReceipts;
     const receiptsJson = typeof rawReceipts === 'string' ? rawReceipts : JSON.stringify(rawReceipts);
@@ -5353,8 +5388,9 @@ class MySqlDatabaseManager {
         \`warehouse_id\`, \`warehouse_name\`, \`payment_due_date\`,
         \`invoice_reference\`, \`stock_updated\`, \`received_date\`,
         \`items_json\`, \`subtotal\`, \`gst_amount\`, \`total_amount\`,
+        \`paid_amount\`, \`returned_amount\`, \`refunded_amount\`, \`balance_amount\`, \`bank_account_id\`,
         \`status\`, \`payment_status\`, \`receipts_json\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`po_number\` = VALUES(\`po_number\`), \`vendor_id\` = VALUES(\`vendor_id\`),
         \`vendor_name\` = VALUES(\`vendor_name\`), \`po_date\` = VALUES(\`po_date\`),
@@ -5365,6 +5401,9 @@ class MySqlDatabaseManager {
         \`stock_updated\` = VALUES(\`stock_updated\`), \`received_date\` = VALUES(\`received_date\`),
         \`items_json\` = VALUES(\`items_json\`), \`subtotal\` = VALUES(\`subtotal\`),
         \`gst_amount\` = VALUES(\`gst_amount\`), \`total_amount\` = VALUES(\`total_amount\`),
+        \`paid_amount\` = VALUES(\`paid_amount\`), \`returned_amount\` = VALUES(\`returned_amount\`),
+        \`refunded_amount\` = VALUES(\`refunded_amount\`), \`balance_amount\` = VALUES(\`balance_amount\`),
+        \`bank_account_id\` = VALUES(\`bank_account_id\`),
         \`status\` = VALUES(\`status\`), \`payment_status\` = VALUES(\`payment_status\`),
         \`receipts_json\` = VALUES(\`receipts_json\`), \`notes\` = VALUES(\`notes\`)
     `;
@@ -5374,6 +5413,7 @@ class MySqlDatabaseManager {
       warehouseId, warehouseName, paymentDueDate,
       invoiceReference, stockUpdated, receivedDate,
       itemsJson, subtotal, gstAmount, totalAmount,
+      paidAmount, returnedAmount, refundedAmount, balanceAmount, bankAccountId,
       status, paymentStatus, receiptsJson, notes
     ]);
 
@@ -5402,6 +5442,11 @@ class MySqlDatabaseManager {
       gstAmount,
       totalAmount,
       grandTotal: totalAmount,
+      paidAmount,
+      returnedAmount,
+      refundedAmount,
+      balanceAmount,
+      bankAccountId,
       status,
       paymentStatus,
       deliveryReceipts: receiptsArr,
@@ -5420,6 +5465,24 @@ class MySqlDatabaseManager {
 
   public async deletePurchaseOrder(id: string): Promise<boolean> {
     this.assertDbConnected();
+    const [prRows]: any = await this.pool!.query('SELECT COUNT(*) AS cnt FROM `solar_purchase_returns` WHERE `purchase_order_id` = ?', [id]).catch(() => [[{ cnt: 0 }]]);
+    if (Number(prRows?.[0]?.cnt || 0) > 0) {
+      const err: any = new Error('Cannot delete Purchase Order with Purchase Returns recorded. Reverse/delete the Purchase Returns first.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const [vbRows]: any = await this.pool!.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `po_id` = ? LIMIT 1', [id]).catch(() => [[]]);
+    if (vbRows?.[0]) {
+      if (Number(vbRows[0].paid_amount || 0) > 0) {
+        const err: any = new Error('Cannot delete Purchase Order with vendor payments recorded. Reverse vendor payments first.');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (vbRows[0].journal_entry_id) {
+        await this.pool!.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [vbRows[0].journal_entry_id]).catch(() => {});
+      }
+      await this.pool!.query('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?', [vbRows[0].id]).catch(() => {});
+    }
     await this.pool!.query('DELETE FROM `solar_purchase_orders` WHERE `id` = ?', [id]);
     const items = this.getFallbackItems('purchase_orders').filter(p => p.id !== id);
     this.setFallbackItems('purchase_orders', items);
@@ -5568,11 +5631,18 @@ class MySqlDatabaseManager {
     if (!this.isConnected) return this.getFallbackItems('sales_invoices');
     this.assertDbConnected();
     const [rows] = await this.pool!.query('SELECT * FROM `solar_sales_invoices` ORDER BY `created_at` DESC');
+    const [bankRows]: any = await this.pool!.query('SELECT `id`, `account_name` FROM `solar_acc_bank_accounts`').catch(() => [[]]);
+    const bankMap = new Map<string, string>((bankRows || []).map((b: any) => [b.id, b.account_name]));
     const mapped = (rows as any[]).map(r => {
       const invDate = this.toSqlDate(r.invoice_date) || '';
       const dueDate = this.toSqlDate(r.due_date) || '';
       let ewayBillDetails: any = undefined;
       try { if (r.eway_bill_details_json) ewayBillDetails = JSON.parse(r.eway_bill_details_json); } catch {}
+      const totalAmount = Number(r.total_amount) || 0;
+      const paidAmount = Number(r.paid_amount) || 0;
+      const returnedAmount = Number(r.returned_amount) || 0;
+      const refundedAmount = Number(r.refunded_amount) || 0;
+      const balanceAmount = Number(r.balance_amount) || 0;
       return {
         id: r.id,
         invoiceNumber: r.invoice_number,
@@ -5589,14 +5659,18 @@ class MySqlDatabaseManager {
         subtotal: Number(r.subtotal) || 0,
         gstAmount: Number(r.gst_amount) || 0,
         taxAmount: Number(r.gst_amount) || 0,
-        totalAmount: Number(r.total_amount) || 0,
-        grandTotal: Number(r.total_amount) || 0,
+        totalAmount,
+        grandTotal: totalAmount,
         paymentStatus: r.payment_status || 'ISSUED',
         status: r.payment_status || 'ISSUED',
-        paidAmount: Number(r.paid_amount) || 0,
-        amountPaid: Number(r.paid_amount) || 0,
-        balanceAmount: Number(r.balance_amount) || 0,
-        balanceDue: Number(r.balance_amount) || 0,
+        paidAmount,
+        amountPaid: paidAmount,
+        returnedAmount,
+        refundedAmount,
+        balanceAmount,
+        balanceDue: balanceAmount,
+        bankAccountId: r.bank_account_id || '',
+        bankAccountName: r.bank_account_id ? (bankMap.get(r.bank_account_id) || '') : '',
         ewayBillNumber: r.eway_bill_number || '',
         ewayBillDetails,
         cgstAmount: Number(r.cgst_amount) || 0,
@@ -5619,7 +5693,7 @@ class MySqlDatabaseManager {
     return mapped;
   }
 
-  public async saveSalesInvoice(item: any): Promise<any> {
+  public async saveSalesInvoice(item: any, actor?: any): Promise<any> {
     this.assertDbConnected();
     const id = item.id || `inv-${Date.now()}`;
     const existing = await this.getExistingRow('solar_sales_invoices', id);
@@ -5649,13 +5723,17 @@ class MySqlDatabaseManager {
             ? subtotal + gstAmount
             : (Number(existing?.total_amount) || (subtotal + gstAmount)))
     );
+    const returnedAmount = roundCurrency(Number(existing?.returned_amount ?? item.returnedAmount ?? 0) || 0);
+    const refundedAmount = roundCurrency(Number(existing?.refunded_amount ?? item.refundedAmount ?? 0) || 0);
+    const bankAccountId = String(item.bankAccountId ?? existing?.bank_account_id ?? '').trim();
     const status = String(item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'ISSUED');
     const paidAmount = roundCurrency(Number(item.amountPaid ?? item.paidAmount ?? item.paid_amount ?? existing?.paid_amount) || 0);
+    const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
     const rawBal = item.balanceDue ?? item.balanceAmount ?? item.balance_amount;
     const balanceAmount = roundCurrency(
-      rawBal !== undefined && rawBal !== null
+      rawBal !== undefined && rawBal !== null && !returnedAmount
         ? Math.max(0, Number(rawBal) || 0)
-        : (status === 'PAID' ? 0 : Math.max(0, totalAmount - paidAmount))
+        : (status === 'PAID' && returnedAmount <= 0 ? 0 : Math.max(0, totalAmount - returnedAmount - netPaid))
     );
     const ewayBillNumber = item.ewayBillNumber ?? item.eway_bill_number ?? existing?.eway_bill_number ?? '';
     const ewayObj = item.ewayBillDetails !== undefined ? item.ewayBillDetails : (existing?.eway_bill_details_json ? JSON.parse(existing.eway_bill_details_json) : null);
@@ -5699,9 +5777,9 @@ class MySqlDatabaseManager {
         \`invoice_date\`, \`due_date\`, \`payment_terms\`, \`items_json\`, \`subtotal\`, \`gst_amount\`,
         \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`,
         \`einvoice_irn\`, \`einvoice_ack_no\`, \`einvoice_ack_date\`, \`einvoice_status\`,
-        \`total_amount\`, \`payment_status\`, \`paid_amount\`, \`balance_amount\`,
+        \`total_amount\`, \`payment_status\`, \`paid_amount\`, \`returned_amount\`, \`refunded_amount\`, \`balance_amount\`, \`bank_account_id\`,
         \`eway_bill_number\`, \`eway_bill_details_json\`, \`warehouse_id\`, \`deduct_stock\`, \`stock_deducted\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`invoice_type\` = VALUES(\`invoice_type\`), \`project_id\` = VALUES(\`project_id\`),
         \`project_title\` = VALUES(\`project_title\`), \`customer_id\` = VALUES(\`customer_id\`),
@@ -5714,7 +5792,9 @@ class MySqlDatabaseManager {
         \`einvoice_irn\` = VALUES(\`einvoice_irn\`), \`einvoice_ack_no\` = VALUES(\`einvoice_ack_no\`),
         \`einvoice_ack_date\` = VALUES(\`einvoice_ack_date\`), \`einvoice_status\` = VALUES(\`einvoice_status\`),
         \`total_amount\` = VALUES(\`total_amount\`), \`payment_status\` = VALUES(\`payment_status\`),
-        \`paid_amount\` = VALUES(\`paid_amount\`), \`balance_amount\` = VALUES(\`balance_amount\`),
+        \`paid_amount\` = VALUES(\`paid_amount\`), \`returned_amount\` = VALUES(\`returned_amount\`),
+        \`refunded_amount\` = VALUES(\`refunded_amount\`), \`balance_amount\` = VALUES(\`balance_amount\`),
+        \`bank_account_id\` = VALUES(\`bank_account_id\`),
         \`eway_bill_number\` = VALUES(\`eway_bill_number\`), \`eway_bill_details_json\` = VALUES(\`eway_bill_details_json\`),
         \`warehouse_id\` = VALUES(\`warehouse_id\`), \`deduct_stock\` = VALUES(\`deduct_stock\`),
         \`stock_deducted\` = VALUES(\`stock_deducted\`), \`notes\` = VALUES(\`notes\`)
@@ -5725,9 +5805,13 @@ class MySqlDatabaseManager {
       invoiceDate, dueDate, paymentTerms, itemsJson, subtotal, gstAmount,
       cgstAmount, sgstAmount, igstAmount,
       einvoiceIrn, einvoiceAckNo, einvoiceAckDate, einvoiceStatus,
-      totalAmount, status, paidAmount, balanceAmount,
+      totalAmount, status, paidAmount, returnedAmount, refundedAmount, balanceAmount, bankAccountId,
       ewayBillNumber, ewayBillDetailsJson, warehouseId, deductStock, stockDeducted, notes
     ]);
+
+    if (status !== 'DRAFT' && status !== 'CANCELLED' && totalAmount > 0) {
+      await accountingService.ensureSalesInvoiceJournal(this.pool!, id, actor).catch(() => {});
+    }
 
     const saved = {
       ...item,
@@ -5760,8 +5844,11 @@ class MySqlDatabaseManager {
       paymentStatus: status,
       paidAmount,
       amountPaid: paidAmount,
+      returnedAmount,
+      refundedAmount,
       balanceAmount,
       balanceDue: balanceAmount,
+      bankAccountId,
       ewayBillNumber,
       ewayBillDetails: ewayObj || undefined,
       warehouseId,
@@ -5781,6 +5868,25 @@ class MySqlDatabaseManager {
 
   public async deleteSalesInvoice(id: string): Promise<boolean> {
     this.assertDbConnected();
+    const [srRows]: any = await this.pool!.query(
+      "SELECT COUNT(*) AS cnt FROM `solar_sales_returns` WHERE `target_type` = 'CUSTOMER_INVOICE' AND `invoice_id` = ?",
+      [id]
+    ).catch(() => [[{ cnt: 0 }]]);
+    if (Number(srRows?.[0]?.cnt || 0) > 0) {
+      const err: any = new Error('Cannot delete invoice with Sales Returns recorded. Delete the Sales Returns first.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const [payRows]: any = await this.pool!.query('SELECT COUNT(*) AS cnt FROM `solar_payments` WHERE `invoice_id` = ?', [id]).catch(() => [[{ cnt: 0 }]]);
+    if (Number(payRows?.[0]?.cnt || 0) > 0) {
+      const err: any = new Error('Cannot delete invoice with Customer Receipts recorded. Delete the receipts first.');
+      err.statusCode = 400;
+      throw err;
+    }
+    await this.pool!.query(
+      "DELETE FROM `solar_acc_journal_entries` WHERE `reference_type` = 'SALES_INVOICE' AND `reference_id` = ?",
+      [id]
+    ).catch(() => {});
     await this.pool!.query('DELETE FROM `solar_sales_invoices` WHERE `id` = ?', [id]);
     const items = this.getFallbackItems('sales_invoices').filter(i => i.id !== id);
     this.setFallbackItems('sales_invoices', items);
@@ -5794,17 +5900,20 @@ class MySqlDatabaseManager {
     rawStatus: string,
     dueDate: string,
     totalAmount: number,
-    paidAmount: number
+    paidAmount: number,
+    returnedAmount: number = 0,
+    refundedAmount: number = 0
   ): string {
     const status = String(rawStatus || 'ISSUED').toUpperCase();
-    const balance = roundCurrency(Math.max(0, totalAmount - paidAmount));
-    if (status === 'DRAFT' && paidAmount <= 0) {
+    const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
+    const balance = roundCurrency(Math.max(0, totalAmount - returnedAmount - netPaid));
+    if (status === 'DRAFT' && paidAmount <= 0 && returnedAmount <= 0) {
       return 'DRAFT';
     }
     if (totalAmount > 0 && balance <= 0.01) {
       return 'PAID';
     }
-    if (paidAmount > 0) {
+    if (netPaid > 0.01) {
       return 'PARTIALLY_PAID';
     }
     if (dueDate) {
@@ -5816,18 +5925,24 @@ class MySqlDatabaseManager {
     return status === 'OVERDUE' ? 'OVERDUE' : 'ISSUED';
   }
 
-  private mapVendorSalesInvoiceRow(row: any, items: any[], payments: any[]): any {
+  private mapVendorSalesInvoiceRow(row: any, items: any[], payments: any[], bankMap?: Map<string, string>): any {
     const invoiceDate = this.toSqlDate(row.invoice_date) || '';
     const dueDate = this.toSqlDate(row.due_date) || '';
     const totalAmount = roundCurrency(Number(row.total_amount) || 0);
     const paidAmount = roundCurrency(Number(row.paid_amount) || 0);
-    const balanceAmount = roundCurrency(Math.max(0, totalAmount - paidAmount));
+    const returnedAmount = roundCurrency(Number(row.returned_amount) || 0);
+    const refundedAmount = roundCurrency(Number(row.refunded_amount) || 0);
+    const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
+    const balanceAmount = roundCurrency(Math.max(0, totalAmount - returnedAmount - netPaid));
     const status = this.resolveEffectiveVendorInvoiceStatus(
       row.status || 'ISSUED',
       dueDate,
       totalAmount,
-      paidAmount
+      paidAmount,
+      returnedAmount,
+      refundedAmount
     );
+    const bankAccountId = row.bank_account_id || '';
 
     return {
       id: row.id,
@@ -5858,7 +5973,11 @@ class MySqlDatabaseManager {
       taxAmount: roundCurrency(Number(row.tax_amount) || 0),
       totalAmount,
       paidAmount,
+      returnedAmount,
+      refundedAmount,
       balanceAmount,
+      bankAccountId,
+      bankAccountName: bankAccountId ? (bankMap?.get(bankAccountId) || '') : '',
       status,
       payments,
       createdBy: row.created_by || '',
@@ -5893,7 +6012,8 @@ class MySqlDatabaseManager {
     };
   }
 
-  private mapVendorSalesPaymentRow(r: any): any {
+  private mapVendorSalesPaymentRow(r: any, bankMap?: Map<string, string>): any {
+    const bankAccountId = r.bank_account_id || '';
     return {
       id: r.id,
       invoiceId: r.invoice_id,
@@ -5903,6 +6023,9 @@ class MySqlDatabaseManager {
       paymentMode: r.payment_mode || 'Bank NEFT/RTGS',
       referenceNo: r.reference_no || '',
       notes: r.notes || '',
+      bankAccountId,
+      bankAccountName: bankAccountId ? (bankMap?.get(bankAccountId) || '') : '',
+      journalEntryId: r.journal_entry_id || '',
       recordedBy: r.recorded_by || '',
       createdAt: r.created_at
     };
@@ -5943,6 +6066,8 @@ class MySqlDatabaseManager {
     const [paymentRows]: any = await this.pool!.query(
       'SELECT * FROM `solar_vendor_sales_payments` ORDER BY `payment_date` DESC, `created_at` DESC'
     );
+    const [bankRows]: any = await this.pool!.query('SELECT `id`, `account_name` FROM `solar_acc_bank_accounts`').catch(() => [[]]);
+    const bankMap = new Map<string, string>((bankRows || []).map((b: any) => [b.id, b.account_name]));
 
     const itemsByInv = new Map<string, any[]>();
     for (const r of (itemRows || []) as any[]) {
@@ -5954,7 +6079,7 @@ class MySqlDatabaseManager {
     const paymentsByInv = new Map<string, any[]>();
     for (const r of (paymentRows || []) as any[]) {
       const list = paymentsByInv.get(r.invoice_id) || [];
-      list.push(this.mapVendorSalesPaymentRow(r));
+      list.push(this.mapVendorSalesPaymentRow(r, bankMap));
       paymentsByInv.set(r.invoice_id, list);
     }
 
@@ -5962,7 +6087,8 @@ class MySqlDatabaseManager {
       this.mapVendorSalesInvoiceRow(
         row,
         itemsByInv.get(row.id) || [],
-        paymentsByInv.get(row.id) || []
+        paymentsByInv.get(row.id) || [],
+        bankMap
       )
     );
   }
@@ -5983,11 +6109,14 @@ class MySqlDatabaseManager {
       'SELECT * FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ? ORDER BY `payment_date` DESC, `created_at` DESC',
       [id]
     );
+    const [bankRows]: any = await this.pool!.query('SELECT `id`, `account_name` FROM `solar_acc_bank_accounts`').catch(() => [[]]);
+    const bankMap = new Map<string, string>((bankRows || []).map((b: any) => [b.id, b.account_name]));
 
     return this.mapVendorSalesInvoiceRow(
       invoiceRows[0],
       (itemRows || []).map((r: any) => this.mapVendorSalesItemRow(r)),
-      (paymentRows || []).map((r: any) => this.mapVendorSalesPaymentRow(r))
+      (paymentRows || []).map((r: any) => this.mapVendorSalesPaymentRow(r, bankMap)),
+      bankMap
     );
   }
 
@@ -6029,7 +6158,6 @@ class MySqlDatabaseManager {
         throw err;
       }
 
-      // Verify any referenced productIds exist in solar_products (strict relation check, no duplicates)
       const productIds = Array.from(
         new Set(
           rawItems
@@ -6132,7 +6260,6 @@ class MySqlDatabaseManager {
         invoiceNumber = await this.getNextVendorSalesInvoiceNumber(conn);
       }
 
-      // Check sequential invoiceNumber uniqueness
       const [dupRows]: any = await conn.query(
         'SELECT `id` FROM `solar_vendor_sales_invoices` WHERE `invoice_number` = ? AND `id` <> ? LIMIT 1',
         [invoiceNumber, id]
@@ -6148,21 +6275,28 @@ class MySqlDatabaseManager {
       const paymentTerms = String(item.paymentTerms ?? existing?.payment_terms ?? vendorRow.payment_terms ?? '30 Days').trim();
       const notes = String(item.notes ?? existing?.notes ?? '').trim();
 
-      // Authoritative paid_amount comes from existing payment rows (never downgraded arbitrarily during edit)
       const [paySumRows]: any = await conn.query(
         'SELECT COALESCE(SUM(`amount`), 0) AS paidSum FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?',
         [id]
       );
       const recordedPaymentsTotal = roundCurrency(Number(paySumRows?.[0]?.paidSum) || 0);
       const paidAmount = existing ? recordedPaymentsTotal : Math.min(computed.totalAmount, roundCurrency(Number(item.paidAmount) || 0));
-      const balanceAmount = roundCurrency(Math.max(0, computed.totalAmount - paidAmount));
+      const returnedAmount = roundCurrency(Number(existing?.returned_amount ?? 0) || 0);
+      const refundedAmount = roundCurrency(Number(existing?.refunded_amount ?? 0) || 0);
+      const initialPayToRecord = !existing && paidAmount > 0 ? paidAmount : 0;
+      const storedPaid = existing ? paidAmount : 0;
+      const netPaid = roundCurrency(Math.max(0, storedPaid - refundedAmount));
+      const balanceAmount = roundCurrency(Math.max(0, computed.totalAmount - returnedAmount - netPaid));
+      const bankAccountId = String(item.bankAccountId ?? existing?.bank_account_id ?? '').trim();
 
       const requestedStatus = String(item.status || existing?.status || 'ISSUED').toUpperCase();
       const status = this.resolveEffectiveVendorInvoiceStatus(
         requestedStatus,
         dueDate,
         computed.totalAmount,
-        paidAmount
+        storedPaid,
+        returnedAmount,
+        refundedAmount
       );
 
       const actorName = String(actor?.name || actor?.email || item.updatedBy || item.createdBy || 'Admin');
@@ -6174,8 +6308,8 @@ class MySqlDatabaseManager {
           \`vendor_address\`, \`vendor_city\`, \`vendor_state\`, \`vendor_contact_person\`, \`vendor_phone\`, \`vendor_email\`,
           \`company_state\`, \`supply_type\`, \`invoice_date\`, \`due_date\`, \`payment_terms\`, \`notes\`,
           \`gross_amount\`, \`discount_amount\`, \`subtotal\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`tax_amount\`,
-          \`total_amount\`, \`paid_amount\`, \`balance_amount\`, \`status\`, \`created_by\`, \`updated_by\`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          \`total_amount\`, \`paid_amount\`, \`returned_amount\`, \`refunded_amount\`, \`balance_amount\`, \`bank_account_id\`, \`status\`, \`created_by\`, \`updated_by\`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           \`invoice_number\` = VALUES(\`invoice_number\`),
           \`vendor_id\` = VALUES(\`vendor_id\`),
@@ -6203,7 +6337,10 @@ class MySqlDatabaseManager {
           \`tax_amount\` = VALUES(\`tax_amount\`),
           \`total_amount\` = VALUES(\`total_amount\`),
           \`paid_amount\` = VALUES(\`paid_amount\`),
+          \`returned_amount\` = VALUES(\`returned_amount\`),
+          \`refunded_amount\` = VALUES(\`refunded_amount\`),
           \`balance_amount\` = VALUES(\`balance_amount\`),
+          \`bank_account_id\` = VALUES(\`bank_account_id\`),
           \`status\` = VALUES(\`status\`),
           \`updated_by\` = VALUES(\`updated_by\`)`,
         [
@@ -6233,15 +6370,17 @@ class MySqlDatabaseManager {
           computed.igstAmount,
           computed.taxAmount,
           computed.totalAmount,
-          paidAmount,
+          storedPaid,
+          returnedAmount,
+          refundedAmount,
           balanceAmount,
+          bankAccountId,
           status,
           createdBy,
           actorName
         ]
       );
 
-      // Replace line items atomically
       await conn.query('DELETE FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ?', [id]);
       for (let idx = 0; idx < computed.items.length; idx++) {
         const li = computed.items[idx];
@@ -6280,29 +6419,29 @@ class MySqlDatabaseManager {
         );
       }
 
-      // If creating a new invoice with an initial paid amount > 0, record initial payment row
-      if (!existing && paidAmount > 0) {
-        const payId = `vsip-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        await conn.query(
-          `INSERT INTO \`solar_vendor_sales_payments\` (
-            \`id\`, \`invoice_id\`, \`vendor_id\`, \`payment_date\`, \`amount\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`recorded_by\`
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            payId,
-            id,
-            vendorId,
-            invoiceDate,
-            paidAmount,
-            'Bank NEFT/RTGS',
-            '',
-            'Initial payment recorded on invoice creation',
-            actorName
-          ]
+      await conn.commit();
+      conn.release();
+
+      if (status !== 'DRAFT') {
+        await accountingService.ensureVendorSalesInvoiceJournal(this.pool!, id, actor).catch(() => {});
+      }
+
+      if (initialPayToRecord > 0) {
+        const effectiveBankId = bankAccountId || 'bank-main-current';
+        await accountingService.recordVendorSalesInvoicePayment(
+          this.pool!,
+          id,
+          {
+            amount: initialPayToRecord,
+            paymentDate: invoiceDate,
+            paymentMode: item.paymentMode || 'Bank NEFT/RTGS',
+            bankAccountId: effectiveBankId,
+            notes: 'Initial payment recorded on invoice creation'
+          },
+          actor
         );
       }
 
-      await conn.commit();
-      conn.release();
       return await this.getVendorSalesInvoiceById(id);
     } catch (err) {
       try { await conn.rollback(); } catch {}
@@ -6319,83 +6458,56 @@ class MySqlDatabaseManager {
       paymentMode?: string;
       referenceNo?: string;
       notes?: string;
+      bankAccountId?: string;
     },
     actor?: any
   ): Promise<any> {
     this.assertDbConnected();
+    await accountingService.recordVendorSalesInvoicePayment(this.pool!, invoiceId, payment, actor);
+    return await this.getVendorSalesInvoiceById(invoiceId);
+  }
+
+  public async deleteVendorSalesInvoice(id: string): Promise<boolean> {
+    this.assertDbConnected();
     const conn = await this.pool!.getConnection();
     try {
       await conn.beginTransaction();
-
-      const [invRows]: any = await conn.query(
-        'SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE',
-        [invoiceId]
+      const [srRows]: any = await conn.query(
+        "SELECT COUNT(*) AS cnt FROM `solar_sales_returns` WHERE `target_type` = 'VENDOR_INVOICE' AND `invoice_id` = ?",
+        [id]
       );
-      if (!Array.isArray(invRows) || invRows.length === 0) {
-        const err: any = new Error('Vendor sales invoice not found.');
-        err.statusCode = 404;
-        throw err;
-      }
-      const inv = invRows[0];
-      const totalAmount = roundCurrency(Number(inv.total_amount) || 0);
-      const currentPaid = roundCurrency(Number(inv.paid_amount) || 0);
-      const remaining = roundCurrency(Math.max(0, totalAmount - currentPaid));
-      const amount = roundCurrency(Number(payment?.amount) || 0);
-
-      if (!Number.isFinite(amount) || amount <= 0) {
-        const err: any = new Error('Payment amount must be greater than zero.');
-        err.statusCode = 400;
-        throw err;
-      }
-      if (amount > remaining + 0.01) {
-        const err: any = new Error(`Payment amount (₹${amount}) exceeds remaining balance due (₹${remaining}).`);
+      if (Number(srRows?.[0]?.cnt || 0) > 0) {
+        const err: any = new Error('Cannot delete vendor sales invoice with Sales Returns recorded. Delete the Sales Returns first.');
         err.statusCode = 400;
         throw err;
       }
 
-      const paymentId = `vsip-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const paymentDate = this.toSqlDate(payment?.paymentDate) || new Date().toISOString().slice(0, 10);
-      const paymentMode = String(payment?.paymentMode || 'Bank NEFT/RTGS').trim();
-      const referenceNo = String(payment?.referenceNo || '').trim();
-      const notes = String(payment?.notes || '').trim();
-      const actorName = String(actor?.name || actor?.email || 'Admin');
-
+      const [payRows]: any = await conn.query('SELECT * FROM `solar_vendor_sales_payments` WHERE `invoice_id` = ?', [id]);
+      for (const vp of payRows || []) {
+        if (vp.bank_account_id && Number(vp.amount || 0) > 0) {
+          await conn.query(
+            'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+            [roundCurrency(Number(vp.amount || 0)), vp.bank_account_id]
+          );
+        }
+        if (vp.journal_entry_id) {
+          await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [vp.journal_entry_id]);
+        }
+      }
       await conn.query(
-        `INSERT INTO \`solar_vendor_sales_payments\` (
-          \`id\`, \`invoice_id\`, \`vendor_id\`, \`payment_date\`, \`amount\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`recorded_by\`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [paymentId, invoiceId, inv.vendor_id, paymentDate, amount, paymentMode, referenceNo, notes, actorName]
+        "DELETE FROM `solar_acc_journal_entries` WHERE `reference_type` = 'VENDOR_SALES_INVOICE' AND `reference_id` = ?",
+        [id]
       );
-
-      const newPaid = roundCurrency(currentPaid + amount);
-      const newBalance = roundCurrency(Math.max(0, totalAmount - newPaid));
-      const dueDate = this.toSqlDate(inv.due_date) || '';
-      const nextStatus = this.resolveEffectiveVendorInvoiceStatus(
-        'ISSUED',
-        dueDate,
-        totalAmount,
-        newPaid
-      );
-
-      await conn.query(
-        'UPDATE `solar_vendor_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ?, `updated_by` = ? WHERE `id` = ?',
-        [newPaid, newBalance, nextStatus, actorName, invoiceId]
-      );
-
+      await accountingService.recalculateAccountBalances(conn);
+      await conn.query('DELETE FROM `solar_vendor_sales_invoices` WHERE `id` = ?', [id]);
       await conn.commit();
       conn.release();
-      return await this.getVendorSalesInvoiceById(invoiceId);
+      return true;
     } catch (err) {
       try { await conn.rollback(); } catch {}
       conn.release();
       throw err;
     }
-  }
-
-  public async deleteVendorSalesInvoice(id: string): Promise<boolean> {
-    this.assertDbConnected();
-    await this.pool!.query('DELETE FROM `solar_vendor_sales_invoices` WHERE `id` = ?', [id]);
-    return true;
   }
 
   // ==========================================================
@@ -9854,6 +9966,16 @@ class MySqlDatabaseManager {
   // ==========================================================
   // BOOTSTRAP EXPORT: AUTHORITATIVE DATA FROM MYSQL
   // ==========================================================
+  public async getSalesReturns(): Promise<any[]> {
+    if (!this.isConnected || !this.pool) return [];
+    return await accountingService.getSalesReturns(this.pool);
+  }
+
+  public async getPurchaseReturns(): Promise<any[]> {
+    if (!this.isConnected || !this.pool) return [];
+    return await accountingService.getPurchaseReturns(this.pool);
+  }
+
   public async getAllData(): Promise<Record<string, any>> {
     this.assertDbConnected();
     const [
@@ -9868,6 +9990,8 @@ class MySqlDatabaseManager {
       purchase_orders,
       sales_invoices,
       vendor_sales_invoices,
+      sales_returns,
+      purchase_returns,
       attendance,
       payslips,
       holidays,
@@ -9896,6 +10020,8 @@ class MySqlDatabaseManager {
       this.getPurchaseOrders(),
       this.getSalesInvoices(),
       this.getVendorSalesInvoices(),
+      this.getSalesReturns().catch(() => []),
+      this.getPurchaseReturns().catch(() => []),
       this.getAttendance(),
       this.getPayslips(),
       this.getHolidays(),
@@ -9926,6 +10052,8 @@ class MySqlDatabaseManager {
       purchase_orders,
       sales_invoices,
       vendor_sales_invoices,
+      sales_returns,
+      purchase_returns,
       attendance,
       payslips,
       holidays,

@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
 import {
+  BankAccount,
   ProductItem,
   Vendor,
   VendorSalesDiscountType,
@@ -33,6 +34,7 @@ import {
   Eye,
   FileText,
   IndianRupee,
+  Landmark,
   Loader2,
   Package,
   Plus,
@@ -73,21 +75,36 @@ function fmtCurrency(value: number | undefined | null): string {
   );
 }
 
-function getEffectiveStatus(invoice: VendorSalesInvoice): VendorSalesInvoiceStatus {
+function computeVsiBalances(invoice: VendorSalesInvoice) {
+  const total = roundCurrency(Number(invoice.totalAmount || 0));
+  const paid = roundCurrency(Number(invoice.paidAmount || 0));
+  const returned = roundCurrency(Number(invoice.returnedAmount || 0));
+  const refunded = roundCurrency(Number(invoice.refundedAmount || 0));
+  const netPaid = roundCurrency(Math.max(0, paid - refunded));
   const balance = roundCurrency(
-    invoice.balanceAmount ?? Math.max(0, Number(invoice.totalAmount || 0) - Number(invoice.paidAmount || 0))
+    invoice.balanceAmount != null
+      ? Math.max(0, Number(invoice.balanceAmount))
+      : Math.max(0, total - returned - netPaid)
   );
-  if (invoice.status === 'PAID' || (balance <= 0.01 && Number(invoice.paidAmount || 0) > 0)) {
-    return 'PAID';
-  }
+  return { total, paid, returned, refunded, netPaid, balance };
+}
+
+function getEffectiveStatus(invoice: VendorSalesInvoice): VendorSalesInvoiceStatus {
+  const { total, returned, netPaid, balance } = computeVsiBalances(invoice);
   if (invoice.status === 'DRAFT') {
     return 'DRAFT';
+  }
+  if (
+    invoice.status === 'PAID' ||
+    (balance <= 0.01 && (netPaid > 0 || (total > 0 && returned >= total - 0.01)))
+  ) {
+    return 'PAID';
   }
   const today = new Date().toISOString().slice(0, 10);
   if (invoice.dueDate && invoice.dueDate < today && balance > 0.01) {
     return 'OVERDUE';
   }
-  if (Number(invoice.paidAmount || 0) > 0 && balance > 0.01) {
+  if (netPaid > 0 && balance > 0.01) {
     return 'PARTIALLY_PAID';
   }
   return invoice.status || 'ISSUED';
@@ -191,22 +208,34 @@ export const VendorSalesInvoiceManager: React.FC = () => {
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payAmount, setPayAmount] = useState<number>(0);
   const [payMode, setPayMode] = useState('Bank NEFT / RTGS');
+  const [payBankAccountId, setPayBankAccountId] = useState('');
   const [payReference, setPayReference] = useState('');
   const [payNotes, setPayNotes] = useState('');
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [syncTick, setSyncTick] = useState(0);
 
   // Store-backed collections
-  const invoices = useMemo(() => storageService.getVendorSalesInvoices(), [refreshTrigger]);
-  const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger]);
-  const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
-  const settings = useMemo(() => storageService.getSettings(), [refreshTrigger]);
+  const invoices = useMemo(() => storageService.getVendorSalesInvoices(), [refreshTrigger, syncTick]);
+  const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger, syncTick]);
+  const products = useMemo(() => storageService.getProducts(), [refreshTrigger, syncTick]);
+  const settings = useMemo(() => storageService.getSettings(), [refreshTrigger, syncTick]);
 
-  // Fetch latest MySQL records on mount when Admin
+  const activeBankAccounts = useMemo(
+    () => bankAccounts.filter(b => b.isActive),
+    [bankAccounts]
+  );
+
+  // Fetch latest MySQL records & bank accounts on mount when Admin
   const syncFromMySql = async (silent = false) => {
     if (!hasAdminRights) return;
     if (!silent) setIsLoading(true);
     setLoadError(null);
     try {
-      await storageService.fetchVendorSalesInvoicesAsync();
+      const [, banks] = await Promise.all([
+        storageService.fetchVendorSalesInvoicesAsync(),
+        storageService.fetchAccountingBankAccountsAsync().catch(() => [])
+      ]);
+      if (Array.isArray(banks)) setBankAccounts(banks);
       triggerRefresh();
     } catch (err: any) {
       const msg = err?.message || 'Unable to load Vendor Sales Invoices from MySQL.';
@@ -221,6 +250,12 @@ export const VendorSalesInvoiceManager: React.FC = () => {
     syncFromMySql(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasAdminRights]);
+
+  useEffect(() => {
+    const onUpdated = () => setSyncTick(t => t + 1);
+    window.addEventListener('solarpulse_storage_updated', onUpdated);
+    return () => window.removeEventListener('solarpulse_storage_updated', onUpdated);
+  }, []);
 
   const selectedVendor: Vendor | undefined = useMemo(
     () => vendors.find(v => v.id === formVendorId),
@@ -285,20 +320,20 @@ export const VendorSalesInvoiceManager: React.FC = () => {
     let totalCollected = 0;
     let totalOutstanding = 0;
     let totalOverdue = 0;
+    let totalReturned = 0;
     let paidCount = 0;
     let overdueCount = 0;
     let draftCount = 0;
 
     invoices.forEach(inv => {
       const effective = getEffectiveStatus(inv);
-      const total = Number(inv.totalAmount || 0);
-      const paid = Number(inv.paidAmount || 0);
-      const balance = Math.max(0, Number(inv.balanceAmount ?? total - paid));
+      const { total, returned, netPaid, balance } = computeVsiBalances(inv);
 
       if (effective !== 'DRAFT') {
-        totalBilled += total;
-        totalCollected += paid;
+        totalBilled += Math.max(0, total - returned);
+        totalCollected += netPaid;
         totalOutstanding += balance;
+        totalReturned += returned;
       }
       if (effective === 'OVERDUE') {
         totalOverdue += balance;
@@ -316,6 +351,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
       totalCollected: roundCurrency(totalCollected),
       totalOutstanding: roundCurrency(totalOutstanding),
       totalOverdue: roundCurrency(totalOverdue),
+      totalReturned: roundCurrency(totalReturned),
       paidCount,
       overdueCount,
       draftCount
@@ -586,25 +622,33 @@ export const VendorSalesInvoiceManager: React.FC = () => {
 
   // Record Payment modal open & submit
   const openPaymentModal = (invoice: VendorSalesInvoice) => {
-    const balance = roundCurrency(
-      invoice.balanceAmount ?? Math.max(0, Number(invoice.totalAmount || 0) - Number(invoice.paidAmount || 0))
-    );
+    const { balance } = computeVsiBalances(invoice);
+    const defaultBank =
+      activeBankAccounts.find(b => b.isPrimary)?.id || activeBankAccounts[0]?.id || '';
     setPaymentInvoiceId(invoice.id);
     setPayDate(new Date().toISOString().slice(0, 10));
     setPayAmount(balance > 0 ? balance : 0);
     setPayMode('Bank NEFT / RTGS');
+    setPayBankAccountId(defaultBank);
     setPayReference('');
     setPayNotes('');
+    if (activeBankAccounts.length === 0) {
+      storageService
+        .fetchAccountingBankAccountsAsync()
+        .then(banks => {
+          setBankAccounts(banks);
+          const def = banks.find(b => b.isActive && b.isPrimary)?.id || banks.find(b => b.isActive)?.id || '';
+          if (def) setPayBankAccountId(prev => prev || def);
+        })
+        .catch(() => undefined);
+    }
   };
 
   const handleSubmitPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentInvoice) return;
 
-    const remaining = roundCurrency(
-      paymentInvoice.balanceAmount ??
-        Math.max(0, Number(paymentInvoice.totalAmount || 0) - Number(paymentInvoice.paidAmount || 0))
-    );
+    const { balance: remaining } = computeVsiBalances(paymentInvoice);
 
     if (!Number.isFinite(payAmount) || payAmount <= 0) {
       showToast('Enter a valid payment amount greater than 0.', 'warning');
@@ -614,6 +658,10 @@ export const VendorSalesInvoiceManager: React.FC = () => {
       showToast(`Payment cannot exceed remaining balance (${fmtCurrency(remaining)}).`, 'warning');
       return;
     }
+    if (activeBankAccounts.length > 0 && !payBankAccountId) {
+      showToast('Select the Cash/Bank account receiving this payment.', 'warning');
+      return;
+    }
 
     setIsRecordingPayment(true);
     try {
@@ -621,9 +669,12 @@ export const VendorSalesInvoiceManager: React.FC = () => {
         amount: roundCurrency(payAmount),
         paymentDate: payDate,
         paymentMode: payMode,
+        bankAccountId: payBankAccountId || undefined,
         referenceNo: payReference.trim(),
         notes: payNotes.trim()
       });
+      const latestBanks = await storageService.fetchAccountingBankAccountsAsync().catch(() => []);
+      if (latestBanks.length > 0) setBankAccounts(latestBanks);
       triggerRefresh();
       showToast(
         `Recorded ${fmtCurrency(payAmount)} for ${updated.invoiceNumber}. Status: ${updated.status.replace(/_/g, ' ')}.`,
@@ -934,10 +985,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                 {filteredInvoices.map(inv => {
                   const effective = getEffectiveStatus(inv);
                   const statusMeta = getStatusMeta(effective);
-                  const balance = roundCurrency(
-                    inv.balanceAmount ??
-                      Math.max(0, Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0))
-                  );
+                  const { returned, refunded, netPaid, balance } = computeVsiBalances(inv);
                   return (
                     <tr key={inv.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-3 px-4 align-top">
@@ -988,8 +1036,18 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                       <td className="py-3 px-4 text-right align-top font-mono tabular-nums">
                         <div className="font-bold text-slate-900">{fmtCurrency(inv.totalAmount)}</div>
                         <div className="text-[11px] text-slate-500">
-                          Paid: {fmtCurrency(inv.paidAmount)}
+                          Net Paid: {fmtCurrency(netPaid)}
                         </div>
+                        {returned > 0 && (
+                          <div className="text-[11px] text-amber-700">
+                            Returned: -{fmtCurrency(returned)}
+                          </div>
+                        )}
+                        {refunded > 0 && (
+                          <div className="text-[11px] text-sky-700">
+                            Refunded: {fmtCurrency(refunded)}
+                          </div>
+                        )}
                         {balance > 0.01 && (
                           <div className="text-[11px] font-semibold text-rose-700">
                             Bal: {fmtCurrency(balance)}
@@ -1735,7 +1793,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                   <Edit3 className="w-3.5 h-3.5" />
                   <span>Edit</span>
                 </button>
-                {roundCurrency(viewingInvoice.balanceAmount) > 0.01 &&
+                {computeVsiBalances(viewingInvoice).balance > 0.01 &&
                   getEffectiveStatus(viewingInvoice) !== 'DRAFT' && (
                     <button
                       type="button"
@@ -1922,7 +1980,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                         <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
                           <tr>
                             <th className="p-2">Date</th>
-                            <th className="p-2">Mode</th>
+                            <th className="p-2">Mode / Account</th>
                             <th className="p-2">Reference</th>
                             <th className="p-2 text-right">Amount</th>
                           </tr>
@@ -1931,7 +1989,12 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                           {viewingInvoice.payments.map(p => (
                             <tr key={p.id}>
                               <td className="p-2">{p.paymentDate}</td>
-                              <td className="p-2">{p.paymentMode}</td>
+                              <td className="p-2">
+                                <div>{p.paymentMode}</div>
+                                {p.bankAccountName && (
+                                  <div className="text-[10px] text-slate-500">{p.bankAccountName}</div>
+                                )}
+                              </td>
                               <td className="p-2 font-mono">{p.referenceNo || '-'}</td>
                               <td className="p-2 text-right font-mono font-bold text-emerald-700">
                                 {fmtCurrency(p.amount)}
@@ -1992,16 +2055,32 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                       {fmtCurrency(viewingInvoice.totalAmount)}
                     </span>
                   </div>
+                  {computeVsiBalances(viewingInvoice).returned > 0 && (
+                    <div className="flex justify-between text-amber-700">
+                      <span>Sales Return (Credit Note):</span>
+                      <span className="font-mono tabular-nums">
+                        - {fmtCurrency(computeVsiBalances(viewingInvoice).returned)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-emerald-700 pt-1">
                     <span>Paid Amount:</span>
                     <span className="font-mono tabular-nums">
                       {fmtCurrency(viewingInvoice.paidAmount)}
                     </span>
                   </div>
+                  {computeVsiBalances(viewingInvoice).refunded > 0 && (
+                    <div className="flex justify-between text-sky-700">
+                      <span>Refunded via Bank:</span>
+                      <span className="font-mono tabular-nums">
+                        - {fmtCurrency(computeVsiBalances(viewingInvoice).refunded)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between font-bold text-rose-700">
                     <span>Balance Due:</span>
                     <span className="font-mono tabular-nums">
-                      {fmtCurrency(viewingInvoice.balanceAmount)}
+                      {fmtCurrency(computeVsiBalances(viewingInvoice).balance)}
                     </span>
                   </div>
                 </div>
@@ -2012,7 +2091,9 @@ export const VendorSalesInvoiceManager: React.FC = () => {
       )}
 
       {/* Modal: Record Vendor Payment */}
-      {paymentInvoice && (
+      {paymentInvoice && (() => {
+        const payBal = computeVsiBalances(paymentInvoice);
+        return (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
@@ -2035,23 +2116,45 @@ export const VendorSalesInvoiceManager: React.FC = () => {
             <form onSubmit={handleSubmitPayment} className="p-5 space-y-4 text-xs">
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-3 gap-2 text-center font-mono tabular-nums">
                 <div>
-                  <span className="text-[10px] font-sans text-slate-500 block">Total</span>
+                  <span className="text-[10px] font-sans text-slate-500 block">Net Billed</span>
                   <span className="font-bold text-slate-900">
-                    {fmtCurrency(paymentInvoice.totalAmount)}
+                    {fmtCurrency(Math.max(0, payBal.total - payBal.returned))}
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10px] font-sans text-slate-500 block">Paid</span>
+                  <span className="text-[10px] font-sans text-slate-500 block">Net Paid</span>
                   <span className="font-bold text-emerald-700">
-                    {fmtCurrency(paymentInvoice.paidAmount)}
+                    {fmtCurrency(payBal.netPaid)}
                   </span>
                 </div>
                 <div>
                   <span className="text-[10px] font-sans text-slate-500 block">Balance Due</span>
                   <span className="font-bold text-rose-700">
-                    {fmtCurrency(paymentInvoice.balanceAmount)}
+                    {fmtCurrency(payBal.balance)}
                   </span>
                 </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <Landmark className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Deposit Cash / Bank Account *</span>
+                </label>
+                <select
+                  required={activeBankAccounts.length > 0}
+                  value={payBankAccountId}
+                  onChange={e => setPayBankAccountId(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                >
+                  {activeBankAccounts.length === 0 && (
+                    <option value="">Default Cash / Bank Ledger</option>
+                  )}
+                  {activeBankAccounts.map(acc => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.accountName} ({acc.accountType}) — Bal: {fmtCurrency(acc.currentBalance)}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -2070,7 +2173,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                     <label className="font-bold text-slate-700">Amount (₹) *</label>
                     <button
                       type="button"
-                      onClick={() => setPayAmount(roundCurrency(paymentInvoice.balanceAmount))}
+                      onClick={() => setPayAmount(payBal.balance)}
                       className="text-[10px] font-semibold text-amber-700 hover:underline cursor-pointer"
                     >
                       Pay Full
@@ -2079,6 +2182,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                   <input
                     type="number"
                     min={0.01}
+                    max={payBal.balance}
                     step="0.01"
                     required
                     value={payAmount}
@@ -2147,7 +2251,8 @@ export const VendorSalesInvoiceManager: React.FC = () => {
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Modal: Delete Confirmation */}
       {deleteTarget && (

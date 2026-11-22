@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
-import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject } from '../../types/solar';
+import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject, BankAccount } from '../../types/solar';
 import { validatePOLineItem, validatePOLineItems, validatePurchaseOrder } from '../../services/validation';
 import {
   ShoppingCart,
@@ -23,7 +23,9 @@ import {
   Edit3,
   CheckCircle2,
   PackageCheck,
-  Loader2
+  Loader2,
+  CreditCard,
+  Landmark
 } from 'lucide-react';
 import { GoodsReceiptModal } from './purchase_order/GoodsReceiptModal';
 import { EditPurchaseOrderModal } from './purchase_order/EditPurchaseOrderModal';
@@ -41,8 +43,23 @@ export const PurchaseOrderEntry: React.FC = () => {
   const [viewingPOId, setViewingPOId] = useState<string | null>(null);
   const [editingPOId, setEditingPOId] = useState<string | null>(null);
   const [receivingPOId, setReceivingPOId] = useState<string | null>(null);
+  const [paymentPOId, setPaymentPOId] = useState<string | null>(null);
+  const [confirmDeletePO, setConfirmDeletePO] = useState<{ id: string; poNum: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRecordingPayment, setIsRecordingPayment] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [syncTick, setSyncTick] = useState(0);
+
+  // Payment modal form state
+  const [poPayDate, setPoPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [poPayAmount, setPoPayAmount] = useState<number>(0);
+  const [poPayTdsDeducted, setPoPayTdsDeducted] = useState<number>(0);
+  const [poPayTdsSection, setPoPayTdsSection] = useState('194C');
+  const [poPayBankAccountId, setPoPayBankAccountId] = useState('');
+  const [poPayMode, setPoPayMode] = useState('Bank NEFT / RTGS');
+  const [poPayReference, setPoPayReference] = useState('');
+  const [poPayNotes, setPoPayNotes] = useState('');
 
   // Form states for creating new PO
   const [formVendorId, setFormVendorId] = useState('');
@@ -68,11 +85,42 @@ export const PurchaseOrderEntry: React.FC = () => {
   const [itemUnitPrice, setItemUnitPrice] = useState<number>(0);
   const [itemTaxRate, setItemTaxRate] = useState<number>(12);
 
-  const orders = useMemo(() => storageService.getPurchaseOrders(), [refreshTrigger]);
-  const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger]);
-  const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
-  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
-  const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
+  useEffect(() => {
+    storageService
+      .fetchAccountingBankAccountsAsync()
+      .then(banks => setBankAccounts(banks))
+      .catch(() => undefined);
+    const onUpdated = () => setSyncTick(t => t + 1);
+    window.addEventListener('solarpulse_storage_updated', onUpdated);
+    return () => window.removeEventListener('solarpulse_storage_updated', onUpdated);
+  }, []);
+
+  const activeBankAccounts = useMemo(
+    () => bankAccounts.filter(b => b.isActive),
+    [bankAccounts]
+  );
+
+  const orders = useMemo(() => storageService.getPurchaseOrders(), [refreshTrigger, syncTick]);
+  const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger, syncTick]);
+  const products = useMemo(() => storageService.getProducts(), [refreshTrigger, syncTick]);
+  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger, syncTick]);
+  const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger, syncTick]);
+
+  const round2 = (n: number) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
+  const getPOBalanceInfo = (po: PurchaseOrder) => {
+    const total = round2(Number(po.totalAmount || 0));
+    const paid = round2(Number(po.paidAmount || 0));
+    const returned = round2(Number(po.returnedAmount || 0));
+    const refunded = round2(Number(po.refundedAmount || 0));
+    const netPaid = round2(Math.max(0, paid - refunded));
+    const balance = round2(
+      po.balanceAmount != null
+        ? Math.max(0, Number(po.balanceAmount))
+        : Math.max(0, total - returned - netPaid)
+    );
+    return { total, paid, returned, refunded, netPaid, balance };
+  };
 
   const viewingPO = useMemo(
     () => (viewingPOId ? orders.find(o => o.id === viewingPOId) || null : null),
@@ -86,15 +134,21 @@ export const PurchaseOrderEntry: React.FC = () => {
     () => (receivingPOId ? orders.find(o => o.id === receivingPOId) || null : null),
     [orders, receivingPOId]
   );
+  const paymentPO = useMemo(
+    () => (paymentPOId ? orders.find(o => o.id === paymentPOId) || null : null),
+    [orders, paymentPOId]
+  );
 
   const metrics = useMemo(() => {
-    const totalPurchases = orders.reduce((sum, o) => sum + o.totalAmount, 0);
+    const totalPurchases = round2(orders.filter(o => o.status !== 'CANCELLED').reduce((sum, o) => sum + Number(o.totalAmount || 0), 0));
     const pendingDeliveries = orders.filter(o => o.status === 'ORDERED' || o.status === 'PARTIALLY_RECEIVED').length;
     const partialDeliveries = orders.filter(o => o.status === 'PARTIALLY_RECEIVED').length;
     const receivedOrders = orders.filter(o => o.status === 'RECEIVED').length;
-    const totalPendingPayment = orders
-      .filter(o => o.paymentStatus !== 'PAID')
-      .reduce((sum, o) => sum + o.totalAmount, 0);
+    const totalPendingPayment = round2(
+      orders
+        .filter(o => o.status !== 'CANCELLED')
+        .reduce((sum, o) => sum + getPOBalanceInfo(o).balance, 0)
+    );
 
     return { totalPurchases, pendingDeliveries, partialDeliveries, receivedOrders, totalPendingPayment };
   }, [orders]);
@@ -306,15 +360,94 @@ export const PurchaseOrderEntry: React.FC = () => {
     }
   };
 
-  const handleDeletePO = async (id: string, poNum: string) => {
-    if (deletingId) return;
-    if (!window.confirm(`Are you sure you want to delete purchase order ${poNum}?`)) return;
+  const openPaymentModal = (order: PurchaseOrder) => {
+    const { balance } = getPOBalanceInfo(order);
+    const defaultBank =
+      activeBankAccounts.find(b => b.isPrimary)?.id || activeBankAccounts[0]?.id || '';
+    setPaymentPOId(order.id);
+    setPoPayDate(new Date().toISOString().slice(0, 10));
+    setPoPayAmount(balance > 0 ? balance : 0);
+    setPoPayTdsDeducted(0);
+    setPoPayTdsSection('194C');
+    setPoPayBankAccountId(defaultBank);
+    setPoPayMode('Bank NEFT / RTGS');
+    setPoPayReference('');
+    setPoPayNotes('');
+    if (activeBankAccounts.length === 0) {
+      storageService
+        .fetchAccountingBankAccountsAsync()
+        .then(banks => {
+          setBankAccounts(banks);
+          const def = banks.find(b => b.isActive && b.isPrimary)?.id || banks.find(b => b.isActive)?.id || '';
+          if (def) setPoPayBankAccountId(prev => prev || def);
+        })
+        .catch(() => undefined);
+    }
+  };
+
+  const handleSubmitPOPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!paymentPO || isRecordingPayment) return;
+
+    const { balance } = getPOBalanceInfo(paymentPO);
+    const grossSettlement = round2(Number(poPayAmount || 0) + Number(poPayTdsDeducted || 0));
+
+    if (!Number.isFinite(poPayAmount) || poPayAmount <= 0) {
+      showToast('Enter a valid payment amount greater than 0.', 'warning');
+      return;
+    }
+    if (poPayTdsDeducted < 0) {
+      showToast('TDS deducted cannot be negative.', 'warning');
+      return;
+    }
+    if (grossSettlement > balance + 0.01) {
+      showToast(`Cash paid + TDS cannot exceed remaining balance (₹${balance.toLocaleString('en-IN')}).`, 'warning');
+      return;
+    }
+    if (activeBankAccounts.length > 0 && !poPayBankAccountId) {
+      showToast('Select the Cash / Bank account used for this vendor payment.', 'warning');
+      return;
+    }
+
+    setIsRecordingPayment(true);
+    try {
+      const updated = await storageService.recordPurchaseOrderPaymentAsync(paymentPO.id, {
+        amount: round2(poPayAmount),
+        tdsDeducted: round2(poPayTdsDeducted),
+        tdsSection: poPayTdsDeducted > 0 ? poPayTdsSection : undefined,
+        paymentDate: poPayDate,
+        paymentMode: poPayMode,
+        bankAccountId: poPayBankAccountId || undefined,
+        referenceNo: poPayReference.trim() || undefined,
+        notes: poPayNotes.trim() || undefined
+      });
+      const latestBanks = await storageService.fetchAccountingBankAccountsAsync().catch(() => []);
+      if (latestBanks.length > 0) setBankAccounts(latestBanks);
+      triggerRefresh();
+      showToast(
+        `Recorded ₹${poPayAmount.toLocaleString('en-IN')} payment for ${updated.purchaseNumber} (${updated.paymentStatus}).`,
+        'success'
+      );
+      setPaymentPOId(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to record purchase order payment.';
+      showToast(msg, 'error');
+    } finally {
+      setIsRecordingPayment(false);
+    }
+  };
+
+  const handleDeletePO = async () => {
+    if (!confirmDeletePO || deletingId) return;
+    const { id, poNum } = confirmDeletePO;
     setDeletingId(id);
     try {
       await storageService.deletePurchaseOrderAsync(id);
       if (viewingPOId === id) setViewingPOId(null);
       if (editingPOId === id) setEditingPOId(null);
       if (receivingPOId === id) setReceivingPOId(null);
+      if (paymentPOId === id) setPaymentPOId(null);
+      setConfirmDeletePO(null);
       triggerRefresh();
       showToast(`Purchase Order ${poNum} deleted`, 'info');
     } catch (err: unknown) {
@@ -481,6 +614,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                 const totalReceived = order.items.reduce((sum, it) => sum + it.receivedQuantity, 0);
                 const totalPending = order.items.reduce((sum, it) => sum + it.pendingQuantity, 0);
                 const percent = totalOrdered > 0 ? Math.round((totalReceived / totalOrdered) * 100) : 0;
+                const poBal = getPOBalanceInfo(order);
 
                 return (
                   <tr key={order.id} className="hover:bg-slate-50/70 transition-colors">
@@ -492,6 +626,11 @@ export const PurchaseOrderEntry: React.FC = () => {
                       >
                         {order.purchaseNumber}
                       </button>
+                      {order.bankAccountName && (
+                        <span className="block text-[10px] text-slate-400 font-sans font-normal">
+                          Paid via: {order.bankAccountName}
+                        </span>
+                      )}
                     </td>
                     <td className="p-3.5 font-bold text-slate-800">
                       {order.vendorName}
@@ -535,14 +674,31 @@ export const PurchaseOrderEntry: React.FC = () => {
                       </div>
                     </td>
 
-                    <td className="p-3.5 text-right font-mono font-bold text-slate-900 text-sm">
-                      ₹{order.totalAmount.toLocaleString('en-IN')}
+                    <td className="p-3.5 text-right font-mono tabular-nums">
+                      <div className="font-bold text-slate-900 text-sm">
+                        ₹{order.totalAmount.toLocaleString('en-IN')}
+                      </div>
+                      {poBal.netPaid > 0 && (
+                        <div className="text-[10px] text-emerald-700">
+                          Paid: ₹{poBal.netPaid.toLocaleString('en-IN')}
+                        </div>
+                      )}
+                      {poBal.returned > 0 && (
+                        <div className="text-[10px] text-amber-700">
+                          Returned: -₹{poBal.returned.toLocaleString('en-IN')}
+                        </div>
+                      )}
+                      {poBal.balance > 0.01 && order.status !== 'CANCELLED' && (
+                        <div className="text-[10px] font-semibold text-rose-700">
+                          Due: ₹{poBal.balance.toLocaleString('en-IN')}
+                        </div>
+                      )}
                     </td>
 
                     {/* Status Badge */}
                     <td className="p-3.5 text-center whitespace-nowrap">
                       <span
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold border inline-block ${
                           order.status === 'RECEIVED'
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             : order.status === 'PARTIALLY_RECEIVED'
@@ -553,6 +709,17 @@ export const PurchaseOrderEntry: React.FC = () => {
                         }`}
                       >
                         {order.status === 'PARTIALLY_RECEIVED' ? 'PARTIALLY RECEIVED' : order.status}
+                      </span>
+                      <span
+                        className={`block mt-1 text-[9px] font-bold uppercase tracking-wider ${
+                          order.paymentStatus === 'PAID'
+                            ? 'text-emerald-700'
+                            : order.paymentStatus === 'PARTIALLY_PAID'
+                            ? 'text-amber-700'
+                            : 'text-rose-700'
+                        }`}
+                      >
+                        {(order.paymentStatus || 'UNPAID').replace(/_/g, ' ')}
                       </span>
                     </td>
 
@@ -593,6 +760,15 @@ export const PurchaseOrderEntry: React.FC = () => {
                         >
                           <Eye className="w-4 h-4" />
                         </button>
+                        {order.status !== 'CANCELLED' && poBal.balance > 0.01 && (
+                          <button
+                            onClick={() => openPaymentModal(order)}
+                            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                            title="Record Vendor Payment via Bank/Cash"
+                          >
+                            <CreditCard className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => setEditingPOId(order.id)}
                           className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
@@ -610,7 +786,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                           </button>
                         )}
                         <button
-                          onClick={() => handleDeletePO(order.id, order.purchaseNumber)}
+                          onClick={() => setConfirmDeletePO({ id: order.id, poNum: order.purchaseNumber })}
                           disabled={deletingId === order.id}
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 cursor-pointer"
                           title="Delete PO"
@@ -1015,6 +1191,10 @@ export const PurchaseOrderEntry: React.FC = () => {
             setViewingPOId(null);
             setReceivingPOId(order.id);
           }}
+          onRecordPayment={order => {
+            setViewingPOId(null);
+            openPaymentModal(order);
+          }}
         />
       )}
 
@@ -1040,6 +1220,240 @@ export const PurchaseOrderEntry: React.FC = () => {
           onReceiptRecorded={handleReceiptRecordedFromModal}
           showToast={showToast}
         />
+      )}
+
+      {/* Modal: Record Purchase Order Payment */}
+      {paymentPO && (() => {
+        const payBal = getPOBalanceInfo(paymentPO);
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Record Purchase Order Payment</h3>
+                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                    {paymentPO.purchaseNumber} • {paymentPO.vendorName}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isRecordingPayment}
+                  onClick={() => setPaymentPOId(null)}
+                  className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitPOPayment} className="p-5 space-y-4 text-xs">
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-3 gap-2 text-center font-mono tabular-nums">
+                  <div>
+                    <span className="text-[10px] font-sans text-slate-500 block">Net Billed</span>
+                    <span className="font-bold text-slate-900">
+                      ₹{Math.max(0, payBal.total - payBal.returned).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-sans text-slate-500 block">Net Paid</span>
+                    <span className="font-bold text-emerald-700">
+                      ₹{payBal.netPaid.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-sans text-slate-500 block">Balance Due</span>
+                    <span className="font-bold text-rose-700">
+                      ₹{payBal.balance.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                    <Landmark className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Pay From Cash / Bank Account *</span>
+                  </label>
+                  <select
+                    required={activeBankAccounts.length > 0}
+                    value={poPayBankAccountId}
+                    onChange={e => setPoPayBankAccountId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                  >
+                    {activeBankAccounts.length === 0 && (
+                      <option value="">Default Cash / Bank Ledger</option>
+                    )}
+                    {activeBankAccounts.map(acc => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.accountName} ({acc.accountType}) — Bal: ₹{Number(acc.currentBalance || 0).toLocaleString('en-IN')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Payment Date *</label>
+                    <input
+                      type="date"
+                      required
+                      value={poPayDate}
+                      onChange={e => setPoPayDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-slate-700">Cash Paid (₹) *</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPoPayTdsDeducted(0);
+                          setPoPayAmount(payBal.balance);
+                        }}
+                        className="text-[10px] font-semibold text-amber-700 hover:underline cursor-pointer"
+                      >
+                        Pay Full
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      min={0.01}
+                      max={payBal.balance}
+                      step="0.01"
+                      required
+                      value={poPayAmount}
+                      onChange={e => setPoPayAmount(Number(e.target.value))}
+                      className="w-full px-3 py-2 font-mono bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">TDS Deducted (₹)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={payBal.balance}
+                      step="0.01"
+                      value={poPayTdsDeducted}
+                      onChange={e => setPoPayTdsDeducted(Number(e.target.value))}
+                      className="w-full px-3 py-2 font-mono bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">TDS Section</label>
+                    <select
+                      value={poPayTdsSection}
+                      onChange={e => setPoPayTdsSection(e.target.value)}
+                      disabled={poPayTdsDeducted <= 0}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg disabled:bg-slate-100"
+                    >
+                      <option value="194C">194C (Contractors)</option>
+                      <option value="194Q">194Q (Goods Purchase)</option>
+                      <option value="194J">194J (Technical / Prof.)</option>
+                      <option value="194H">194H (Commission)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Payment Mode *</label>
+                    <select
+                      value={poPayMode}
+                      onChange={e => setPoPayMode(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="Bank NEFT / RTGS">Bank NEFT / RTGS</option>
+                      <option value="UPI">UPI</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Cash">Cash</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">UTR / Reference No.</label>
+                    <input
+                      type="text"
+                      value={poPayReference}
+                      onChange={e => setPoPayReference(e.target.value)}
+                      placeholder="UTR / Cheque #"
+                      className="w-full px-3 py-2 font-mono bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Remarks</label>
+                  <input
+                    type="text"
+                    value={poPayNotes}
+                    onChange={e => setPoPayNotes(e.target.value)}
+                    placeholder="Optional disbursement notes"
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                  <button
+                    type="button"
+                    disabled={isRecordingPayment}
+                    onClick={() => setPaymentPOId(null)}
+                    className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRecordingPayment}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer disabled:opacity-60"
+                  >
+                    {isRecordingPayment && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>Save PO Payment</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Modal: Confirm Delete PO */}
+      {confirmDeletePO && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Delete Purchase Order?</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  Are you sure you want to delete{' '}
+                  <strong className="font-mono">{confirmDeletePO.poNum}</strong>? Linked inventory or accounting records must be consistent before removal.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={() => setConfirmDeletePO(null)}
+                className="px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingId)}
+                onClick={handleDeletePO}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-xs font-bold text-white cursor-pointer disabled:opacity-60"
+              >
+                {deletingId && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Delete PO</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

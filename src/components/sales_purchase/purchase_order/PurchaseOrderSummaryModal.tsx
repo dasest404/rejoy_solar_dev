@@ -15,7 +15,9 @@ import {
   CheckCircle2,
   PackageCheck,
   ShieldCheck,
-  Percent
+  Percent,
+  CreditCard,
+  Landmark
 } from 'lucide-react';
 
 interface PurchaseOrderSummaryModalProps {
@@ -23,15 +25,24 @@ interface PurchaseOrderSummaryModalProps {
   onClose: () => void;
   onEditPO: (order: PurchaseOrder) => void;
   onReceiveGoods: (order: PurchaseOrder) => void;
+  onRecordPayment?: (order: PurchaseOrder) => void;
 }
 
 export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps> = ({
   order,
   onClose,
   onEditPO,
-  onReceiveGoods
+  onReceiveGoods,
+  onRecordPayment
 }) => {
   const [activeTab, setActiveTab] = useState<'ITEMS' | 'RECEIPTS'>('ITEMS');
+  const paidAmt = Number(order.paidAmount || 0);
+  const returnedAmt = Number(order.returnedAmount || 0);
+  const refundedAmt = Number(order.refundedAmount || 0);
+  const netPaid = Math.max(0, paidAmt - refundedAmt);
+  const balanceAmt = order.balanceAmount != null
+    ? Number(order.balanceAmount)
+    : Math.max(0, Number((Number(order.totalAmount || 0) - returnedAmt - netPaid).toFixed(2)));
 
   const totalOrdered = order.items.reduce((sum, it) => sum + it.orderedQuantity, 0);
   const totalReceived = order.items.reduce((sum, it) => sum + it.receivedQuantity, 0);
@@ -127,7 +138,7 @@ export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps>
             </div>
 
             <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/70">
-              <span className="text-slate-400 text-[10px] uppercase font-bold block">Payment & Terms</span>
+              <span className="text-slate-400 text-[10px] uppercase font-bold block">Payment &amp; Terms</span>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span
                   className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -140,9 +151,18 @@ export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps>
                 >
                   {order.paymentStatus}
                 </span>
+                <span className="text-[11px] font-mono font-bold text-slate-700">
+                  Bal: ₹{balanceAmt.toLocaleString('en-IN')}
+                </span>
               </div>
+              {order.bankAccountName && (
+                <span className="text-slate-600 text-[11px] flex items-center gap-1 mt-1 truncate">
+                  <Landmark className="w-3 h-3 text-amber-600 shrink-0" />
+                  {order.bankAccountName}
+                </span>
+              )}
               {order.paymentDueDate && (
-                <span className="text-slate-400 text-[11px] block mt-1">
+                <span className="text-slate-400 text-[11px] block mt-0.5">
                   Due: {order.paymentDueDate}
                 </span>
               )}
@@ -178,6 +198,15 @@ export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps>
             </div>
 
             <div className="flex items-center gap-2 pb-2">
+              {onRecordPayment && order.status !== 'CANCELLED' && balanceAmt > 0.01 && (
+                <button
+                  onClick={() => onRecordPayment(order)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-lg shadow-2xs transition-colors"
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  Record Payment
+                </button>
+              )}
               <button
                 onClick={() => onEditPO(order)}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
@@ -317,6 +346,44 @@ export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps>
                       </td>
                       <td className="p-3 text-right font-mono text-amber-950 text-base">
                         ₹{order.totalAmount.toLocaleString('en-IN')}
+                      </td>
+                    </tr>
+                    {returnedAmt > 0 && (
+                      <tr>
+                        <td colSpan={6} className="p-2 text-right text-amber-700">
+                          Purchase Returns (Debit Notes):
+                        </td>
+                        <td className="p-2 text-right font-mono text-amber-700">
+                          -₹{returnedAmt.toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                    )}
+                    {paidAmt > 0 && (
+                      <tr>
+                        <td colSpan={6} className="p-2 text-right text-emerald-700">
+                          Payments Made:
+                        </td>
+                        <td className="p-2 text-right font-mono text-emerald-700">
+                          ₹{paidAmt.toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                    )}
+                    {refundedAmt > 0 && (
+                      <tr>
+                        <td colSpan={6} className="p-2 text-right text-blue-700">
+                          Vendor Cash/Bank Refund Received:
+                        </td>
+                        <td className="p-2 text-right font-mono text-blue-700">
+                          ₹{refundedAmt.toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="border-t border-slate-200 font-bold">
+                      <td colSpan={6} className="p-2.5 text-right text-slate-800">
+                        Net Payable Balance Due:
+                      </td>
+                      <td className="p-2.5 text-right font-mono text-rose-700">
+                        ₹{balanceAmt.toLocaleString('en-IN')}
                       </td>
                     </tr>
                   </tfoot>

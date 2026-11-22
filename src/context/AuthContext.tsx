@@ -590,12 +590,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return hasPermission('finance.invoices') || hasPermission('finance.view');
       case 'vendor_sales_invoices':
         return isAdmin || String(currentUser?.role || '').trim().toUpperCase() === 'SUPER ADMIN';
+      case 'sales_returns':
+        return (
+          hasPermission('inventory.sales_returns') ||
+          hasPermission('finance.invoices') ||
+          hasPermission('finance.view') ||
+          isAdmin
+        );
       case 'purchase_vendors':
       case 'vendors':
         return hasPermission('inventory.vendors_view') || hasPermission('inventory.vendors_manage');
       case 'purchase_orders':
       case 'purchase':
         return hasPermission('inventory.purchase_orders');
+      case 'purchase_returns':
+        return (
+          hasPermission('inventory.purchase_returns') ||
+          hasPermission('inventory.purchase_orders') ||
+          hasPermission('finance.vendors') ||
+          isAdmin
+        );
       case 'inventory_products':
         return hasPermission('inventory.view') || hasPermission('inventory.products_manage');
       case 'inventory_stock':
@@ -612,10 +626,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           hasPermission('inventory.vendors_view') ||
           hasPermission('inventory.vendors_manage') ||
           hasPermission('inventory.purchase_orders') ||
+          hasPermission('inventory.sales_returns') ||
+          hasPermission('inventory.purchase_returns') ||
           hasPermission('inventory.products_manage') ||
           hasPermission('inventory.view') ||
           hasPermission('inventory.manage') ||
           hasPermission('inventory.warehouses_manage') ||
+          hasPermission('finance.invoices') ||
           isAdmin
         );
       case 'projects_all':

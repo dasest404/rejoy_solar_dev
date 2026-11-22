@@ -552,6 +552,24 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     actions: ['view', 'create', 'edit', 'delete'],
     riskLevel: 'HIGH'
   },
+  {
+    id: 'inventory.sales_returns',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'Manage Sales Returns & Credit Notes',
+    description: 'Record customer and vendor sales returns, restock inventory, reverse Output GST, and issue refunds',
+    actions: ['view', 'create', 'delete'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'inventory.purchase_returns',
+    domain: 'inventory',
+    domainLabel: 'Material & Inventory',
+    name: 'Manage Purchase Returns & Debit Notes',
+    description: 'Record goods returned to vendors against POs, adjust warehouse stock, reverse Input GST, and log vendor refunds',
+    actions: ['view', 'create', 'delete'],
+    riskLevel: 'HIGH'
+  },
 
   // Finance & Accounting
   {
@@ -1021,7 +1039,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'projects.stage_checklist', 'projects.stage_photos', 'projects.stage_approve', 'projects.workflows_view',
     'survey.view', 'survey.approve',
     'inventory.hub_view', 'inventory.view', 'inventory.products_manage', 'inventory.bom_edit', 'inventory.bom_manage',
-    'inventory.vendors_view', 'inventory.purchase_orders',
+    'inventory.vendors_view', 'inventory.purchase_orders', 'inventory.sales_returns', 'inventory.purchase_returns',
     'finance.view', 'finance.expenses', 'finance.budgets', 'finance.project_costing', 'finance.reports',
     'hrms.view', 'hrms.attendance_punch',
     'service.tickets_view', 'service.tickets_create',
@@ -1054,7 +1072,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'crm.quotations.view', 'crm.quotations.create', 'crm.quotations.approve', 'crm.quotations.delete',
     'projects.view', 'projects.workflows_view',
     'survey.view',
-    'inventory.hub_view', 'inventory.view', 'inventory.bom_manage', 'inventory.vendors_view',
+    'inventory.hub_view', 'inventory.view', 'inventory.bom_manage', 'inventory.vendors_view', 'inventory.sales_returns',
     'finance.view', 'finance.reports',
     'hrms.view', 'hrms.attendance_punch',
     ...ALL_REPORT_PERMISSIONS,
@@ -1068,7 +1086,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'crm.quotations.view', 'crm.quotations.create',
     'projects.view', 'projects.workflows_view',
     'survey.view',
-    'inventory.hub_view', 'inventory.view',
+    'inventory.hub_view', 'inventory.view', 'inventory.sales_returns',
     'hrms.attendance_punch',
     'settings.view'
   ]),
@@ -1128,7 +1146,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'dashboard.view',
     'crm.leads.view', 'crm.customers.view', 'crm.quotations.view',
     'projects.view', 'projects.workflows_view',
-    'inventory.hub_view', 'inventory.view', 'inventory.vendors_view', 'inventory.vendors_manage', 'inventory.purchase_orders',
+    'inventory.hub_view', 'inventory.view', 'inventory.vendors_view', 'inventory.vendors_manage', 'inventory.purchase_orders', 'inventory.sales_returns', 'inventory.purchase_returns',
     'finance.view', 'finance.invoices', 'finance.receipts', 'finance.tally_sync', 'finance.audit', 'finance.expenses',
     'finance.ledger', 'finance.vendors', 'finance.banking', 'finance.tax', 'finance.budgets', 'finance.assets',
     'finance.project_costing', 'finance.reports', 'finance.settings',

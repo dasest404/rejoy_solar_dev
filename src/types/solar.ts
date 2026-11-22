@@ -982,6 +982,12 @@ export interface PurchaseOrder {
   totalAmount: number;
   status: PurchaseStatus;
   paymentStatus: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID';
+  paidAmount?: number;
+  returnedAmount?: number;
+  refundedAmount?: number;
+  balanceAmount?: number;
+  bankAccountId?: string;
+  bankAccountName?: string;
   paymentDueDate?: string;
   invoiceReference?: string;
   notes?: string;
@@ -1067,8 +1073,12 @@ export interface SalesInvoice {
   paymentTerms: string;
   notes?: string;
   paidAmount?: number;
+  returnedAmount?: number;
+  refundedAmount?: number;
   balanceAmount?: number;
   paymentStatus?: string;
+  bankAccountId?: string;
+  bankAccountName?: string;
   cgstAmount?: number;
   sgstAmount?: number;
   igstAmount?: number;
@@ -1117,9 +1127,12 @@ export interface VendorSalesPaymentEntry {
   vendorId: string;
   paymentDate: string;
   amount: number;
+  bankAccountId?: string;
+  bankAccountName?: string;
   paymentMode: string;
   referenceNo?: string;
   notes?: string;
+  journalEntryId?: string;
   recordedBy?: string;
   createdAt: string;
 }
@@ -1153,7 +1166,11 @@ export interface VendorSalesInvoice {
   taxAmount: number;
   totalAmount: number;
   paidAmount: number;
+  returnedAmount?: number;
+  refundedAmount?: number;
   balanceAmount: number;
+  bankAccountId?: string;
+  bankAccountName?: string;
   status: VendorSalesInvoiceStatus;
   payments: VendorSalesPaymentEntry[];
   createdBy?: string;
@@ -1162,11 +1179,131 @@ export interface VendorSalesInvoice {
   updatedAt: string;
 }
 
+export type SalesReturnTargetType = 'CUSTOMER_INVOICE' | 'VENDOR_INVOICE';
+export type SalesReturnSettlementMode = 'CREDIT_NOTE' | 'BANK_REFUND';
+
+export interface SalesReturnLineItem {
+  id?: string;
+  productId?: string | null;
+  description: string;
+  hsnCode?: string;
+  originalQuantity?: number;
+  quantity: number;
+  unit?: string;
+  rate: number;
+  gstRate?: number;
+  taxRatePercent?: number;
+  taxableAmount: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+}
+
+export interface SalesReturn {
+  id: string;
+  returnNumber: string;
+  targetType: SalesReturnTargetType;
+  invoiceId: string;
+  invoiceNumber: string;
+  partyType?: 'CUSTOMER' | 'VENDOR';
+  partyId: string;
+  partyName: string;
+  projectId?: string;
+  projectTitle?: string;
+  returnDate: string;
+  reason: string;
+  warehouseId?: string;
+  warehouseName?: string;
+  restockInventory: boolean;
+  settlementMode: SalesReturnSettlementMode;
+  refundAmount: number;
+  bankAccountId?: string;
+  bankAccountName?: string;
+  subtotal: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  journalEntryId?: string;
+  creditJournalEntryId?: string;
+  refundJournalEntryId?: string;
+  status: 'POSTED' | 'PROCESSED' | 'REFUNDED' | 'REVERSED' | string;
+  notes?: string;
+  items: SalesReturnLineItem[];
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type PurchaseReturnSettlementMode = 'DEBIT_NOTE' | 'VENDOR_REFUND';
+
+export interface PurchaseReturnLineItem {
+  id?: string;
+  productId?: string | null;
+  description: string;
+  hsnCode?: string;
+  originalQuantity?: number;
+  quantity: number;
+  unit?: string;
+  rate: number;
+  gstRate?: number;
+  taxRatePercent?: number;
+  taxableAmount: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+}
+
+export interface PurchaseReturn {
+  id: string;
+  returnNumber: string;
+  purchaseOrderId?: string;
+  poId?: string;
+  poNumber: string;
+  vendorBillId?: string;
+  vendorBillNumber?: string;
+  vendorId: string;
+  vendorName: string;
+  projectId?: string;
+  projectTitle?: string;
+  returnDate: string;
+  reason: string;
+  warehouseId?: string;
+  warehouseName?: string;
+  deductInventory: boolean;
+  settlementMode: PurchaseReturnSettlementMode;
+  refundAmount: number;
+  bankAccountId?: string;
+  bankAccountName?: string;
+  subtotal: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  journalEntryId?: string;
+  debitJournalEntryId?: string;
+  refundJournalEntryId?: string;
+  status: 'POSTED' | 'PROCESSED' | 'REFUNDED' | 'REVERSED' | string;
+  notes?: string;
+  items: PurchaseReturnLineItem[];
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type StockMovementType =
   | 'PURCHASE_RECEIPT'
+  | 'PURCHASE_RETURN'
   | 'BOM_ALLOCATION'
   | 'BOM_DISPATCH'
   | 'INVOICE_SALE'
+  | 'SALES_RETURN'
   | 'ADJUSTMENT'
   | 'WAREHOUSE_TRANSFER'
   | 'AUDIT_RECONCILIATION'

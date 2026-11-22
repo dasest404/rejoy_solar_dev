@@ -251,6 +251,12 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     const project = projects.find(p => p.id === projectId);
     const selectedWh = warehouses.find(w => w.id === warehouseId) || storageService.getDefaultWarehouse();
 
+    const existingPaid = Number(order.paidAmount || 0);
+    const existingReturned = Number(order.returnedAmount || 0);
+    const existingRefunded = Number(order.refundedAmount || 0);
+    const netPaid = Math.max(0, existingPaid - existingRefunded);
+    const nextBalance = Math.max(0, Number((totals.grandTotal - existingReturned - netPaid).toFixed(2)));
+
     const updatedOrder: PurchaseOrder = {
       ...order,
       vendorId,
@@ -262,6 +268,10 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
       purchaseDate,
       expectedDeliveryDate: expectedDeliveryDate || undefined,
       paymentStatus,
+      paidAmount: existingPaid,
+      returnedAmount: existingReturned,
+      refundedAmount: existingRefunded,
+      balanceAmount: nextBalance,
       paymentDueDate: paymentDueDate || undefined,
       invoiceReference: invoiceReference.trim() || undefined,
       notes: notes.trim() || undefined,

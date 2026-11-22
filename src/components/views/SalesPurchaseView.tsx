@@ -9,6 +9,8 @@ import { ProductCatalog } from '../sales_purchase/ProductCatalog';
 import { InventoryStockManager } from '../sales_purchase/InventoryStockManager';
 import { WarehouseManager } from '../sales_purchase/WarehouseManager';
 import { VendorSalesInvoiceManager } from '../sales_purchase/VendorSalesInvoiceManager';
+import { SalesReturnManager } from '../sales_purchase/SalesReturnManager';
+import { PurchaseReturnManager } from '../sales_purchase/PurchaseReturnManager';
 import {
   Layers,
   FileText,
@@ -20,7 +22,8 @@ import {
   TrendingUp,
   Sparkles,
   CheckCircle2,
-  Warehouse as WarehouseIcon
+  Warehouse as WarehouseIcon,
+  RotateCcw
 } from 'lucide-react';
 
 type MainSection = 'SALES' | 'PURCHASE' | 'INVENTORY' | 'WAREHOUSE';
@@ -32,14 +35,16 @@ export const SalesPurchaseView: React.FC = () => {
   const canBom = canAccessModule('sales_bom');
   const canInvoices = canAccessModule('sales_invoices');
   const canVendorSalesInvoices = canAccessModule('vendor_sales_invoices');
+  const canSalesReturns = canAccessModule('sales_returns');
   const canPo = canAccessModule('purchase_orders');
   const canVendors = canAccessModule('purchase_vendors');
+  const canPurchaseReturns = canAccessModule('purchase_returns');
   const canStock = canAccessModule('inventory_stock');
   const canProducts = canAccessModule('inventory_products');
   const canWarehouse = canAccessModule('warehouse_management');
 
-  const canSales = canBom || canInvoices || canVendorSalesInvoices;
-  const canPurchase = canPo || canVendors;
+  const canSales = canBom || canInvoices || canVendorSalesInvoices || canSalesReturns;
+  const canPurchase = canPo || canVendors || canPurchaseReturns;
   const canInventory = canStock || canProducts;
 
   const [activeSection, setActiveSection] = useState<MainSection>(() => {
@@ -48,10 +53,12 @@ export const SalesPurchaseView: React.FC = () => {
     if (canInventory) return 'INVENTORY';
     return 'WAREHOUSE';
   });
-  const [salesSubTab, setSalesSubTab] = useState<'BOM' | 'INVOICE' | 'VENDOR_INVOICE'>(() =>
-    canBom ? 'BOM' : canInvoices ? 'INVOICE' : 'VENDOR_INVOICE'
+  const [salesSubTab, setSalesSubTab] = useState<'BOM' | 'INVOICE' | 'VENDOR_INVOICE' | 'SALES_RETURN'>(() =>
+    canBom ? 'BOM' : canInvoices ? 'INVOICE' : canVendorSalesInvoices ? 'VENDOR_INVOICE' : 'SALES_RETURN'
   );
-  const [purchaseSubTab, setPurchaseSubTab] = useState<'VENDORS' | 'PO_ENTRY'>(() => (canPo ? 'PO_ENTRY' : 'VENDORS'));
+  const [purchaseSubTab, setPurchaseSubTab] = useState<'VENDORS' | 'PO_ENTRY' | 'PURCHASE_RETURN'>(() =>
+    canPo ? 'PO_ENTRY' : canVendors ? 'VENDORS' : 'PURCHASE_RETURN'
+  );
   const [inventorySubTab, setInventorySubTab] = useState<'PRODUCTS' | 'STOCK'>(() => (canStock ? 'STOCK' : 'PRODUCTS'));
 
   // Sync with activeView from Sidebar / AppContext navigation & enforce permitted subtab fallback
@@ -65,12 +72,18 @@ export const SalesPurchaseView: React.FC = () => {
     } else if (activeView === 'vendor_sales_invoices' && canVendorSalesInvoices) {
       setActiveSection('SALES');
       setSalesSubTab('VENDOR_INVOICE');
+    } else if (activeView === 'sales_returns' && canSalesReturns) {
+      setActiveSection('SALES');
+      setSalesSubTab('SALES_RETURN');
     } else if (activeView === 'purchase_vendors' && canVendors) {
       setActiveSection('PURCHASE');
       setPurchaseSubTab('VENDORS');
     } else if (activeView === 'purchase_orders' && canPo) {
       setActiveSection('PURCHASE');
       setPurchaseSubTab('PO_ENTRY');
+    } else if (activeView === 'purchase_returns' && canPurchaseReturns) {
+      setActiveSection('PURCHASE');
+      setPurchaseSubTab('PURCHASE_RETURN');
     } else if (activeView === 'inventory_products' && canProducts) {
       setActiveSection('INVENTORY');
       setInventorySubTab('PRODUCTS');
@@ -82,10 +95,10 @@ export const SalesPurchaseView: React.FC = () => {
     } else {
       if (canSales) {
         setActiveSection('SALES');
-        setSalesSubTab(canBom ? 'BOM' : canInvoices ? 'INVOICE' : 'VENDOR_INVOICE');
+        setSalesSubTab(canBom ? 'BOM' : canInvoices ? 'INVOICE' : canVendorSalesInvoices ? 'VENDOR_INVOICE' : 'SALES_RETURN');
       } else if (canPurchase) {
         setActiveSection('PURCHASE');
-        setPurchaseSubTab(canPo ? 'PO_ENTRY' : 'VENDORS');
+        setPurchaseSubTab(canPo ? 'PO_ENTRY' : canVendors ? 'VENDORS' : 'PURCHASE_RETURN');
       } else if (canInventory) {
         setActiveSection('INVENTORY');
         setInventorySubTab(canStock ? 'STOCK' : 'PRODUCTS');
@@ -93,7 +106,7 @@ export const SalesPurchaseView: React.FC = () => {
         setActiveSection('WAREHOUSE');
       }
     }
-  }, [activeView, canBom, canInvoices, canVendorSalesInvoices, canPo, canVendors, canStock, canProducts, canWarehouse, canSales, canPurchase, canInventory]);
+  }, [activeView, canBom, canInvoices, canVendorSalesInvoices, canSalesReturns, canPo, canVendors, canPurchaseReturns, canStock, canProducts, canWarehouse, canSales, canPurchase, canInventory]);
 
   return (
     <div className="space-y-6 pb-12">
@@ -129,7 +142,7 @@ export const SalesPurchaseView: React.FC = () => {
               onClick={() => {
                 setActiveSection('SALES');
                 setActiveView(
-                  canBom ? 'sales_bom' : canInvoices ? 'sales_invoices' : 'vendor_sales_invoices'
+                  canBom ? 'sales_bom' : canInvoices ? 'sales_invoices' : canVendorSalesInvoices ? 'vendor_sales_invoices' : 'sales_returns'
                 );
               }}
               className={`flex items-center justify-center gap-2.5 p-3.5 rounded-xl font-bold text-sm transition-all ${
@@ -148,7 +161,7 @@ export const SalesPurchaseView: React.FC = () => {
               id="tab-purchase-section"
               onClick={() => {
                 setActiveSection('PURCHASE');
-                setActiveView(canPo ? 'purchase_orders' : 'purchase_vendors');
+                setActiveView(canPo ? 'purchase_orders' : canVendors ? 'purchase_vendors' : 'purchase_returns');
               }}
               className={`flex items-center justify-center gap-2.5 p-3.5 rounded-xl font-bold text-sm transition-all ${
                 activeSection === 'PURCHASE'
@@ -202,7 +215,7 @@ export const SalesPurchaseView: React.FC = () => {
       {/* Sub-Tabs for Area 1: SALES */}
       {activeSection === 'SALES' && canSales && (
         <div className="space-y-6">
-          <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
             {canBom && (
               <button
                 onClick={() => {
@@ -251,14 +264,32 @@ export const SalesPurchaseView: React.FC = () => {
                 Vendor Sales Invoices
               </button>
             )}
+            {canSalesReturns && (
+              <button
+                onClick={() => {
+                  setSalesSubTab('SALES_RETURN');
+                  setActiveView('sales_returns');
+                }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                  salesSubTab === 'SALES_RETURN'
+                    ? 'bg-slate-800 text-white shadow-xs'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <RotateCcw className="w-4 h-4" />
+                Sales Returns (Credit Notes)
+              </button>
+            )}
           </div>
 
           {salesSubTab === 'BOM' && canBom ? (
             <BOMManager />
           ) : salesSubTab === 'INVOICE' && canInvoices ? (
             <InvoiceCreator />
-          ) : canVendorSalesInvoices ? (
+          ) : salesSubTab === 'VENDOR_INVOICE' && canVendorSalesInvoices ? (
             <VendorSalesInvoiceManager />
+          ) : canSalesReturns ? (
+            <SalesReturnManager />
           ) : null}
         </div>
       )}
@@ -266,7 +297,7 @@ export const SalesPurchaseView: React.FC = () => {
       {/* Sub-Tabs for Area 2: PURCHASE */}
       {activeSection === 'PURCHASE' && canPurchase && (
         <div className="space-y-6">
-          <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
             {canPo && (
               <button
                 onClick={() => {
@@ -299,9 +330,31 @@ export const SalesPurchaseView: React.FC = () => {
                 Vendor Management Directory
               </button>
             )}
+            {canPurchaseReturns && (
+              <button
+                onClick={() => {
+                  setPurchaseSubTab('PURCHASE_RETURN');
+                  setActiveView('purchase_returns');
+                }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                  purchaseSubTab === 'PURCHASE_RETURN'
+                    ? 'bg-slate-800 text-white shadow-xs'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <RotateCcw className="w-4 h-4" />
+                Purchase Returns (Debit Notes)
+              </button>
+            )}
           </div>
 
-          {purchaseSubTab === 'PO_ENTRY' && canPo ? <PurchaseOrderEntry /> : canVendors ? <VendorManager /> : null}
+          {purchaseSubTab === 'PO_ENTRY' && canPo ? (
+            <PurchaseOrderEntry />
+          ) : purchaseSubTab === 'VENDORS' && canVendors ? (
+            <VendorManager />
+          ) : canPurchaseReturns ? (
+            <PurchaseReturnManager />
+          ) : null}
         </div>
       )}
 

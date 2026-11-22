@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
-import { SalesInvoice, InvoiceLineItem } from '../../types/solar';
+import { SalesInvoice, InvoiceLineItem, BankAccount } from '../../types/solar';
 import { PrintPortal, triggerSafeWindowPrint } from '../common/PrintPortal';
 import { numberToIndianWords } from '../../utils/indianNumberWords';
 import {
@@ -20,7 +20,9 @@ import {
   PackageCheck,
   Loader2,
   Mail,
-  Pencil
+  Pencil,
+  CreditCard,
+  Landmark
 } from 'lucide-react';
 
 type DraftInvoiceLineItem = Omit<InvoiceLineItem, 'id'> & { id?: string };
@@ -44,8 +46,18 @@ export const InvoiceCreator: React.FC = () => {
   const [editingInvoice, setEditingInvoice] = useState<SalesInvoice | null>(null);
   const [viewingInvoiceId, setViewingInvoiceId] = useState<string | null>(null);
   const [confirmDeleteInvoice, setConfirmDeleteInvoice] = useState<SalesInvoice | null>(null);
+  const [paymentInvoice, setPaymentInvoice] = useState<SalesInvoice | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [payAmount, setPayAmount] = useState<number>(0);
+  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [payMode, setPayMode] = useState('Bank NEFT/RTGS');
+  const [payBankAccountId, setPayBankAccountId] = useState('');
+  const [payReference, setPayReference] = useState('');
+  const [payNotes, setPayNotes] = useState('');
+  const [payError, setPayError] = useState<string | null>(null);
+  const [isRecordingPayment, setIsRecordingPayment] = useState(false);
+
   const [isSaving, setIsSaving] = useState(false);
-  const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -62,6 +74,7 @@ export const InvoiceCreator: React.FC = () => {
   const [formPaymentTerms, setFormPaymentTerms] = useState('15 Days Net');
   const [formNotes, setFormNotes] = useState('');
   const [formDeductStock, setFormDeductStock] = useState(true);
+  const [formBankAccountId, setFormBankAccountId] = useState('');
 
   // Dynamic items in modal
   const [lineItems, setLineItems] = useState<DraftInvoiceLineItem[]>([]);
@@ -77,6 +90,26 @@ export const InvoiceCreator: React.FC = () => {
     window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
     return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    storageService
+      .fetchAccountingBankAccountsAsync()
+      .then(list => {
+        if (!mounted || !Array.isArray(list)) return;
+        const active = list.filter((b: any) => b && b.isActive !== false);
+        setBankAccounts(active);
+        const primary = active.find((b: any) => b.isPrimary) || active[0];
+        if (primary) {
+          setPayBankAccountId(prev => (prev && active.some((b: any) => b.id === prev) ? prev : primary.id));
+          setFormBankAccountId(prev => (prev && active.some((b: any) => b.id === prev) ? prev : primary.id));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [refreshTrigger, localUpdateCounter]);
 
   // Storage data
   const invoices = useMemo(
@@ -106,21 +139,27 @@ export const InvoiceCreator: React.FC = () => {
 
   // Calculations for summary metrics
   const metrics = useMemo(() => {
-    const totalInvoiced = invoices.reduce((sum, inv) => sum + (Number(inv.totalAmount) || 0), 0);
-    const totalPaid = invoices
-      .filter(inv => inv.status === 'PAID')
-      .reduce((sum, inv) => sum + (Number(inv.totalAmount) || 0), 0);
-    const totalPending = invoices
-      .filter(inv => inv.status !== 'PAID' && inv.status !== 'CANCELLED')
-      .reduce(
-        (sum, inv) =>
-          sum +
-          (inv.balanceAmount != null
-            ? Number(inv.balanceAmount)
-            : Math.max(0, (Number(inv.totalAmount) || 0) - (Number(inv.paidAmount) || 0))),
-        0
-      );
-    const totalTax = invoices.reduce((sum, inv) => sum + (Number(inv.taxAmount) || 0), 0);
+    const active = invoices.filter(inv => inv.status !== 'CANCELLED');
+    const totalInvoiced = active.reduce((sum, inv) => sum + (Number(inv.totalAmount) || 0), 0);
+    const totalPaid = active.reduce((sum, inv) => {
+      const paid = inv.paidAmount != null ? Number(inv.paidAmount) : inv.status === 'PAID' ? Number(inv.totalAmount || 0) : 0;
+      const refunded = Number(inv.refundedAmount || 0);
+      return sum + Math.max(0, paid - refunded);
+    }, 0);
+    const totalPending = active
+      .filter(inv => inv.status !== 'DRAFT')
+      .reduce((sum, inv) => {
+        const total = Number(inv.totalAmount) || 0;
+        const returned = Number(inv.returnedAmount) || 0;
+        const netPaid = Math.max(
+          0,
+          (inv.paidAmount != null ? Number(inv.paidAmount) : inv.status === 'PAID' ? total : 0) -
+            (Number(inv.refundedAmount) || 0)
+        );
+        const bal = inv.balanceAmount != null ? Number(inv.balanceAmount) : Math.max(0, total - returned - netPaid);
+        return sum + Math.max(0, bal);
+      }, 0);
+    const totalTax = active.reduce((sum, inv) => sum + (Number(inv.taxAmount) || 0), 0);
 
     return { totalInvoiced, totalPaid, totalPending, totalTax };
   }, [invoices]);
@@ -178,6 +217,7 @@ export const InvoiceCreator: React.FC = () => {
     setFormPaymentTerms(inv.paymentTerms || '15 Days Net');
     setFormNotes(inv.notes || '');
     setFormDeductStock(Boolean(inv.deductStock));
+    setFormBankAccountId(inv.bankAccountId || bankAccounts.find(b => b.isPrimary)?.id || bankAccounts[0]?.id || '');
     setLineItems((inv.items || []).map(it => ({ ...it })));
     setSelectedProductId('');
     setCustomItemDesc('');
@@ -342,14 +382,18 @@ export const InvoiceCreator: React.FC = () => {
     const isEditing = Boolean(editingInvoice);
 
     const existingPaid = Number(editingInvoice?.paidAmount ?? 0);
+    const existingReturned = Number(editingInvoice?.returnedAmount ?? 0);
+    const existingRefunded = Number(editingInvoice?.refundedAmount ?? 0);
     const nextPaidAmount =
       formStatus === 'PAID'
-        ? Math.max(existingPaid, formGrandTotal)
+        ? Math.max(existingPaid, Math.max(0, formGrandTotal - existingReturned) + existingRefunded)
         : existingPaid;
+    const netPaid = Math.max(0, nextPaidAmount - existingRefunded);
     const nextBalanceAmount =
       formStatus === 'PAID'
         ? 0
-        : Math.max(0, Number((formGrandTotal - nextPaidAmount).toFixed(2)));
+        : Math.max(0, Number((formGrandTotal - existingReturned - netPaid).toFixed(2)));
+    const selectedBank = bankAccounts.find(b => b.id === formBankAccountId);
 
     const isInterState =
       Boolean(editingInvoice?.igstAmount && editingInvoice.igstAmount > 0) &&
@@ -386,7 +430,11 @@ export const InvoiceCreator: React.FC = () => {
       paymentTerms: formPaymentTerms,
       notes: formNotes,
       paidAmount: nextPaidAmount,
+      returnedAmount: existingReturned,
+      refundedAmount: existingRefunded,
       balanceAmount: nextBalanceAmount,
+      bankAccountId: selectedBank?.id || editingInvoice?.bankAccountId,
+      bankAccountName: selectedBank?.accountName || editingInvoice?.bankAccountName,
       cgstAmount: nextCgst,
       sgstAmount: nextSgst,
       igstAmount: nextIgst,
@@ -434,30 +482,69 @@ export const InvoiceCreator: React.FC = () => {
     }
   };
 
-  const handleMarkAsPaid = async (invoice: SalesInvoice) => {
-    if (!canManageInvoices || markingPaidId) return;
-    setMarkingPaidId(invoice.id);
+  const getInvoiceBalance = (inv: SalesInvoice) => {
+    const total = Number(inv.totalAmount || 0);
+    const returned = Number(inv.returnedAmount || 0);
+    const paid = Number(inv.paidAmount || 0);
+    const refunded = Number(inv.refundedAmount || 0);
+    const netPaid = Math.max(0, paid - refunded);
+    return Number((inv.balanceAmount != null ? Number(inv.balanceAmount) : Math.max(0, total - returned - netPaid)).toFixed(2));
+  };
+
+  const openPaymentModal = (invoice: SalesInvoice) => {
+    const balance = getInvoiceBalance(invoice);
+    setPayError(null);
+    setPaymentInvoice(invoice);
+    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayAmount(balance > 0 ? balance : 0);
+    setPayMode('Bank NEFT/RTGS');
+    const primaryBank = bankAccounts.find(b => b.id === invoice.bankAccountId) || bankAccounts.find(b => b.isPrimary) || bankAccounts[0];
+    setPayBankAccountId(primaryBank?.id || '');
+    setPayReference('');
+    setPayNotes('');
+  };
+
+  const handleRecordPaymentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canManageInvoices || !paymentInvoice || isRecordingPayment) return;
+    setPayError(null);
+    const remaining = getInvoiceBalance(paymentInvoice);
+
+    if (!Number.isFinite(payAmount) || payAmount <= 0) {
+      setPayError('Payment amount must be greater than zero.');
+      return;
+    }
+    if (payAmount > remaining + 0.01) {
+      setPayError(`Payment exceeds remaining invoice balance due (₹${remaining.toLocaleString('en-IN')}).`);
+      return;
+    }
+    if (!payBankAccountId) {
+      setPayError('Please select a Cash / Bank account to deposit this payment into.');
+      return;
+    }
+
+    setIsRecordingPayment(true);
     try {
-      const total = Number(invoice.totalAmount || 0);
-      const updated: SalesInvoice = {
-        ...invoice,
-        status: 'PAID',
-        paymentStatus: 'PAID',
-        paidAmount: Math.max(Number(invoice.paidAmount || 0), total),
-        balanceAmount: 0,
-        updatedAt: new Date().toISOString()
-      };
-      await storageService.saveSalesInvoiceAsync(
-        updated,
-        false,
-        currentUser?.name || 'Accounts Officer'
-      );
+      const res = await storageService.recordSalesInvoicePaymentAsync(paymentInvoice.id, {
+        amount: Number(payAmount.toFixed(2)),
+        paymentDate: payDate,
+        paymentMode: payMode,
+        bankAccountId: payBankAccountId,
+        referenceNo: payReference.trim() || undefined,
+        notes: payNotes.trim() || undefined
+      });
       triggerRefresh();
-      showToast(`Invoice ${invoice.invoiceNumber} marked as PAID`, 'success');
+      showToast(
+        `Recorded ₹${Number(payAmount).toLocaleString('en-IN')} against ${paymentInvoice.invoiceNumber} (${res?.bankAccountName || 'Bank'})`,
+        'success'
+      );
+      setPaymentInvoice(null);
     } catch (err: any) {
-      showToast(err?.message || `Failed to mark ${invoice.invoiceNumber} as paid`, 'error');
+      const msg = err?.message || 'Failed to record invoice payment.';
+      setPayError(msg);
+      showToast(msg, 'error');
     } finally {
-      setMarkingPaidId(null);
+      setIsRecordingPayment(false);
     }
   };
 
@@ -656,8 +743,30 @@ export const InvoiceCreator: React.FC = () => {
                   <td className="p-3.5 text-right text-slate-600 font-mono">
                     ₹{inv.taxAmount.toLocaleString('en-IN')}
                   </td>
-                  <td className="p-3.5 text-right font-mono font-bold text-slate-900 text-sm">
-                    ₹{inv.totalAmount.toLocaleString('en-IN')}
+                  <td className="p-3.5 text-right font-mono">
+                    <div className="font-bold text-slate-900 text-sm">
+                      ₹{inv.totalAmount.toLocaleString('en-IN')}
+                    </div>
+                    {Number(inv.paidAmount || 0) > 0 && (
+                      <div className="text-[10px] text-emerald-700">
+                        Paid: ₹{Number(inv.paidAmount || 0).toLocaleString('en-IN')}
+                      </div>
+                    )}
+                    {Number(inv.returnedAmount || 0) > 0 && (
+                      <div className="text-[10px] text-amber-700">
+                        Ret: -₹{Number(inv.returnedAmount || 0).toLocaleString('en-IN')}
+                      </div>
+                    )}
+                    {getInvoiceBalance(inv) > 0.01 && inv.status !== 'CANCELLED' && (
+                      <div className="text-[10px] font-bold text-rose-700">
+                        Bal: ₹{getInvoiceBalance(inv).toLocaleString('en-IN')}
+                      </div>
+                    )}
+                    {inv.bankAccountName && (
+                      <div className="text-[10px] text-slate-400 truncate max-w-[140px] ml-auto">
+                        {inv.bankAccountName}
+                      </div>
+                    )}
                   </td>
                   <td className="p-3.5 text-center whitespace-nowrap">
                     <span
@@ -688,17 +797,20 @@ export const InvoiceCreator: React.FC = () => {
                   </td>
                   <td className="p-3.5 text-right whitespace-nowrap">
                     <div className="flex items-center justify-end gap-1.5">
-                      {canManageInvoices && inv.status !== 'PAID' && inv.status !== 'CANCELLED' && (
-                        <button
-                          type="button"
-                          onClick={() => handleMarkAsPaid(inv)}
-                          disabled={markingPaidId === inv.id}
-                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          {markingPaidId === inv.id && <Loader2 className="w-3 h-3 animate-spin" />}
-                          Mark Paid
-                        </button>
-                      )}
+                      {canManageInvoices &&
+                        inv.status !== 'PAID' &&
+                        inv.status !== 'DRAFT' &&
+                        inv.status !== 'CANCELLED' &&
+                        getInvoiceBalance(inv) > 0.01 && (
+                          <button
+                            type="button"
+                            onClick={() => openPaymentModal(inv)}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <CreditCard className="w-3 h-3" />
+                            Pay / Receive
+                          </button>
+                        )}
                       {canManageInvoices && (
                         <button
                           type="button"
@@ -1210,6 +1322,27 @@ export const InvoiceCreator: React.FC = () => {
                 </label>
               </div>
 
+              {/* Optional Settlement Bank Account when saving as PAID */}
+              {formStatus === 'PAID' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Deposit Cash / Bank Account
+                  </label>
+                  <select
+                    value={formBankAccountId}
+                    onChange={e => setFormBankAccountId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                  >
+                    <option value="">-- Default Primary Bank / Cash --</option>
+                    {bankAccounts.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.accountName} ({b.accountType}) — Bal: ₹{Number(b.currentBalance || 0).toLocaleString('en-IN')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Notes */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1404,6 +1537,34 @@ export const InvoiceCreator: React.FC = () => {
                   ₹{viewingInvoice.totalAmount.toLocaleString('en-IN')}
                 </span>
               </div>
+              {Number(viewingInvoice.returnedAmount || 0) > 0 && (
+                <div className="flex justify-between w-64 text-amber-700">
+                  <span>Sales Returned (Credit Note):</span>
+                  <span className="font-mono">-₹{Number(viewingInvoice.returnedAmount || 0).toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {Number(viewingInvoice.paidAmount || 0) > 0 && (
+                <div className="flex justify-between w-64 text-emerald-700">
+                  <span>Paid Received:</span>
+                  <span className="font-mono">₹{Number(viewingInvoice.paidAmount || 0).toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {Number(viewingInvoice.refundedAmount || 0) > 0 && (
+                <div className="flex justify-between w-64 text-rose-700">
+                  <span>Refunded to Customer:</span>
+                  <span className="font-mono">₹{Number(viewingInvoice.refundedAmount || 0).toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              <div className="flex justify-between w-64 font-bold text-slate-900 pt-1 border-t border-slate-200">
+                <span>Balance Due:</span>
+                <span className="font-mono text-rose-700">₹{getInvoiceBalance(viewingInvoice).toLocaleString('en-IN')}</span>
+              </div>
+              {viewingInvoice.bankAccountName && (
+                <div className="flex justify-between w-64 text-[11px] text-slate-500">
+                  <span>Settled Account:</span>
+                  <span className="font-semibold">{viewingInvoice.bankAccountName}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end">
@@ -1462,6 +1623,167 @@ export const InvoiceCreator: React.FC = () => {
                 Delete Invoice
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Record Customer Invoice Payment with Bank Selection */}
+      {paymentInvoice && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Record Invoice Payment</h3>
+                <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                  {paymentInvoice.invoiceNumber} • {paymentInvoice.customerName}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isRecordingPayment}
+                onClick={() => setPaymentInvoice(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRecordPaymentSubmit} className="p-5 space-y-4 text-xs">
+              {payError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{payError}</span>
+                </div>
+              )}
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-3 gap-2 text-center font-mono">
+                <div>
+                  <span className="text-[10px] font-sans text-slate-500 block">Invoice Total</span>
+                  <span className="font-bold text-slate-900">₹{paymentInvoice.totalAmount.toLocaleString('en-IN')}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-sans text-slate-500 block">Net Paid / Ret</span>
+                  <span className="font-bold text-emerald-700">
+                    ₹{(Math.max(0, Number(paymentInvoice.paidAmount || 0) - Number(paymentInvoice.refundedAmount || 0)) + Number(paymentInvoice.returnedAmount || 0)).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-sans text-slate-500 block">Balance Due</span>
+                  <span className="font-bold text-rose-700">₹{getInvoiceBalance(paymentInvoice).toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <Landmark className="w-3.5 h-3.5 text-amber-600" />
+                  Deposit To Cash / Bank Account *
+                </label>
+                <select
+                  required
+                  value={payBankAccountId}
+                  onChange={e => setPayBankAccountId(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                >
+                  <option value="">-- Select Cash / Bank Account --</option>
+                  {bankAccounts.map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.accountName} ({b.accountType}) — Bal: ₹{Number(b.currentBalance || 0).toLocaleString('en-IN')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Payment Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={payDate}
+                    onChange={e => setPayDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-slate-700">Amount (₹) *</label>
+                    <button
+                      type="button"
+                      onClick={() => setPayAmount(getInvoiceBalance(paymentInvoice))}
+                      className="text-[10px] font-bold text-amber-700 hover:underline cursor-pointer"
+                    >
+                      Pay Full
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={getInvoiceBalance(paymentInvoice)}
+                    step="0.01"
+                    required
+                    value={payAmount}
+                    onChange={e => setPayAmount(Number(e.target.value))}
+                    className="w-full px-3 py-2 font-mono font-bold bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Payment Mode *</label>
+                  <select
+                    value={payMode}
+                    onChange={e => setPayMode(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                  >
+                    <option value="Bank NEFT/RTGS">Bank NEFT/RTGS</option>
+                    <option value="UPI">UPI</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Cash">Cash</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">UTR / Reference No.</label>
+                  <input
+                    type="text"
+                    value={payReference}
+                    onChange={e => setPayReference(e.target.value)}
+                    placeholder="UTR / Cheque #"
+                    className="w-full px-3 py-2 font-mono bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Remarks</label>
+                <input
+                  type="text"
+                  value={payNotes}
+                  onChange={e => setPayNotes(e.target.value)}
+                  placeholder="Optional receipt notes"
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  disabled={isRecordingPayment}
+                  onClick={() => setPaymentInvoice(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isRecordingPayment || !payBankAccountId}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-bold"
+                >
+                  {isRecordingPayment && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Record Receipt & Update Bank
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

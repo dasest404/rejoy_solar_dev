@@ -378,6 +378,141 @@ function ensureAccountingTablesPhp($pdo) {
     accAddColumnIfMissing($pdo, 'solar_sales_invoices', 'einvoice_ack_no', "VARCHAR(64) DEFAULT ''");
     accAddColumnIfMissing($pdo, 'solar_sales_invoices', 'einvoice_ack_date', "VARCHAR(64) DEFAULT ''");
     accAddColumnIfMissing($pdo, 'solar_sales_invoices', 'einvoice_status', "VARCHAR(32) DEFAULT 'NOT_GENERATED'");
+    accAddColumnIfMissing($pdo, 'solar_sales_invoices', 'returned_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_sales_invoices', 'refunded_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_sales_invoices', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    accAddColumnIfMissing($pdo, 'solar_vendor_sales_invoices', 'returned_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_vendor_sales_invoices', 'refunded_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_vendor_sales_invoices', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    accAddColumnIfMissing($pdo, 'solar_vendor_sales_payments', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+    accAddColumnIfMissing($pdo, 'solar_vendor_sales_payments', 'journal_entry_id', "VARCHAR(64) DEFAULT ''");
+
+    accAddColumnIfMissing($pdo, 'solar_purchase_orders', 'paid_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_purchase_orders', 'returned_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_purchase_orders', 'refunded_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_purchase_orders', 'balance_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_purchase_orders', 'bank_account_id', "VARCHAR(64) DEFAULT ''");
+
+    accAddColumnIfMissing($pdo, 'solar_acc_vendor_bills', 'returned_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+    accAddColumnIfMissing($pdo, 'solar_acc_vendor_bills', 'refunded_amount', "DECIMAL(14,2) NOT NULL DEFAULT 0.00");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `solar_sales_returns` (
+        `id` VARCHAR(64) PRIMARY KEY,
+        `return_number` VARCHAR(64) NOT NULL UNIQUE,
+        `return_date` DATE NOT NULL,
+        `target_type` VARCHAR(32) NOT NULL DEFAULT 'CUSTOMER_INVOICE',
+        `invoice_id` VARCHAR(64) NOT NULL,
+        `invoice_number` VARCHAR(64) DEFAULT '',
+        `party_id` VARCHAR(64) DEFAULT '',
+        `party_name` VARCHAR(255) NOT NULL,
+        `project_id` VARCHAR(64) DEFAULT '',
+        `project_title` VARCHAR(255) DEFAULT '',
+        `reason` VARCHAR(500) DEFAULT '',
+        `notes` TEXT,
+        `warehouse_id` VARCHAR(64) DEFAULT '',
+        `warehouse_name` VARCHAR(255) DEFAULT '',
+        `restock_inventory` TINYINT(1) NOT NULL DEFAULT 1,
+        `subtotal` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `settlement_mode` VARCHAR(32) NOT NULL DEFAULT 'CREDIT_NOTE',
+        `refund_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `bank_account_id` VARCHAR(64) DEFAULT '',
+        `bank_account_name` VARCHAR(255) DEFAULT '',
+        `credit_journal_entry_id` VARCHAR(64) DEFAULT '',
+        `refund_journal_entry_id` VARCHAR(64) DEFAULT '',
+        `status` VARCHAR(32) NOT NULL DEFAULT 'POSTED',
+        `created_by` VARCHAR(255) DEFAULT '',
+        `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX `idx_sr_invoice` (`target_type`, `invoice_id`),
+        INDEX `idx_sr_date` (`return_date`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `solar_sales_return_items` (
+        `id` VARCHAR(64) PRIMARY KEY,
+        `return_id` VARCHAR(64) NOT NULL,
+        `line_order` INT NOT NULL DEFAULT 0,
+        `product_id` VARCHAR(64) DEFAULT NULL,
+        `description` VARCHAR(500) NOT NULL,
+        `hsn_code` VARCHAR(32) DEFAULT '',
+        `unit` VARCHAR(32) NOT NULL DEFAULT 'Nos',
+        `original_quantity` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        `quantity` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        `rate` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `taxable_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `gst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+        `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        INDEX `idx_sri_return` (`return_id`),
+        CONSTRAINT `fk_sri_return` FOREIGN KEY (`return_id`) REFERENCES `solar_sales_returns` (`id`) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `solar_purchase_returns` (
+        `id` VARCHAR(64) PRIMARY KEY,
+        `return_number` VARCHAR(64) NOT NULL UNIQUE,
+        `return_date` DATE NOT NULL,
+        `purchase_order_id` VARCHAR(64) NOT NULL,
+        `po_number` VARCHAR(64) DEFAULT '',
+        `vendor_bill_id` VARCHAR(64) DEFAULT '',
+        `vendor_id` VARCHAR(64) DEFAULT '',
+        `vendor_name` VARCHAR(255) NOT NULL,
+        `project_id` VARCHAR(64) DEFAULT '',
+        `project_title` VARCHAR(255) DEFAULT '',
+        `reason` VARCHAR(500) DEFAULT '',
+        `notes` TEXT,
+        `warehouse_id` VARCHAR(64) DEFAULT '',
+        `warehouse_name` VARCHAR(255) DEFAULT '',
+        `deduct_inventory` TINYINT(1) NOT NULL DEFAULT 1,
+        `subtotal` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `settlement_mode` VARCHAR(32) NOT NULL DEFAULT 'DEBIT_NOTE',
+        `refund_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `bank_account_id` VARCHAR(64) DEFAULT '',
+        `bank_account_name` VARCHAR(255) DEFAULT '',
+        `debit_journal_entry_id` VARCHAR(64) DEFAULT '',
+        `refund_journal_entry_id` VARCHAR(64) DEFAULT '',
+        `status` VARCHAR(32) NOT NULL DEFAULT 'POSTED',
+        `created_by` VARCHAR(255) DEFAULT '',
+        `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX `idx_pr_po` (`purchase_order_id`),
+        INDEX `idx_pr_date` (`return_date`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `solar_purchase_return_items` (
+        `id` VARCHAR(64) PRIMARY KEY,
+        `return_id` VARCHAR(64) NOT NULL,
+        `line_order` INT NOT NULL DEFAULT 0,
+        `product_id` VARCHAR(64) DEFAULT NULL,
+        `description` VARCHAR(500) NOT NULL,
+        `hsn_code` VARCHAR(32) DEFAULT '',
+        `unit` VARCHAR(32) NOT NULL DEFAULT 'Nos',
+        `original_quantity` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        `quantity` DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+        `rate` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `taxable_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `gst_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+        `cgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `sgst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `igst_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        INDEX `idx_pri_return` (`return_id`),
+        CONSTRAINT `fk_pri_return` FOREIGN KEY (`return_id`) REFERENCES `solar_purchase_returns` (`id`) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $cnt = (int)$pdo->query('SELECT COUNT(*) FROM `solar_acc_accounts`')->fetchColumn();
     if ($cnt === 0) {
@@ -656,7 +791,8 @@ function accGetWorkspacePhp($pdo) {
                 'cgstAmount' => floatval($vb['cgst_amount']), 'sgstAmount' => floatval($vb['sgst_amount']), 'igstAmount' => floatval($vb['igst_amount']),
                 'gstAmount' => floatval($vb['gst_amount']), 'tdsSection' => $vb['tds_section'] ?? '', 'tdsRate' => floatval($vb['tds_rate']),
                 'tdsAmount' => floatval($vb['tds_amount']), 'totalAmount' => floatval($vb['total_amount']),
-                'paidAmount' => floatval($vb['paid_amount']), 'balanceAmount' => floatval($vb['balance_amount']),
+                'paidAmount' => floatval($vb['paid_amount']), 'returnedAmount' => floatval($vb['returned_amount'] ?? 0),
+                'refundedAmount' => floatval($vb['refunded_amount'] ?? 0), 'balanceAmount' => floatval($vb['balance_amount']),
                 'itcEligible' => intval($vb['itc_eligible']) !== 0, 'status' => $vb['status'] ?? 'OPEN',
                 'expenseAccountId' => $vb['expense_account_id'] ?? '', 'journalEntryId' => $vb['journal_entry_id'] ?? '',
                 'notes' => $vb['notes'] ?? '', 'items' => is_array($it) ? $it : [], 'createdBy' => $vb['created_by'] ?? '',
@@ -759,8 +895,1576 @@ function accGetWorkspacePhp($pdo) {
     ];
 }
 
+function accGetBankAccountsPhp($pdo) {
+    ensureAccountingTablesPhp($pdo);
+    $rows = $pdo->query('SELECT * FROM `solar_acc_bank_accounts` WHERE `is_active` = 1 ORDER BY `is_primary` DESC, `account_name` ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    return array_map(function ($b) {
+        return [
+            'id' => $b['id'],
+            'accountName' => $b['account_name'],
+            'accountType' => $b['account_type'] ?: 'BANK',
+            'bankName' => $b['bank_name'] ?? '',
+            'accountNumber' => $b['account_number'] ?? '',
+            'ifscCode' => $b['ifsc_code'] ?? '',
+            'branch' => $b['branch'] ?? '',
+            'coaAccountId' => $b['coa_account_id'] ?? '',
+            'openingBalance' => floatval($b['opening_balance'] ?? 0),
+            'currentBalance' => floatval($b['current_balance'] ?? 0),
+            'isPrimary' => !empty($b['is_primary']),
+            'isActive' => intval($b['is_active'] ?? 1) !== 0
+        ];
+    }, $rows);
+}
+
+function accResolveBankAccountTxPhp($pdo, $bankAccountId, $settings, $paymentMode = '') {
+    $cleanId = trim((string)($bankAccountId ?? ''));
+    if ($cleanId === '') {
+        throw new Exception('Please select a Cash/Bank account for this transaction.');
+    }
+    $s = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
+    $s->execute([$cleanId]);
+    $bank = $s->fetch(PDO::FETCH_ASSOC);
+    if (!$bank) {
+        throw new Exception('Selected Cash/Bank account was not found.');
+    }
+    if (isset($bank['is_active']) && intval($bank['is_active']) === 0) {
+        throw new Exception("Cash/Bank account \"{$bank['account_name']}\" is inactive.");
+    }
+    $isCash = ($bank['account_type'] === 'CASH') || (stripos((string)$paymentMode, 'cash') !== false);
+    $coaId = !empty($bank['coa_account_id'])
+        ? $bank['coa_account_id']
+        : ($isCash ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+    return ['bank' => $bank, 'coaId' => $coaId];
+}
+
+function accResolveBankCoaTxPhp($pdo, $bankAccountId, $settings) {
+    if (empty($bankAccountId)) return $settings['default_bank_account_id'] ?? 'acc-1020';
+    $s = $pdo->prepare('SELECT `account_type`, `coa_account_id` FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
+    $s->execute([$bankAccountId]);
+    $b = $s->fetch(PDO::FETCH_ASSOC);
+    if (!$b) return $settings['default_bank_account_id'] ?? 'acc-1020';
+    return !empty($b['coa_account_id'])
+        ? $b['coa_account_id']
+        : ($b['account_type'] === 'CASH' ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+}
+
+function accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor) {
+    $status = strtoupper(trim((string)($inv['payment_status'] ?? 'ISSUED')));
+    if ($status === 'DRAFT' || $status === 'CANCELLED') return null;
+    $total = accRound2($inv['total_amount'] ?? 0);
+    if ($total <= 0) return null;
+
+    $chk = $pdo->prepare("SELECT `id` FROM `solar_acc_journal_entries` WHERE `reference_type` = 'SALES_INVOICE' AND `reference_id` = ? AND `status` IN ('POSTED','REVERSED') LIMIT 1");
+    $chk->execute([$inv['id']]);
+    $exId = $chk->fetchColumn();
+    if ($exId) return $exId;
+
+    $gst = accRound2($inv['gst_amount'] ?? 0);
+    $sub = accRound2($inv['subtotal'] ?? 0);
+    $revAmount = accRound2(($total - $gst) > 0 ? ($total - $gst) : $sub);
+    $lines = [
+        [
+            'accountId' => $settings['default_ar_account_id'] ?? 'acc-1100',
+            'description' => "Sales Invoice {$inv['invoice_number']} - {$inv['customer_name']}",
+            'projectId' => $inv['project_id'] ?? '',
+            'projectTitle' => $inv['project_title'] ?? '',
+            'partyType' => 'CUSTOMER',
+            'partyId' => $inv['customer_id'] ?? '',
+            'partyName' => $inv['customer_name'] ?? '',
+            'debit' => $total,
+            'credit' => 0
+        ],
+        [
+            'accountId' => $settings['default_sales_account_id'] ?? 'acc-4010',
+            'description' => "Solar EPC Revenue - {$inv['invoice_number']}",
+            'projectId' => $inv['project_id'] ?? '',
+            'projectTitle' => $inv['project_title'] ?? '',
+            'partyType' => 'CUSTOMER',
+            'partyId' => $inv['customer_id'] ?? '',
+            'partyName' => $inv['customer_name'] ?? '',
+            'debit' => 0,
+            'credit' => $revAmount
+        ]
+    ];
+    if (accRound2($total - $revAmount) > 0) {
+        $lines[] = [
+            'accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100',
+            'description' => "Output GST - {$inv['invoice_number']}",
+            'projectId' => $inv['project_id'] ?? '',
+            'debit' => 0,
+            'credit' => accRound2($total - $revAmount)
+        ];
+    }
+    $lockDate = accToSqlDate($settings['lock_date'] ?? null);
+    $entryDate = accToSqlDate($inv['invoice_date'] ?? '') ?: accTodaySql();
+    if ($lockDate && $entryDate <= $lockDate) $entryDate = accTodaySql();
+    return accInsertJournalTxPhp($pdo, [
+        'entryDate' => $entryDate,
+        'referenceType' => 'SALES_INVOICE',
+        'referenceId' => $inv['id'],
+        'referenceNumber' => $inv['invoice_number'],
+        'narration' => "Sales Invoice {$inv['invoice_number']} ({$inv['customer_name']})",
+        'status' => 'POSTED',
+        'lines' => $lines
+    ], $actor);
+}
+
+function accEnsureSalesInvoiceJournalPhp($pdo, $invoiceId, $actor = null) {
+    ensureAccountingTablesPhp($pdo);
+    $startedTx = !$pdo->inTransaction();
+    if ($startedTx) $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $s = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1');
+        $s->execute([$invoiceId]);
+        $inv = $s->fetch(PDO::FETCH_ASSOC);
+        if (!$inv) {
+            if ($startedTx) $pdo->commit();
+            return null;
+        }
+        $jeId = accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+        if ($startedTx) $pdo->commit();
+        return $jeId;
+    } catch (Exception $e) {
+        if ($startedTx && $pdo->inTransaction()) $pdo->rollBack();
+        return null;
+    }
+}
+
+function accEnsureVendorSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor) {
+    $status = strtoupper(trim((string)($inv['status'] ?? 'ISSUED')));
+    if ($status === 'DRAFT' || $status === 'CANCELLED') return null;
+    $total = accRound2($inv['total_amount'] ?? 0);
+    if ($total <= 0) return null;
+
+    $chk = $pdo->prepare("SELECT `id` FROM `solar_acc_journal_entries` WHERE `reference_type` = 'VENDOR_SALES_INVOICE' AND `reference_id` = ? AND `status` IN ('POSTED','REVERSED') LIMIT 1");
+    $chk->execute([$inv['id']]);
+    $exId = $chk->fetchColumn();
+    if ($exId) return $exId;
+
+    $tax = accRound2($inv['tax_amount'] ?? ($inv['gst_amount'] ?? 0));
+    $revAmount = accRound2(($total - $tax) > 0 ? ($total - $tax) : floatval($inv['subtotal'] ?? $total));
+    $lines = [
+        [
+            'accountId' => $settings['default_ar_account_id'] ?? 'acc-1100',
+            'description' => "Vendor Sales Invoice {$inv['invoice_number']} - {$inv['vendor_name']}",
+            'partyType' => 'VENDOR',
+            'partyId' => $inv['vendor_id'] ?? '',
+            'partyName' => $inv['vendor_name'] ?? '',
+            'debit' => $total,
+            'credit' => 0
+        ],
+        [
+            'accountId' => 'acc-4030',
+            'description' => "Vendor Equipment Sales - {$inv['invoice_number']}",
+            'partyType' => 'VENDOR',
+            'partyId' => $inv['vendor_id'] ?? '',
+            'partyName' => $inv['vendor_name'] ?? '',
+            'debit' => 0,
+            'credit' => $revAmount
+        ]
+    ];
+    if (accRound2($total - $revAmount) > 0) {
+        $lines[] = [
+            'accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100',
+            'description' => "Output GST - {$inv['invoice_number']}",
+            'partyType' => 'VENDOR',
+            'partyId' => $inv['vendor_id'] ?? '',
+            'partyName' => $inv['vendor_name'] ?? '',
+            'debit' => 0,
+            'credit' => accRound2($total - $revAmount)
+        ];
+    }
+    $lockDate = accToSqlDate($settings['lock_date'] ?? null);
+    $entryDate = accToSqlDate($inv['invoice_date'] ?? '') ?: accTodaySql();
+    if ($lockDate && $entryDate <= $lockDate) $entryDate = accTodaySql();
+    return accInsertJournalTxPhp($pdo, [
+        'entryDate' => $entryDate,
+        'referenceType' => 'VENDOR_SALES_INVOICE',
+        'referenceId' => $inv['id'],
+        'referenceNumber' => $inv['invoice_number'],
+        'narration' => "Vendor Sales Invoice {$inv['invoice_number']} ({$inv['vendor_name']})",
+        'status' => 'POSTED',
+        'lines' => $lines
+    ], $actor);
+}
+
+function accEnsureVendorSalesInvoiceJournalPhp($pdo, $invoiceId, $actor = null) {
+    ensureAccountingTablesPhp($pdo);
+    $startedTx = !$pdo->inTransaction();
+    if ($startedTx) $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $s = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? LIMIT 1');
+        $s->execute([$invoiceId]);
+        $inv = $s->fetch(PDO::FETCH_ASSOC);
+        if (!$inv) {
+            if ($startedTx) $pdo->commit();
+            return null;
+        }
+        $jeId = accEnsureVendorSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+        if ($startedTx) $pdo->commit();
+        return $jeId;
+    } catch (Exception $e) {
+        if ($startedTx && $pdo->inTransaction()) $pdo->rollBack();
+        return null;
+    }
+}
+
+function accEnsurePurchaseOrderBillTxPhp($pdo, $po, $settings, $actor) {
+    $chk = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `po_id` = ? ORDER BY `created_at` ASC LIMIT 1');
+    $chk->execute([$po['id']]);
+    $ex = $chk->fetch(PDO::FETCH_ASSOC);
+    if ($ex) return $ex;
+
+    $totalAmount = accRound2($po['total_amount'] ?? 0);
+    $subtotal = accRound2($po['subtotal'] ?? $totalAmount);
+    $gstAmount = accRound2($po['gst_amount'] ?? 0);
+    $cgstAmount = accRound2($gstAmount / 2);
+    $sgstAmount = accRound2($gstAmount - $cgstAmount);
+    $billDate = accToSqlDate($po['po_date'] ?? '') ?: accTodaySql();
+    $dueDate = accToSqlDate($po['payment_due_date'] ?? ($po['expected_delivery_date'] ?? '')) ?: $billDate;
+    $lockDate = accToSqlDate($settings['lock_date'] ?? null);
+    $jeDate = ($lockDate && $billDate <= $lockDate) ? accTodaySql() : $billDate;
+
+    $billId = 'vbill-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+    $billNumber = trim((string)($po['invoice_reference'] ?: ($po['po_number'] ?: $billId)));
+    $dup = $pdo->prepare('SELECT `id` FROM `solar_acc_vendor_bills` WHERE `bill_number` = ? LIMIT 1');
+    $dup->execute([$billNumber]);
+    if ($dup->fetchColumn()) {
+        $billNumber = $billNumber . '-' . accRandHex(2);
+    }
+
+    $paidAmount = accRound2($po['paid_amount'] ?? 0);
+    $returnedAmount = accRound2($po['returned_amount'] ?? 0);
+    $refundedAmount = accRound2($po['refunded_amount'] ?? 0);
+    $netPaid = accRound2(max(0, $paidAmount - $refundedAmount));
+    $balanceAmount = accRound2(max(0, $totalAmount - $returnedAmount - $netPaid));
+    $status = ($balanceAmount <= 0.01 && $totalAmount > 0) ? 'PAID' : ($netPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+
+    $journalEntryId = '';
+    if ($totalAmount > 0) {
+        $expenseAccId = $settings['default_cogs_account_id'] ?? 'acc-5010';
+        $jLines = [];
+        if ($gstAmount > 0) {
+            $jLines[] = [
+                'accountId' => $expenseAccId,
+                'description' => "PO {$po['po_number']} - Materials",
+                'projectId' => $po['project_id'] ?? '',
+                'projectTitle' => $po['project_title'] ?? '',
+                'partyType' => 'VENDOR',
+                'partyId' => $po['vendor_id'] ?? '',
+                'partyName' => $po['vendor_name'] ?? '',
+                'debit' => $subtotal,
+                'credit' => 0
+            ];
+            $jLines[] = [
+                'accountId' => $settings['default_input_gst_account_id'] ?? 'acc-1150',
+                'description' => "Input GST ITC - PO {$po['po_number']}",
+                'projectId' => $po['project_id'] ?? '',
+                'projectTitle' => $po['project_title'] ?? '',
+                'partyType' => 'VENDOR',
+                'partyId' => $po['vendor_id'] ?? '',
+                'partyName' => $po['vendor_name'] ?? '',
+                'debit' => $gstAmount,
+                'credit' => 0
+            ];
+        } else {
+            $jLines[] = [
+                'accountId' => $expenseAccId,
+                'description' => "PO {$po['po_number']} - Materials",
+                'projectId' => $po['project_id'] ?? '',
+                'projectTitle' => $po['project_title'] ?? '',
+                'partyType' => 'VENDOR',
+                'partyId' => $po['vendor_id'] ?? '',
+                'partyName' => $po['vendor_name'] ?? '',
+                'debit' => $totalAmount,
+                'credit' => 0
+            ];
+        }
+        $jLines[] = [
+            'accountId' => $settings['default_ap_account_id'] ?? 'acc-2010',
+            'description' => "Payable to {$po['vendor_name']} - PO {$po['po_number']}",
+            'projectId' => $po['project_id'] ?? '',
+            'projectTitle' => $po['project_title'] ?? '',
+            'partyType' => 'VENDOR',
+            'partyId' => $po['vendor_id'] ?? '',
+            'partyName' => $po['vendor_name'] ?? '',
+            'debit' => 0,
+            'credit' => $totalAmount
+        ];
+
+        $journalEntryId = accInsertJournalTxPhp($pdo, [
+            'entryDate' => $jeDate,
+            'referenceType' => 'VENDOR_BILL',
+            'referenceId' => $billId,
+            'referenceNumber' => $billNumber,
+            'narration' => "Purchase Order {$po['po_number']} ({$po['vendor_name']})",
+            'status' => 'POSTED',
+            'lines' => $jLines
+        ], $actor);
+    }
+
+    $pdo->prepare("INSERT INTO `solar_acc_vendor_bills`
+        (`id`,`bill_number`,`vendor_id`,`vendor_name`,`vendor_gst`,`po_id`,`po_number`,`project_id`,`project_title`,`bill_date`,`due_date`,`category`,`subtotal`,`cgst_amount`,`sgst_amount`,`igst_amount`,`gst_amount`,`tds_section`,`tds_rate`,`tds_amount`,`total_amount`,`paid_amount`,`returned_amount`,`refunded_amount`,`balance_amount`,`itc_eligible`,`status`,`expense_account_id`,`journal_entry_id`,`notes`,`items_json`,`created_by`)
+        VALUES (?,?,?,?,'',?,?,?,?,?,?,'Material Purchase',?,?,?,0,?,'',0,0,?,?,?,?,?,1,?,?,?,?,?,?)")
+        ->execute([
+            $billId, $billNumber, $po['vendor_id'] ?? '', $po['vendor_name'] ?? 'Vendor',
+            $po['id'], $po['po_number'], $po['project_id'] ?? '', $po['project_title'] ?? '',
+            $billDate, $dueDate, $subtotal, $cgstAmount, $sgstAmount, $gstAmount,
+            $totalAmount, $paidAmount, $returnedAmount, $refundedAmount, $balanceAmount,
+            $status, $settings['default_cogs_account_id'] ?? 'acc-5010', $journalEntryId, $po['notes'] ?? '',
+            $po['items_json'] ?? '[]', $actor['name'] ?? 'Admin'
+        ]);
+
+    $res = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1');
+    $res->execute([$billId]);
+    return $res->fetch(PDO::FETCH_ASSOC);
+}
+
+function accAdjustProductStockTxPhp($pdo, $params) {
+    $pid = trim((string)($params['productId'] ?? ''));
+    $delta = floatval($params['deltaQty'] ?? 0);
+    if ($pid === '' || !is_finite($delta) || $delta == 0.0) return;
+
+    $ps = $pdo->prepare('SELECT * FROM `solar_products` WHERE `id` = ? FOR UPDATE');
+    $ps->execute([$pid]);
+    $prod = $ps->fetch(PDO::FETCH_ASSOC);
+    if (!$prod) return;
+
+    $cur = floatval($prod['current_stock'] ?? 0);
+    if ($delta < 0 && ($cur + $delta) < -0.001) {
+        throw new Exception("Insufficient stock for \"{$prod['name']}\": available {$cur}, requested deduction " . abs($delta) . '.');
+    }
+
+    $nextStock = round(max(0, $cur + $delta), 3);
+    $whStocks = [];
+    if (!empty($prod['warehouse_stocks_json'])) {
+        $decoded = json_decode($prod['warehouse_stocks_json'], true);
+        if (is_array($decoded)) $whStocks = $decoded;
+    }
+    $targetWhId = trim((string)($params['warehouseId'] ?? ($prod['warehouse_id'] ?? '')));
+    $targetWhName = trim((string)($params['warehouseName'] ?? ($prod['warehouse_name'] ?? '')));
+    if ($targetWhId !== '') {
+        $prevWh = floatval($whStocks[$targetWhId] ?? 0);
+        $whStocks[$targetWhId] = round(max(0, $prevWh + $delta), 3);
+    }
+
+    $pdo->prepare('UPDATE `solar_products` SET `current_stock` = ?, `warehouse_stocks_json` = ? WHERE `id` = ?')
+        ->execute([$nextStock, json_encode($whStocks), $prod['id']]);
+
+    $smId = 'sm-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+    $pdo->prepare("INSERT INTO `solar_stock_movements`
+        (`id`,`product_id`,`product_name`,`sku`,`movement_type`,`quantity`,`balance_after`,`reference_number`,`reference_id`,`warehouse_id`,`warehouse_name`,`target_warehouse_id`,`target_warehouse_name`,`notes`,`timestamp`,`performed_by`)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,'','',?,NOW(),?)")
+        ->execute([
+            $smId, $prod['id'], $prod['name'], $prod['sku'] ?? '', $params['movementType'],
+            $delta, $nextStock, $params['referenceNumber'] ?? '', $params['referenceId'] ?? '',
+            $targetWhId, $targetWhName, $params['notes'] ?? '', $params['actorName'] ?? 'Admin'
+        ]);
+}
+
+function accRecordSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $amt = accRound2($payload['amount'] ?? 0);
+    if (!is_finite($amt) || $amt <= 0) {
+        throw new Exception('Payment amount must be greater than zero.', 400);
+    }
+    $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $payDate = accToSqlDate($payload['paymentDate'] ?? ($payload['paidDate'] ?? '')) ?: accTodaySql();
+        accAssertNotLockedPhp($pdo, $payDate);
+
+        $is = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE');
+        $is->execute([$invoiceId]);
+        $inv = $is->fetch(PDO::FETCH_ASSOC);
+        if (!$inv) throw new Exception('Sales invoice not found.', 404);
+        $invStatus = strtoupper(trim((string)($inv['payment_status'] ?? 'ISSUED')));
+        if ($invStatus === 'DRAFT' || $invStatus === 'CANCELLED') {
+            throw new Exception("Cannot record payment against a {$invStatus} invoice.", 400);
+        }
+
+        $totalAmount = accRound2($inv['total_amount'] ?? 0);
+        $paidAmount = accRound2($inv['paid_amount'] ?? 0);
+        $returnedAmount = accRound2($inv['returned_amount'] ?? 0);
+        $refundedAmount = accRound2($inv['refunded_amount'] ?? 0);
+        $netPaid = accRound2(max(0, $paidAmount - $refundedAmount));
+        $remaining = accRound2(max(0, $totalAmount - $returnedAmount - $netPaid));
+        if ($amt > $remaining + 0.01) {
+            throw new Exception("Payment amount (₹" . number_format($amt, 2, '.', '') . ") exceeds remaining balance due (₹" . number_format($remaining, 2, '.', '') . ").", 400);
+        }
+
+        $paymentMode = trim((string)($payload['paymentMode'] ?? 'Bank NEFT/RTGS')) ?: 'Bank NEFT/RTGS';
+        $resolved = accResolveBankAccountTxPhp($pdo, $payload['bankAccountId'] ?? '', $settings, $paymentMode);
+        $bank = $resolved['bank'];
+        $coaId = $resolved['coaId'];
+
+        accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+
+        $receiptId = 'pay-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+        $receiptNumber = trim((string)($payload['receiptNumber'] ?? ('RCPT-' . substr($payDate, 0, 4) . '-' . accRandDigits(4))));
+        $referenceNo = trim((string)($payload['referenceNo'] ?? ($payload['transactionReference'] ?? '')));
+        $notes = trim((string)($payload['notes'] ?? ''));
+
+        $jeId = accInsertJournalTxPhp($pdo, [
+            'entryDate' => $payDate,
+            'referenceType' => 'CUSTOMER_RECEIPT',
+            'referenceId' => $receiptId,
+            'referenceNumber' => $receiptNumber,
+            'narration' => "Receipt {$receiptNumber} from {$inv['customer_name']} against Invoice {$inv['invoice_number']} ({$bank['account_name']})",
+            'status' => 'POSTED',
+            'lines' => [
+                [
+                    'accountId' => $coaId,
+                    'description' => "{$paymentMode} via {$bank['account_name']}" . ($referenceNo !== '' ? " ({$referenceNo})" : ''),
+                    'projectId' => $inv['project_id'] ?? '',
+                    'projectTitle' => $inv['project_title'] ?? '',
+                    'partyType' => 'CUSTOMER',
+                    'partyId' => $inv['customer_id'] ?? '',
+                    'partyName' => $inv['customer_name'] ?? '',
+                    'debit' => $amt,
+                    'credit' => 0
+                ],
+                [
+                    'accountId' => $settings['default_ar_account_id'] ?? 'acc-1100',
+                    'description' => "Receivable settlement - {$inv['invoice_number']}",
+                    'projectId' => $inv['project_id'] ?? '',
+                    'projectTitle' => $inv['project_title'] ?? '',
+                    'partyType' => 'CUSTOMER',
+                    'partyId' => $inv['customer_id'] ?? '',
+                    'partyName' => $inv['customer_name'] ?? '',
+                    'debit' => 0,
+                    'credit' => $amt
+                ]
+            ]
+        ], $actor);
+
+        $pdo->prepare("INSERT INTO `solar_payments`
+            (`id`,`receipt_number`,`project_id`,`customer_id`,`customer_name`,`milestone`,`amount`,`status`,`due_date`,`paid_date`,`payment_mode`,`transaction_reference`,`notes`,`invoice_id`,`invoice_number`,`bank_account_id`,`journal_entry_id`,`tally_sync_status`)
+            VALUES (?,?,?,?,?,?,?,'PAID',?,?,?,?,?,?,?,?,?,'NOT SYNCED')")
+            ->execute([
+                $receiptId, $receiptNumber, $inv['project_id'] ?? '', $inv['customer_id'] ?? '',
+                $inv['customer_name'] ?? 'Solar Customer', "Against Invoice {$inv['invoice_number']}",
+                $amt, $payDate, $payDate, $paymentMode, $referenceNo, $notes,
+                $inv['id'], $inv['invoice_number'], $bank['id'], $jeId
+            ]);
+
+        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')
+            ->execute([$amt, $bank['id']]);
+
+        $nextPaid = accRound2($paidAmount + $amt);
+        $nextNetPaid = accRound2(max(0, $nextPaid - $refundedAmount));
+        $nextBalance = accRound2(max(0, $totalAmount - $returnedAmount - $nextNetPaid));
+        $nextStatus = $nextBalance <= 0.01 ? 'PAID' : 'PARTIAL';
+
+        $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = ? WHERE `id` = ?')
+            ->execute([$nextPaid, $nextBalance, $nextStatus, $bank['id'], $inv['id']]);
+
+        if (!empty($inv['project_id'])) {
+            try { $pdo->prepare('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?')->execute([$inv['project_id']]); } catch (Exception $e) {}
+        }
+
+        accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', 'RECORD_INVOICE_PAYMENT', $receiptId, $receiptNumber, "Received ₹{$amt} for Invoice {$inv['invoice_number']} into {$bank['account_name']}");
+        $pdo->commit();
+        return [
+            'invoiceId' => $inv['id'],
+            'receiptId' => $receiptId,
+            'receiptNumber' => $receiptNumber,
+            'amount' => $amt,
+            'bankAccountId' => $bank['id'],
+            'bankAccountName' => $bank['account_name'],
+            'paidAmount' => $nextPaid,
+            'balanceAmount' => $nextBalance,
+            'paymentStatus' => $nextStatus,
+            'journalEntryId' => $jeId
+        ];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function accRecordVendorSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $amt = accRound2($payload['amount'] ?? 0);
+    if (!is_finite($amt) || $amt <= 0) {
+        throw new Exception('Payment amount must be greater than zero.', 400);
+    }
+    $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $payDate = accToSqlDate($payload['paymentDate'] ?? '') ?: accTodaySql();
+        accAssertNotLockedPhp($pdo, $payDate);
+
+        $is = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE');
+        $is->execute([$invoiceId]);
+        $inv = $is->fetch(PDO::FETCH_ASSOC);
+        if (!$inv) throw new Exception('Vendor sales invoice not found.', 404);
+        if (strtoupper(trim((string)($inv['status'] ?? ''))) === 'DRAFT') {
+            throw new Exception('Cannot record payment against a DRAFT invoice. Issue the invoice first.', 400);
+        }
+
+        $totalAmount = accRound2($inv['total_amount'] ?? 0);
+        $currentPaid = accRound2($inv['paid_amount'] ?? 0);
+        $returnedAmount = accRound2($inv['returned_amount'] ?? 0);
+        $refundedAmount = accRound2($inv['refunded_amount'] ?? 0);
+        $netPaid = accRound2(max(0, $currentPaid - $refundedAmount));
+        $remaining = accRound2(max(0, $totalAmount - $returnedAmount - $netPaid));
+        if ($amt > $remaining + 0.01) {
+            throw new Exception("Payment amount (₹" . number_format($amt, 2, '.', '') . ") exceeds remaining balance due (₹" . number_format($remaining, 2, '.', '') . ").", 400);
+        }
+
+        $paymentMode = trim((string)($payload['paymentMode'] ?? 'Bank NEFT/RTGS')) ?: 'Bank NEFT/RTGS';
+        $resolved = accResolveBankAccountTxPhp($pdo, $payload['bankAccountId'] ?? '', $settings, $paymentMode);
+        $bank = $resolved['bank'];
+        $coaId = $resolved['coaId'];
+
+        accEnsureVendorSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+
+        $paymentId = 'vsip-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+        $referenceNo = trim((string)($payload['referenceNo'] ?? ''));
+        $notes = trim((string)($payload['notes'] ?? ''));
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
+
+        $jeId = accInsertJournalTxPhp($pdo, [
+            'entryDate' => $payDate,
+            'referenceType' => 'VENDOR_SALES_RECEIPT',
+            'referenceId' => $paymentId,
+            'referenceNumber' => $inv['invoice_number'],
+            'narration' => "Vendor Sales Receipt from {$inv['vendor_name']} for {$inv['invoice_number']} ({$bank['account_name']})",
+            'status' => 'POSTED',
+            'lines' => [
+                [
+                    'accountId' => $coaId,
+                    'description' => "{$paymentMode} via {$bank['account_name']}" . ($referenceNo !== '' ? " ({$referenceNo})" : ''),
+                    'partyType' => 'VENDOR',
+                    'partyId' => $inv['vendor_id'] ?? '',
+                    'partyName' => $inv['vendor_name'] ?? '',
+                    'debit' => $amt,
+                    'credit' => 0
+                ],
+                [
+                    'accountId' => $settings['default_ar_account_id'] ?? 'acc-1100',
+                    'description' => "Vendor Sales Receivable settlement - {$inv['invoice_number']}",
+                    'partyType' => 'VENDOR',
+                    'partyId' => $inv['vendor_id'] ?? '',
+                    'partyName' => $inv['vendor_name'] ?? '',
+                    'debit' => 0,
+                    'credit' => $amt
+                ]
+            ]
+        ], $actor);
+
+        $pdo->prepare("INSERT INTO `solar_vendor_sales_payments`
+            (`id`,`invoice_id`,`vendor_id`,`payment_date`,`amount`,`payment_mode`,`reference_no`,`notes`,`bank_account_id`,`journal_entry_id`,`recorded_by`)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+            ->execute([$paymentId, $invoiceId, $inv['vendor_id'], $payDate, $amt, $paymentMode, $referenceNo, $notes, $bank['id'], $jeId, $actorName]);
+
+        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')
+            ->execute([$amt, $bank['id']]);
+
+        $nextPaid = accRound2($currentPaid + $amt);
+        $nextNetPaid = accRound2(max(0, $nextPaid - $refundedAmount));
+        $nextBalance = accRound2(max(0, $totalAmount - $returnedAmount - $nextNetPaid));
+        $dueDate = accToSqlDate($inv['due_date'] ?? null) ?: '';
+        $today = accTodaySql();
+        $nextStatus = ($nextBalance <= 0.01 && $totalAmount > 0)
+            ? 'PAID'
+            : ($nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : ($dueDate && $dueDate < $today ? 'OVERDUE' : 'ISSUED'));
+
+        $pdo->prepare('UPDATE `solar_vendor_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ?, `bank_account_id` = ?, `updated_by` = ? WHERE `id` = ?')
+            ->execute([$nextPaid, $nextBalance, $nextStatus, $bank['id'], $actorName, $invoiceId]);
+
+        accLogAuditPhp($pdo, $actor, 'VENDOR_SALES', 'RECORD_VSI_PAYMENT', $paymentId, $inv['invoice_number'], "Received ₹{$amt} for Vendor Sales Invoice {$inv['invoice_number']} into {$bank['account_name']}");
+        $pdo->commit();
+        return [
+            'paymentId' => $paymentId,
+            'bankAccountId' => $bank['id'],
+            'bankAccountName' => $bank['account_name'],
+            'journalEntryId' => $jeId,
+            'nextPaid' => $nextPaid,
+            'nextBalance' => $nextBalance,
+            'nextStatus' => $nextStatus
+        ];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function accRecordPurchaseOrderPaymentPhp($pdo, $poId, $payload, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $amt = accRound2($payload['amount'] ?? 0);
+    $tds = accRound2($payload['tdsDeducted'] ?? 0);
+    if (!is_finite($amt) || $amt <= 0) {
+        throw new Exception('Payment amount must be greater than zero.', 400);
+    }
+    if ($tds < 0 || $tds >= $amt) {
+        throw new Exception('TDS deducted must be >= 0 and less than gross payment amount.', 400);
+    }
+    $netPaid = accRound2($amt - $tds);
+
+    $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $payDate = accToSqlDate($payload['paymentDate'] ?? '') ?: accTodaySql();
+        accAssertNotLockedPhp($pdo, $payDate);
+
+        $ps = $pdo->prepare('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? FOR UPDATE');
+        $ps->execute([$poId]);
+        $po = $ps->fetch(PDO::FETCH_ASSOC);
+        if (!$po) throw new Exception('Purchase order not found.', 404);
+        if (strtoupper(trim((string)($po['status'] ?? ''))) === 'CANCELLED') {
+            throw new Exception('Cannot record payment for a cancelled purchase order.', 400);
+        }
+
+        $totalAmount = accRound2($po['total_amount'] ?? 0);
+        $paidAmount = accRound2($po['paid_amount'] ?? 0);
+        $returnedAmount = accRound2($po['returned_amount'] ?? 0);
+        $refundedAmount = accRound2($po['refunded_amount'] ?? 0);
+        $netAlreadyPaid = accRound2(max(0, $paidAmount - $refundedAmount));
+        $remaining = accRound2(max(0, $totalAmount - $returnedAmount - $netAlreadyPaid));
+        if ($amt > $remaining + 0.01) {
+            throw new Exception("Payment amount (₹" . number_format($amt, 2, '.', '') . ") exceeds remaining PO payable balance (₹" . number_format($remaining, 2, '.', '') . ").", 400);
+        }
+
+        $paymentMode = trim((string)($payload['paymentMode'] ?? 'Bank NEFT/RTGS')) ?: 'Bank NEFT/RTGS';
+        $resolved = accResolveBankAccountTxPhp($pdo, $payload['bankAccountId'] ?? '', $settings, $paymentMode);
+        $bank = $resolved['bank'];
+        $coaId = $resolved['coaId'];
+
+        $bill = accEnsurePurchaseOrderBillTxPhp($pdo, $po, $settings, $actor);
+
+        $payId = 'vpay-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+        $payNo = trim((string)($payload['paymentNumber'] ?? ('VPAY-' . substr($payDate, 0, 4) . '-' . accRandDigits(4))));
+        $referenceNo = trim((string)($payload['referenceNo'] ?? ''));
+        $notes = trim((string)($payload['notes'] ?? ''));
+
+        $jLines = [
+            [
+                'accountId' => $settings['default_ap_account_id'] ?? 'acc-2010',
+                'description' => "PO {$po['po_number']} payment to {$po['vendor_name']}",
+                'projectId' => $po['project_id'] ?? '',
+                'projectTitle' => $po['project_title'] ?? '',
+                'partyType' => 'VENDOR',
+                'partyId' => $po['vendor_id'] ?? '',
+                'partyName' => $po['vendor_name'] ?? '',
+                'debit' => $amt,
+                'credit' => 0
+            ],
+            [
+                'accountId' => $coaId,
+                'description' => "Paid via {$bank['account_name']} ({$paymentMode})" . ($referenceNo !== '' ? " Ref: {$referenceNo}" : ''),
+                'projectId' => $po['project_id'] ?? '',
+                'projectTitle' => $po['project_title'] ?? '',
+                'partyType' => 'VENDOR',
+                'partyId' => $po['vendor_id'] ?? '',
+                'partyName' => $po['vendor_name'] ?? '',
+                'debit' => 0,
+                'credit' => $netPaid
+            ]
+        ];
+        if ($tds > 0) {
+            $jLines[] = [
+                'accountId' => $settings['default_tds_account_id'] ?? 'acc-2150',
+                'description' => "TDS " . ($payload['tdsSection'] ?? '194C') . " deducted from {$po['vendor_name']}",
+                'projectId' => $po['project_id'] ?? '',
+                'projectTitle' => $po['project_title'] ?? '',
+                'partyType' => 'VENDOR',
+                'partyId' => $po['vendor_id'] ?? '',
+                'partyName' => $po['vendor_name'] ?? '',
+                'debit' => 0,
+                'credit' => $tds
+            ];
+        }
+
+        $jeId = accInsertJournalTxPhp($pdo, [
+            'entryDate' => $payDate,
+            'referenceType' => 'VENDOR_PAYMENT',
+            'referenceId' => $payId,
+            'referenceNumber' => $payNo,
+            'narration' => "Vendor payment {$payNo} to {$po['vendor_name']} for PO {$po['po_number']} ({$bank['account_name']})",
+            'status' => 'POSTED',
+            'lines' => $jLines
+        ], $actor);
+
+        $pdo->prepare("INSERT INTO `solar_acc_vendor_payments`
+            (`id`,`payment_number`,`bill_id`,`vendor_id`,`vendor_name`,`payment_date`,`amount`,`tds_deducted`,`net_paid`,`bank_account_id`,`payment_mode`,`reference_no`,`notes`,`journal_entry_id`,`recorded_by`)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+            ->execute([$payId, $payNo, $bill['id'], $po['vendor_id'] ?? '', $po['vendor_name'] ?? 'Vendor', $payDate, $amt, $tds, $netPaid, $bank['id'], $paymentMode, $referenceNo, $notes, $jeId, $actor['name'] ?? 'Admin']);
+
+        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')
+            ->execute([$netPaid, $bank['id']]);
+
+        $nextPaid = accRound2($paidAmount + $amt);
+        $nextNetPaid = accRound2(max(0, $nextPaid - $refundedAmount));
+        $nextBalance = accRound2(max(0, $totalAmount - $returnedAmount - $nextNetPaid));
+        $nextBillStatus = $nextBalance <= 0.01 ? 'PAID' : 'PARTIAL';
+        $nextPoPayStatus = $nextBalance <= 0.01 ? 'PAID' : 'PARTIALLY_PAID';
+
+        $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?')
+            ->execute([$nextPaid, $nextBalance, $nextBillStatus, $bill['id']]);
+        $pdo->prepare('UPDATE `solar_purchase_orders` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = ? WHERE `id` = ?')
+            ->execute([$nextPaid, $nextBalance, $nextPoPayStatus, $bank['id'], $po['id']]);
+
+        if ($tds > 0) {
+            $vs = $pdo->prepare('SELECT `pan_number` FROM `solar_vendors` WHERE `id` = ? LIMIT 1');
+            $vs->execute([$po['vendor_id'] ?? '']);
+            $pan = $vs->fetchColumn() ?: '';
+            $tdsRate = accRound2(($tds / max(1, $amt)) * 100);
+            $pdo->prepare("INSERT INTO `solar_acc_tds_entries` (`id`,`section`,`party_type`,`party_id`,`party_name`,`pan_number`,`source_type`,`source_id`,`source_number`,`deduction_date`,`gross_amount`,`tds_rate`,`tds_amount`,`status`) VALUES (?,?,'VENDOR',?,?,?,'VENDOR_PAYMENT',?,?,?,?,?,?,'DEDUCTED')")
+                ->execute(['tds-' . round(microtime(true) * 1000) . '-' . accRandHex(3), $payload['tdsSection'] ?? '194C', $po['vendor_id'] ?? '', $po['vendor_name'] ?? 'Vendor', $pan, $payId, $payNo, $payDate, $amt, $tdsRate, $tds]);
+        }
+
+        accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', 'RECORD_PO_PAYMENT', $payId, $payNo, "Paid ₹{$netPaid} for PO {$po['po_number']} via {$bank['account_name']}");
+        $pdo->commit();
+        return [
+            'purchaseOrderId' => $po['id'],
+            'billId' => $bill['id'],
+            'paymentId' => $payId,
+            'paymentNumber' => $payNo,
+            'amount' => $amt,
+            'tdsDeducted' => $tds,
+            'netPaid' => $netPaid,
+            'bankAccountId' => $bank['id'],
+            'bankAccountName' => $bank['account_name'],
+            'paidAmount' => $nextPaid,
+            'balanceAmount' => $nextBalance,
+            'paymentStatus' => $nextPoPayStatus,
+            'journalEntryId' => $jeId
+        ];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function accGetSalesReturnsPhp($pdo) {
+    ensureAccountingTablesPhp($pdo);
+    $rows = $pdo->query('SELECT * FROM `solar_sales_returns` ORDER BY `return_date` DESC, `created_at` DESC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    if (empty($rows)) return [];
+    $itemRows = $pdo->query('SELECT * FROM `solar_sales_return_items` ORDER BY `line_order` ASC, `id` ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $itemsByRet = [];
+    foreach ($itemRows as $it) {
+        $itemsByRet[$it['return_id']][] = [
+            'id' => $it['id'],
+            'productId' => $it['product_id'] ?: null,
+            'description' => $it['description'],
+            'hsnCode' => $it['hsn_code'] ?? '',
+            'unit' => $it['unit'] ?? 'Nos',
+            'originalQuantity' => floatval($it['original_quantity'] ?? 0),
+            'quantity' => floatval($it['quantity'] ?? 0),
+            'rate' => floatval($it['rate'] ?? 0),
+            'taxableAmount' => floatval($it['taxable_amount'] ?? 0),
+            'gstRate' => floatval($it['gst_rate'] ?? 0),
+            'cgstAmount' => floatval($it['cgst_amount'] ?? 0),
+            'sgstAmount' => floatval($it['sgst_amount'] ?? 0),
+            'igstAmount' => floatval($it['igst_amount'] ?? 0),
+            'taxAmount' => floatval($it['tax_amount'] ?? 0),
+            'totalAmount' => floatval($it['total_amount'] ?? 0)
+        ];
+    }
+    return array_map(function ($r) use ($itemsByRet) {
+        return [
+            'id' => $r['id'],
+            'returnNumber' => $r['return_number'],
+            'returnDate' => accToSqlDate($r['return_date']) ?: '',
+            'targetType' => ($r['target_type'] === 'VENDOR_INVOICE') ? 'VENDOR_INVOICE' : 'CUSTOMER_INVOICE',
+            'invoiceId' => $r['invoice_id'],
+            'invoiceNumber' => $r['invoice_number'] ?? '',
+            'partyId' => $r['party_id'] ?? '',
+            'partyName' => $r['party_name'],
+            'projectId' => $r['project_id'] ?? '',
+            'projectTitle' => $r['project_title'] ?? '',
+            'reason' => $r['reason'] ?? '',
+            'notes' => $r['notes'] ?? '',
+            'warehouseId' => $r['warehouse_id'] ?? '',
+            'warehouseName' => $r['warehouse_name'] ?? '',
+            'restockInventory' => !empty($r['restock_inventory']),
+            'items' => $itemsByRet[$r['id']] ?? [],
+            'subtotal' => floatval($r['subtotal'] ?? 0),
+            'cgstAmount' => floatval($r['cgst_amount'] ?? 0),
+            'sgstAmount' => floatval($r['sgst_amount'] ?? 0),
+            'igstAmount' => floatval($r['igst_amount'] ?? 0),
+            'taxAmount' => floatval($r['tax_amount'] ?? 0),
+            'totalAmount' => floatval($r['total_amount'] ?? 0),
+            'settlementMode' => ($r['settlement_mode'] === 'BANK_REFUND') ? 'BANK_REFUND' : 'CREDIT_NOTE',
+            'refundAmount' => floatval($r['refund_amount'] ?? 0),
+            'bankAccountId' => $r['bank_account_id'] ?? '',
+            'bankAccountName' => $r['bank_account_name'] ?? '',
+            'creditJournalEntryId' => $r['credit_journal_entry_id'] ?? '',
+            'refundJournalEntryId' => $r['refund_journal_entry_id'] ?? '',
+            'status' => $r['status'] ?? 'POSTED',
+            'createdBy' => $r['created_by'] ?? '',
+            'createdAt' => $r['created_at'],
+            'updatedAt' => $r['updated_at']
+        ];
+    }, $rows);
+}
+
+function accCreateSalesReturnPhp($pdo, $payload, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $targetType = (($payload['targetType'] ?? '') === 'VENDOR_INVOICE') ? 'VENDOR_INVOICE' : 'CUSTOMER_INVOICE';
+    $invoiceId = trim((string)($payload['invoiceId'] ?? ''));
+    if ($invoiceId === '') throw new Exception('Source invoice is required for a sales return.', 400);
+    $rawItems = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+    $submittedItems = array_values(array_filter($rawItems, function ($it) { return floatval($it['quantity'] ?? 0) > 0; }));
+    if (empty($submittedItems)) throw new Exception('Specify return quantity greater than 0 for at least one line item.', 400);
+
+    $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $returnDate = accToSqlDate($payload['returnDate'] ?? '') ?: accTodaySql();
+        accAssertNotLockedPhp($pdo, $returnDate);
+
+        $inv = null;
+        $origItems = [];
+        $isInterState = false;
+        $partyId = ''; $partyName = ''; $projectId = ''; $projectTitle = ''; $defaultWhId = '';
+
+        if ($targetType === 'CUSTOMER_INVOICE') {
+            $s = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE');
+            $s->execute([$invoiceId]);
+            $inv = $s->fetch(PDO::FETCH_ASSOC);
+            if (!$inv) throw new Exception('Customer sales invoice not found.', 404);
+            $st = strtoupper(trim((string)($inv['payment_status'] ?? 'ISSUED')));
+            if ($st === 'DRAFT' || $st === 'CANCELLED') throw new Exception("Cannot process sales return against a {$st} invoice.", 400);
+            $origItems = json_decode($inv['items_json'] ?? '[]', true) ?: [];
+            $isInterState = floatval($inv['igst_amount'] ?? 0) > 0;
+            $partyId = $inv['customer_id'] ?? '';
+            $partyName = $inv['customer_name'] ?? 'Solar Customer';
+            $projectId = $inv['project_id'] ?? '';
+            $projectTitle = $inv['project_title'] ?? '';
+            $defaultWhId = $inv['warehouse_id'] ?? '';
+        } else {
+            $s = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE');
+            $s->execute([$invoiceId]);
+            $inv = $s->fetch(PDO::FETCH_ASSOC);
+            if (!$inv) throw new Exception('Vendor sales invoice not found.', 404);
+            $st = strtoupper(trim((string)($inv['status'] ?? 'ISSUED')));
+            if ($st === 'DRAFT' || $st === 'CANCELLED') throw new Exception("Cannot process sales return against a {$st} vendor sales invoice.", 400);
+            $vsiStmt = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoice_items` WHERE `invoice_id` = ? ORDER BY `line_order` ASC');
+            $vsiStmt->execute([$invoiceId]);
+            $origItems = array_map(function ($r) {
+                return [
+                    'productId' => $r['product_id'] ?: null,
+                    'description' => $r['description'],
+                    'hsnCode' => $r['hsn_code'] ?? '',
+                    'unit' => $r['unit'] ?? 'NOS',
+                    'quantity' => floatval($r['quantity'] ?? 0),
+                    'rate' => floatval($r['rate'] ?? 0),
+                    'taxableAmount' => floatval($r['taxable_amount'] ?? 0),
+                    'gstRate' => floatval($r['gst_rate'] ?? 0)
+                ];
+            }, $vsiStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+            $isInterState = (($inv['supply_type'] ?? '') === 'INTER_STATE') || floatval($inv['igst_amount'] ?? 0) > 0;
+            $partyId = $inv['vendor_id'] ?? '';
+            $partyName = $inv['vendor_name'] ?? 'Vendor';
+        }
+
+        $prevStmt = $pdo->prepare("SELECT sri.`product_id`, sri.`description`, SUM(sri.`quantity`) AS prev_qty FROM `solar_sales_return_items` sri INNER JOIN `solar_sales_returns` sr ON sr.`id` = sri.`return_id` WHERE sr.`target_type` = ? AND sr.`invoice_id` = ? AND sr.`status` = 'POSTED' GROUP BY sri.`product_id`, sri.`description`");
+        $prevStmt->execute([$targetType, $invoiceId]);
+        $prevByKey = [];
+        foreach ($prevStmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $r) {
+            $k = !empty($r['product_id']) ? ('pid:' . $r['product_id']) : ('desc:' . strtolower(trim((string)($r['description'] ?? ''))));
+            $prevByKey[$k] = ($prevByKey[$k] ?? 0) + floatval($r['prev_qty'] ?? 0);
+        }
+
+        $subtotal = 0; $cgstTotal = 0; $sgstTotal = 0; $igstTotal = 0;
+        $computedLines = [];
+        foreach ($submittedItems as $subItem) {
+            $reqPid = trim((string)($subItem['productId'] ?? ''));
+            $reqDesc = trim((string)($subItem['description'] ?? ''));
+            $qty = round(floatval($subItem['quantity'] ?? 0), 3);
+            if (!is_finite($qty) || $qty <= 0) continue;
+
+            $match = null;
+            foreach ($origItems as $oi) {
+                $oiPid = trim((string)($oi['productId'] ?? ''));
+                $oiDesc = trim((string)($oi['description'] ?? ($oi['productName'] ?? ($oi['name'] ?? ''))));
+                if (($reqPid !== '' && $oiPid === $reqPid) || ($reqDesc !== '' && strcasecmp($oiDesc, $reqDesc) === 0)) {
+                    $match = $oi;
+                    break;
+                }
+            }
+            if (!$match) throw new Exception("Return item \"" . ($reqDesc ?: $reqPid) . "\" does not match any line item on invoice {$inv['invoice_number']}.", 400);
+
+            $origQty = floatval($match['quantity'] ?? 0);
+            $effPid = !empty($match['productId']) ? $match['productId'] : $reqPid;
+            $matchDesc = trim((string)($match['description'] ?? ($match['productName'] ?? ($match['name'] ?? $reqDesc))));
+            $itemKey = $effPid !== '' ? ('pid:' . $effPid) : ('desc:' . strtolower($matchDesc));
+            $prevQty = $prevByKey[$itemKey] ?? 0;
+            $maxRem = round(max(0, $origQty - $prevQty), 3);
+            if ($qty > $maxRem + 0.001) {
+                throw new Exception("Return quantity ({$qty}) for \"{$matchDesc}\" exceeds remaining returnable quantity ({$maxRem}).", 400);
+            }
+            $prevByKey[$itemKey] = $prevQty + $qty;
+
+            $origRate = floatval($match['rate'] ?? ($match['unitPrice'] ?? 0));
+            $origTaxable = floatval($match['taxableAmount'] ?? ($match['total'] ?? ($origQty * $origRate)));
+            $effUnitRate = $origQty > 0 ? ($origTaxable / $origQty) : $origRate;
+            $lineTaxable = accRound2($qty * $effUnitRate);
+            $fallbackGst = floatval($inv['subtotal'] ?? 0) > 0 ? accRound2((floatval($inv['tax_amount'] ?? ($inv['gst_amount'] ?? 0)) / floatval($inv['subtotal'])) * 100) : 0;
+            $gstRate = floatval($match['gstRate'] ?? ($match['taxRatePercent'] ?? $fallbackGst));
+            $lineTax = accRound2(($lineTaxable * $gstRate) / 100);
+            $lineIgst = $isInterState ? $lineTax : 0;
+            $lineCgst = $isInterState ? 0 : accRound2($lineTax / 2);
+            $lineSgst = $isInterState ? 0 : accRound2($lineTax - $lineCgst);
+            $lineTotal = accRound2($lineTaxable + $lineTax);
+
+            $subtotal = accRound2($subtotal + $lineTaxable);
+            $cgstTotal = accRound2($cgstTotal + $lineCgst);
+            $sgstTotal = accRound2($sgstTotal + $lineSgst);
+            $igstTotal = accRound2($igstTotal + $lineIgst);
+
+            $computedLines[] = [
+                'productId' => $effPid ?: null,
+                'description' => $matchDesc,
+                'hsnCode' => (string)($match['hsnCode'] ?? ''),
+                'unit' => (string)($match['unit'] ?? 'Nos'),
+                'originalQuantity' => $origQty,
+                'quantity' => $qty,
+                'rate' => accRound2($effUnitRate),
+                'taxableAmount' => $lineTaxable,
+                'gstRate' => $gstRate,
+                'cgstAmount' => $lineCgst,
+                'sgstAmount' => $lineSgst,
+                'igstAmount' => $lineIgst,
+                'taxAmount' => $lineTax,
+                'totalAmount' => $lineTotal
+            ];
+        }
+        if (empty($computedLines)) throw new Exception('No valid returnable line items found.', 400);
+
+        $taxAmount = accRound2($cgstTotal + $sgstTotal + $igstTotal);
+        $totalAmount = accRound2($subtotal + $taxAmount);
+
+        $invTotal = accRound2($inv['total_amount'] ?? 0);
+        $invPaid = accRound2($inv['paid_amount'] ?? 0);
+        $invReturned = accRound2($inv['returned_amount'] ?? 0);
+        $invRefunded = accRound2($inv['refunded_amount'] ?? 0);
+        $remRetVal = accRound2(max(0, $invTotal - $invReturned));
+        if ($totalAmount > $remRetVal + 0.05) {
+            throw new Exception("Return total (₹" . number_format($totalAmount, 2, '.', '') . ") exceeds remaining non-returned invoice value (₹" . number_format($remRetVal, 2, '.', '') . ").", 400);
+        }
+
+        $settlementMode = (($payload['settlementMode'] ?? '') === 'BANK_REFUND') ? 'BANK_REFUND' : 'CREDIT_NOTE';
+        $refundAmount = $settlementMode === 'BANK_REFUND' ? accRound2($payload['refundAmount'] ?? $totalAmount) : 0;
+        $netPaidSoFar = accRound2(max(0, $invPaid - $invRefunded));
+
+        $bank = null; $bankCoaId = '';
+        if ($settlementMode === 'BANK_REFUND') {
+            if ($netPaidSoFar <= 0) throw new Exception('Cannot issue a Cash/Bank refund because no net payment has been received on this invoice. Use Credit Note adjustment instead.', 400);
+            if (!is_finite($refundAmount) || $refundAmount <= 0) throw new Exception('Refund amount must be greater than zero for Bank Refund settlement.', 400);
+            if ($refundAmount > $totalAmount + 0.01) throw new Exception("Refund amount cannot exceed Credit Note total.", 400);
+            if ($refundAmount > $netPaidSoFar + 0.01) throw new Exception("Refund amount exceeds net paid amount available for refund.", 400);
+            $resolved = accResolveBankAccountTxPhp($pdo, $payload['bankAccountId'] ?? '', $settings);
+            $bank = $resolved['bank'];
+            $bankCoaId = $resolved['coaId'];
+        }
+
+        if ($targetType === 'CUSTOMER_INVOICE') {
+            accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+        } else {
+            accEnsureVendorSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+        }
+
+        $id = 'sr-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+        $returnNumber = trim((string)($payload['returnNumber'] ?? ('CN-' . substr($returnDate, 0, 4) . '-' . accRandDigits(4))));
+        $restockInventory = !isset($payload['restockInventory']) || (bool)$payload['restockInventory'];
+        $warehouseId = trim((string)($payload['warehouseId'] ?? $defaultWhId));
+        $warehouseName = trim((string)($payload['warehouseName'] ?? ''));
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
+        $pType = $targetType === 'VENDOR_INVOICE' ? 'VENDOR' : 'CUSTOMER';
+        $revAccId = $targetType === 'VENDOR_INVOICE' ? 'acc-4030' : ($settings['default_sales_account_id'] ?? 'acc-4010');
+
+        $cnLines = [
+            ['accountId' => $revAccId, 'description' => "Sales Return {$returnNumber} against {$inv['invoice_number']}", 'projectId' => $projectId, 'projectTitle' => $projectTitle, 'partyType' => $pType, 'partyId' => $partyId, 'partyName' => $partyName, 'debit' => $subtotal, 'credit' => 0]
+        ];
+        if ($taxAmount > 0) {
+            $cnLines[] = ['accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100', 'description' => "Output GST Reversal - {$returnNumber}", 'projectId' => $projectId, 'projectTitle' => $projectTitle, 'partyType' => $pType, 'partyId' => $partyId, 'partyName' => $partyName, 'debit' => $taxAmount, 'credit' => 0];
+        }
+        $cnLines[] = ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'description' => "Credit Note {$returnNumber} - {$partyName}", 'projectId' => $projectId, 'projectTitle' => $projectTitle, 'partyType' => $pType, 'partyId' => $partyId, 'partyName' => $partyName, 'debit' => 0, 'credit' => $totalAmount];
+
+        $creditJournalEntryId = accInsertJournalTxPhp($pdo, [
+            'entryDate' => $returnDate,
+            'referenceType' => 'SALES_RETURN',
+            'referenceId' => $id,
+            'referenceNumber' => $returnNumber,
+            'narration' => "Sales Return {$returnNumber} against {$inv['invoice_number']} ({$partyName})",
+            'status' => 'POSTED',
+            'lines' => $cnLines
+        ], $actor);
+
+        $refundJournalEntryId = '';
+        if ($settlementMode === 'BANK_REFUND' && $bank && $refundAmount > 0) {
+            $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')
+                ->execute([$refundAmount, $bank['id']]);
+            $refundJournalEntryId = accInsertJournalTxPhp($pdo, [
+                'entryDate' => $returnDate,
+                'referenceType' => 'SALES_RETURN_REFUND',
+                'referenceId' => $id,
+                'referenceNumber' => $returnNumber,
+                'narration' => "Sales Return Refund {$returnNumber} to {$partyName} via {$bank['account_name']}",
+                'status' => 'POSTED',
+                'lines' => [
+                    ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'description' => "Customer Refund {$returnNumber} - {$partyName}", 'projectId' => $projectId, 'projectTitle' => $projectTitle, 'partyType' => $pType, 'partyId' => $partyId, 'partyName' => $partyName, 'debit' => $refundAmount, 'credit' => 0],
+                    ['accountId' => $bankCoaId, 'description' => "Refund paid via {$bank['account_name']}", 'projectId' => $projectId, 'projectTitle' => $projectTitle, 'partyType' => $pType, 'partyId' => $partyId, 'partyName' => $partyName, 'debit' => 0, 'credit' => $refundAmount]
+                ]
+            ], $actor);
+        }
+
+        $pdo->prepare("INSERT INTO `solar_sales_returns`
+            (`id`,`return_number`,`return_date`,`target_type`,`invoice_id`,`invoice_number`,`party_id`,`party_name`,`project_id`,`project_title`,`reason`,`notes`,`warehouse_id`,`warehouse_name`,`restock_inventory`,`subtotal`,`cgst_amount`,`sgst_amount`,`igst_amount`,`tax_amount`,`total_amount`,`settlement_mode`,`refund_amount`,`bank_account_id`,`bank_account_name`,`credit_journal_entry_id`,`refund_journal_entry_id`,`status`,`created_by`)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'POSTED',?)")
+            ->execute([
+                $id, $returnNumber, $returnDate, $targetType, $inv['id'], $inv['invoice_number'], $partyId, $partyName,
+                $projectId, $projectTitle, trim((string)($payload['reason'] ?? '')), trim((string)($payload['notes'] ?? '')),
+                $warehouseId, $warehouseName, $restockInventory ? 1 : 0, $subtotal, $cgstTotal, $sgstTotal, $igstTotal, $taxAmount, $totalAmount,
+                $settlementMode, $refundAmount, $bank['id'] ?? '', $bank['account_name'] ?? '', $creditJournalEntryId, $refundJournalEntryId, $actorName
+            ]);
+
+        $iStmt = $pdo->prepare("INSERT INTO `solar_sales_return_items` (`id`,`return_id`,`line_order`,`product_id`,`description`,`hsn_code`,`unit`,`original_quantity`,`quantity`,`rate`,`taxable_amount`,`gst_rate`,`cgst_amount`,`sgst_amount`,`igst_amount`,`tax_amount`,`total_amount`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        foreach ($computedLines as $idx => $li) {
+            $iStmt->execute([
+                "sri-{$id}-{$idx}", $id, $idx, $li['productId'], $li['description'], $li['hsnCode'], $li['unit'],
+                $li['originalQuantity'], $li['quantity'], $li['rate'], $li['taxableAmount'], $li['gstRate'],
+                $li['cgstAmount'], $li['sgstAmount'], $li['igstAmount'], $li['taxAmount'], $li['totalAmount']
+            ]);
+            if ($restockInventory && !empty($li['productId'])) {
+                accAdjustProductStockTxPhp($pdo, [
+                    'productId' => $li['productId'],
+                    'deltaQty' => $li['quantity'],
+                    'warehouseId' => $warehouseId,
+                    'warehouseName' => $warehouseName,
+                    'movementType' => 'SALES_RETURN',
+                    'referenceNumber' => $returnNumber,
+                    'referenceId' => $id,
+                    'notes' => "Sales Return {$returnNumber} against {$inv['invoice_number']}",
+                    'actorName' => $actorName
+                ]);
+            }
+        }
+
+        $nextReturned = accRound2($invReturned + $totalAmount);
+        $nextRefunded = accRound2($invRefunded + $refundAmount);
+        $nextNetPaid = accRound2(max(0, $invPaid - $nextRefunded));
+        $nextBalance = accRound2(max(0, $invTotal - $nextReturned - $nextNetPaid));
+        if ($targetType === 'CUSTOMER_INVOICE') {
+            $nextStatus = $nextBalance <= 0.01 ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+            $pdo->prepare('UPDATE `solar_sales_invoices` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')
+                ->execute([$nextReturned, $nextRefunded, $nextBalance, $nextStatus, $inv['id']]);
+            if ($projectId !== '') {
+                try { $pdo->prepare('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?')->execute([$projectId]); } catch (Exception $e) {}
+            }
+        } else {
+            $dueDate = accToSqlDate($inv['due_date'] ?? null) ?: '';
+            $today = accTodaySql();
+            $nextStatus = ($nextBalance <= 0.01 && $invTotal > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : ($dueDate && $dueDate < $today ? 'OVERDUE' : 'ISSUED'));
+            $pdo->prepare('UPDATE `solar_vendor_sales_invoices` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')
+                ->execute([$nextReturned, $nextRefunded, $nextBalance, $nextStatus, $inv['id']]);
+        }
+
+        accLogAuditPhp($pdo, $actor, 'SALES_RETURNS', 'CREATE_SALES_RETURN', $id, $returnNumber, "Recorded Sales Return {$returnNumber} (₹{$totalAmount}) against {$inv['invoice_number']}");
+        $pdo->commit();
+        return ['id' => $id, 'returnNumber' => $returnNumber, 'totalAmount' => $totalAmount, 'refundAmount' => $refundAmount, 'creditJournalEntryId' => $creditJournalEntryId, 'refundJournalEntryId' => $refundJournalEntryId];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function accDeleteSalesReturnPhp($pdo, $id, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $pdo->beginTransaction();
+    try {
+        $s = $pdo->prepare('SELECT * FROM `solar_sales_returns` WHERE `id` = ? FOR UPDATE');
+        $s->execute([$id]);
+        $sr = $s->fetch(PDO::FETCH_ASSOC);
+        if (!$sr) throw new Exception('Sales return not found.', 404);
+        accAssertNotLockedPhp($pdo, accToSqlDate($sr['return_date'] ?? '') ?: accTodaySql());
+
+        $is = $pdo->prepare('SELECT * FROM `solar_sales_return_items` WHERE `return_id` = ?');
+        $is->execute([$id]);
+        $items = $is->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
+
+        if (!empty($sr['restock_inventory'])) {
+            foreach ($items as $li) {
+                if (!empty($li['product_id'])) {
+                    accAdjustProductStockTxPhp($pdo, [
+                        'productId' => $li['product_id'],
+                        'deltaQty' => -floatval($li['quantity'] ?? 0),
+                        'warehouseId' => $sr['warehouse_id'] ?? '',
+                        'warehouseName' => $sr['warehouse_name'] ?? '',
+                        'movementType' => 'SALES_RETURN',
+                        'referenceNumber' => 'REV-' . $sr['return_number'],
+                        'referenceId' => $id . '-REV',
+                        'notes' => "Reversed Sales Return {$sr['return_number']}",
+                        'actorName' => $actorName
+                    ]);
+                }
+            }
+            $pdo->prepare('DELETE FROM `solar_stock_movements` WHERE `reference_id` IN (?, ?)')->execute([$id, $id . '-REV']);
+        }
+
+        if (!empty($sr['bank_account_id']) && floatval($sr['refund_amount'] ?? 0) > 0) {
+            $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')
+                ->execute([accRound2($sr['refund_amount']), $sr['bank_account_id']]);
+        }
+
+        $retAmt = accRound2($sr['total_amount'] ?? 0);
+        $refAmt = accRound2($sr['refund_amount'] ?? 0);
+
+        if ($sr['target_type'] === 'VENDOR_INVOICE') {
+            $iv = $pdo->prepare('SELECT * FROM `solar_vendor_sales_invoices` WHERE `id` = ? FOR UPDATE');
+            $iv->execute([$sr['invoice_id']]);
+            $inv = $iv->fetch(PDO::FETCH_ASSOC);
+            if ($inv) {
+                $total = accRound2($inv['total_amount'] ?? 0);
+                $paid = accRound2($inv['paid_amount'] ?? 0);
+                $nextRet = accRound2(max(0, floatval($inv['returned_amount'] ?? 0) - $retAmt));
+                $nextRef = accRound2(max(0, floatval($inv['refunded_amount'] ?? 0) - $refAmt));
+                $nextNetPaid = accRound2(max(0, $paid - $nextRef));
+                $nextBal = accRound2(max(0, $total - $nextRet - $nextNetPaid));
+                $dueDate = accToSqlDate($inv['due_date'] ?? null) ?: '';
+                $today = accTodaySql();
+                $nextSt = ($nextBal <= 0.01 && $total > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : ($dueDate && $dueDate < $today ? 'OVERDUE' : 'ISSUED'));
+                $pdo->prepare('UPDATE `solar_vendor_sales_invoices` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')
+                    ->execute([$nextRet, $nextRef, $nextBal, $nextSt, $inv['id']]);
+            }
+        } else {
+            $iv = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE');
+            $iv->execute([$sr['invoice_id']]);
+            $inv = $iv->fetch(PDO::FETCH_ASSOC);
+            if ($inv) {
+                $total = accRound2($inv['total_amount'] ?? 0);
+                $paid = accRound2($inv['paid_amount'] ?? 0);
+                $nextRet = accRound2(max(0, floatval($inv['returned_amount'] ?? 0) - $retAmt));
+                $nextRef = accRound2(max(0, floatval($inv['refunded_amount'] ?? 0) - $refAmt));
+                $nextNetPaid = accRound2(max(0, $paid - $nextRef));
+                $nextBal = accRound2(max(0, $total - $nextRet - $nextNetPaid));
+                $nextSt = $nextBal <= 0.01 ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+                $pdo->prepare('UPDATE `solar_sales_invoices` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')
+                    ->execute([$nextRet, $nextRef, $nextBal, $nextSt, $inv['id']]);
+            }
+        }
+
+        $jeIds = array_values(array_filter([$sr['credit_journal_entry_id'] ?? '', $sr['refund_journal_entry_id'] ?? '']));
+        if (!empty($jeIds)) {
+            $ph = implode(',', array_fill(0, count($jeIds), '?'));
+            $pdo->prepare("DELETE FROM `solar_acc_journal_entries` WHERE `id` IN ({$ph})")->execute($jeIds);
+            accRecalcBalancesPhp($pdo);
+        }
+
+        $pdo->prepare('DELETE FROM `solar_sales_returns` WHERE `id` = ?')->execute([$id]);
+        accLogAuditPhp($pdo, $actor, 'SALES_RETURNS', 'DELETE_SALES_RETURN', $id, $sr['return_number'], "Deleted & reversed Sales Return {$sr['return_number']}");
+        $pdo->commit();
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function accGetPurchaseReturnsPhp($pdo) {
+    ensureAccountingTablesPhp($pdo);
+    $rows = $pdo->query('SELECT * FROM `solar_purchase_returns` ORDER BY `return_date` DESC, `created_at` DESC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    if (empty($rows)) return [];
+    $itemRows = $pdo->query('SELECT * FROM `solar_purchase_return_items` ORDER BY `line_order` ASC, `id` ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $itemsByRet = [];
+    foreach ($itemRows as $it) {
+        $itemsByRet[$it['return_id']][] = [
+            'id' => $it['id'],
+            'productId' => $it['product_id'] ?: null,
+            'description' => $it['description'],
+            'hsnCode' => $it['hsn_code'] ?? '',
+            'unit' => $it['unit'] ?? 'Nos',
+            'originalQuantity' => floatval($it['original_quantity'] ?? 0),
+            'quantity' => floatval($it['quantity'] ?? 0),
+            'rate' => floatval($it['rate'] ?? 0),
+            'taxableAmount' => floatval($it['taxable_amount'] ?? 0),
+            'gstRate' => floatval($it['gst_rate'] ?? 0),
+            'cgstAmount' => floatval($it['cgst_amount'] ?? 0),
+            'sgstAmount' => floatval($it['sgst_amount'] ?? 0),
+            'igstAmount' => floatval($it['igst_amount'] ?? 0),
+            'taxAmount' => floatval($it['tax_amount'] ?? 0),
+            'totalAmount' => floatval($it['total_amount'] ?? 0)
+        ];
+    }
+    return array_map(function ($r) use ($itemsByRet) {
+        return [
+            'id' => $r['id'],
+            'returnNumber' => $r['return_number'],
+            'returnDate' => accToSqlDate($r['return_date']) ?: '',
+            'purchaseOrderId' => $r['purchase_order_id'],
+            'poNumber' => $r['po_number'] ?? '',
+            'vendorBillId' => $r['vendor_bill_id'] ?? '',
+            'vendorId' => $r['vendor_id'] ?? '',
+            'vendorName' => $r['vendor_name'],
+            'projectId' => $r['project_id'] ?? '',
+            'projectTitle' => $r['project_title'] ?? '',
+            'reason' => $r['reason'] ?? '',
+            'notes' => $r['notes'] ?? '',
+            'warehouseId' => $r['warehouse_id'] ?? '',
+            'warehouseName' => $r['warehouse_name'] ?? '',
+            'deductInventory' => !empty($r['deduct_inventory']),
+            'items' => $itemsByRet[$r['id']] ?? [],
+            'subtotal' => floatval($r['subtotal'] ?? 0),
+            'cgstAmount' => floatval($r['cgst_amount'] ?? 0),
+            'sgstAmount' => floatval($r['sgst_amount'] ?? 0),
+            'igstAmount' => floatval($r['igst_amount'] ?? 0),
+            'taxAmount' => floatval($r['tax_amount'] ?? 0),
+            'totalAmount' => floatval($r['total_amount'] ?? 0),
+            'settlementMode' => ($r['settlement_mode'] === 'VENDOR_REFUND') ? 'VENDOR_REFUND' : 'DEBIT_NOTE',
+            'refundAmount' => floatval($r['refund_amount'] ?? 0),
+            'bankAccountId' => $r['bank_account_id'] ?? '',
+            'bankAccountName' => $r['bank_account_name'] ?? '',
+            'debitJournalEntryId' => $r['debit_journal_entry_id'] ?? '',
+            'refundJournalEntryId' => $r['refund_journal_entry_id'] ?? '',
+            'status' => $r['status'] ?? 'POSTED',
+            'createdBy' => $r['created_by'] ?? '',
+            'createdAt' => $r['created_at'],
+            'updatedAt' => $r['updated_at']
+        ];
+    }, $rows);
+}
+
+function accCreatePurchaseReturnPhp($pdo, $payload, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $poId = trim((string)($payload['purchaseOrderId'] ?? ''));
+    if ($poId === '') throw new Exception('Source Purchase Order is required.', 400);
+    $rawItems = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+    $submittedItems = array_values(array_filter($rawItems, function ($it) { return floatval($it['quantity'] ?? 0) > 0; }));
+    if (empty($submittedItems)) throw new Exception('Specify return quantity greater than 0 for at least one line item.', 400);
+
+    $pdo->beginTransaction();
+    try {
+        $settings = accGetSettingsRowPhp($pdo);
+        $returnDate = accToSqlDate($payload['returnDate'] ?? '') ?: accTodaySql();
+        accAssertNotLockedPhp($pdo, $returnDate);
+
+        $ps = $pdo->prepare('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? FOR UPDATE');
+        $ps->execute([$poId]);
+        $po = $ps->fetch(PDO::FETCH_ASSOC);
+        if (!$po) throw new Exception('Purchase order not found.', 404);
+        $poSt = strtoupper(trim((string)($po['status'] ?? 'ISSUED')));
+        if ($poSt === 'CANCELLED' || $poSt === 'DRAFT') throw new Exception("Cannot record purchase return against a {$poSt} purchase order.", 400);
+
+        $origItems = json_decode($po['items_json'] ?? '[]', true) ?: [];
+        $anyReceived = false;
+        foreach ($origItems as $oi) {
+            if (floatval($oi['receivedQuantity'] ?? 0) > 0) { $anyReceived = true; break; }
+        }
+        $poEffGst = floatval($po['subtotal'] ?? 0) > 0 ? accRound2((floatval($po['gst_amount'] ?? 0) / floatval($po['subtotal'])) * 100) : 18;
+
+        $prevStmt = $pdo->prepare("SELECT pri.`product_id`, pri.`description`, SUM(pri.`quantity`) AS prev_qty FROM `solar_purchase_return_items` pri INNER JOIN `solar_purchase_returns` pr ON pr.`id` = pri.`return_id` WHERE pr.`purchase_order_id` = ? AND pr.`status` = 'POSTED' GROUP BY pri.`product_id`, pri.`description`");
+        $prevStmt->execute([$poId]);
+        $prevByKey = [];
+        foreach ($prevStmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $r) {
+            $k = !empty($r['product_id']) ? ('pid:' . $r['product_id']) : ('desc:' . strtolower(trim((string)($r['description'] ?? ''))));
+            $prevByKey[$k] = ($prevByKey[$k] ?? 0) + floatval($r['prev_qty'] ?? 0);
+        }
+
+        $subtotal = 0; $cgstTotal = 0; $sgstTotal = 0;
+        $computedLines = [];
+        foreach ($submittedItems as $subItem) {
+            $reqPid = trim((string)($subItem['productId'] ?? ''));
+            $reqDesc = trim((string)($subItem['description'] ?? ''));
+            $qty = round(floatval($subItem['quantity'] ?? 0), 3);
+            if (!is_finite($qty) || $qty <= 0) continue;
+
+            $match = null;
+            foreach ($origItems as $oi) {
+                $oiPid = trim((string)($oi['productId'] ?? ''));
+                $oiDesc = trim((string)($oi['productName'] ?? ($oi['description'] ?? ($oi['name'] ?? ''))));
+                if (($reqPid !== '' && $oiPid === $reqPid) || ($reqDesc !== '' && strcasecmp($oiDesc, $reqDesc) === 0)) {
+                    $match = $oi;
+                    break;
+                }
+            }
+            if (!$match) throw new Exception("Return item \"" . ($reqDesc ?: $reqPid) . "\" does not match any line item on PO {$po['po_number']}.", 400);
+
+            $baseQty = $anyReceived ? floatval($match['receivedQuantity'] ?? 0) : floatval($match['orderedQuantity'] ?? ($match['quantity'] ?? 0));
+            $effPid = !empty($match['productId']) ? $match['productId'] : $reqPid;
+            $matchDesc = trim((string)($match['productName'] ?? ($match['description'] ?? ($match['name'] ?? $reqDesc))));
+            $itemKey = $effPid !== '' ? ('pid:' . $effPid) : ('desc:' . strtolower($matchDesc));
+            $prevQty = $prevByKey[$itemKey] ?? 0;
+            $maxRem = round(max(0, $baseQty - $prevQty), 3);
+            if ($qty > $maxRem + 0.001) {
+                throw new Exception("Return quantity ({$qty}) for \"{$matchDesc}\" exceeds remaining returnable quantity ({$maxRem}).", 400);
+            }
+            $prevByKey[$itemKey] = $prevQty + $qty;
+
+            $rate = accRound2($match['unitPrice'] ?? ($match['rate'] ?? 0));
+            $lineTaxable = accRound2($qty * $rate);
+            $gstRate = floatval($match['gstRate'] ?? ($match['taxRatePercent'] ?? $poEffGst));
+            $lineTax = accRound2(($lineTaxable * $gstRate) / 100);
+            $lineCgst = accRound2($lineTax / 2);
+            $lineSgst = accRound2($lineTax - $lineCgst);
+            $lineTotal = accRound2($lineTaxable + $lineTax);
+
+            $subtotal = accRound2($subtotal + $lineTaxable);
+            $cgstTotal = accRound2($cgstTotal + $lineCgst);
+            $sgstTotal = accRound2($sgstTotal + $lineSgst);
+
+            $computedLines[] = [
+                'productId' => $effPid ?: null,
+                'description' => $matchDesc,
+                'hsnCode' => (string)($match['hsnCode'] ?? ''),
+                'unit' => (string)($match['unit'] ?? 'Nos'),
+                'originalQuantity' => $baseQty,
+                'quantity' => $qty,
+                'rate' => $rate,
+                'taxableAmount' => $lineTaxable,
+                'gstRate' => $gstRate,
+                'cgstAmount' => $lineCgst,
+                'sgstAmount' => $lineSgst,
+                'igstAmount' => 0,
+                'taxAmount' => $lineTax,
+                'totalAmount' => $lineTotal
+            ];
+        }
+        if (empty($computedLines)) throw new Exception('No valid returnable line items found.', 400);
+
+        $taxAmount = accRound2($cgstTotal + $sgstTotal);
+        $totalAmount = accRound2($subtotal + $taxAmount);
+
+        $poTotal = accRound2($po['total_amount'] ?? 0);
+        $poPaid = accRound2($po['paid_amount'] ?? 0);
+        $poReturned = accRound2($po['returned_amount'] ?? 0);
+        $poRefunded = accRound2($po['refunded_amount'] ?? 0);
+        $remRetVal = accRound2(max(0, $poTotal - $poReturned));
+        if ($totalAmount > $remRetVal + 0.05) {
+            throw new Exception("Return total (₹" . number_format($totalAmount, 2, '.', '') . ") exceeds remaining non-returned PO value (₹" . number_format($remRetVal, 2, '.', '') . ").", 400);
+        }
+
+        $settlementMode = (($payload['settlementMode'] ?? '') === 'VENDOR_REFUND') ? 'VENDOR_REFUND' : 'DEBIT_NOTE';
+        $refundAmount = $settlementMode === 'VENDOR_REFUND' ? accRound2($payload['refundAmount'] ?? $totalAmount) : 0;
+        $netPaidSoFar = accRound2(max(0, $poPaid - $poRefunded));
+
+        $bank = null; $bankCoaId = '';
+        if ($settlementMode === 'VENDOR_REFUND') {
+            if ($netPaidSoFar <= 0) throw new Exception('Cannot record a vendor refund because no net payment has been made on this PO. Use Debit Note adjustment instead.', 400);
+            if (!is_finite($refundAmount) || $refundAmount <= 0) throw new Exception('Refund amount must be greater than zero for Vendor Refund settlement.', 400);
+            if ($refundAmount > $totalAmount + 0.01) throw new Exception('Refund amount cannot exceed Debit Note total.', 400);
+            if ($refundAmount > $netPaidSoFar + 0.01) throw new Exception('Refund amount exceeds net paid amount available for refund.', 400);
+            $resolved = accResolveBankAccountTxPhp($pdo, $payload['bankAccountId'] ?? '', $settings);
+            $bank = $resolved['bank'];
+            $bankCoaId = $resolved['coaId'];
+        }
+
+        $bill = accEnsurePurchaseOrderBillTxPhp($pdo, $po, $settings, $actor);
+
+        $id = 'pr-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+        $returnNumber = trim((string)($payload['returnNumber'] ?? ('DN-' . substr($returnDate, 0, 4) . '-' . accRandDigits(4))));
+        $deductInventory = !isset($payload['deductInventory']) || (bool)$payload['deductInventory'];
+        $warehouseId = trim((string)($payload['warehouseId'] ?? ($po['warehouse_id'] ?? '')));
+        $warehouseName = trim((string)($payload['warehouseName'] ?? ($po['warehouse_name'] ?? '')));
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
+
+        if ($deductInventory) {
+            foreach ($computedLines as $li) {
+                if (!empty($li['productId'])) {
+                    accAdjustProductStockTxPhp($pdo, [
+                        'productId' => $li['productId'],
+                        'deltaQty' => -$li['quantity'],
+                        'warehouseId' => $warehouseId,
+                        'warehouseName' => $warehouseName,
+                        'movementType' => 'PURCHASE_RETURN',
+                        'referenceNumber' => $returnNumber,
+                        'referenceId' => $id,
+                        'notes' => "Purchase Return {$returnNumber} to {$po['vendor_name']} (PO {$po['po_number']})",
+                        'actorName' => $actorName
+                    ]);
+                }
+            }
+        }
+
+        $dnLines = [
+            ['accountId' => $settings['default_ap_account_id'] ?? 'acc-2010', 'description' => "Debit Note {$returnNumber} - {$po['vendor_name']} (PO {$po['po_number']})", 'projectId' => $po['project_id'] ?? '', 'projectTitle' => $po['project_title'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $po['vendor_id'] ?? '', 'partyName' => $po['vendor_name'] ?? '', 'debit' => $totalAmount, 'credit' => 0],
+            ['accountId' => $settings['default_cogs_account_id'] ?? 'acc-5010', 'description' => "Purchase Return {$returnNumber} - Material Credit", 'projectId' => $po['project_id'] ?? '', 'projectTitle' => $po['project_title'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $po['vendor_id'] ?? '', 'partyName' => $po['vendor_name'] ?? '', 'debit' => 0, 'credit' => $subtotal]
+        ];
+        if ($taxAmount > 0) {
+            $dnLines[] = ['accountId' => $settings['default_input_gst_account_id'] ?? 'acc-1150', 'description' => "Input GST ITC Reversal - {$returnNumber}", 'projectId' => $po['project_id'] ?? '', 'projectTitle' => $po['project_title'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $po['vendor_id'] ?? '', 'partyName' => $po['vendor_name'] ?? '', 'debit' => 0, 'credit' => $taxAmount];
+        }
+
+        $debitJournalEntryId = accInsertJournalTxPhp($pdo, [
+            'entryDate' => $returnDate,
+            'referenceType' => 'PURCHASE_RETURN',
+            'referenceId' => $id,
+            'referenceNumber' => $returnNumber,
+            'narration' => "Purchase Return {$returnNumber} against PO {$po['po_number']} ({$po['vendor_name']})",
+            'status' => 'POSTED',
+            'lines' => $dnLines
+        ], $actor);
+
+        $refundJournalEntryId = '';
+        if ($settlementMode === 'VENDOR_REFUND' && $bank && $refundAmount > 0) {
+            $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')
+                ->execute([$refundAmount, $bank['id']]);
+            $refundJournalEntryId = accInsertJournalTxPhp($pdo, [
+                'entryDate' => $returnDate,
+                'referenceType' => 'PURCHASE_RETURN_REFUND',
+                'referenceId' => $id,
+                'referenceNumber' => $returnNumber,
+                'narration' => "Vendor Refund {$returnNumber} from {$po['vendor_name']} into {$bank['account_name']}",
+                'status' => 'POSTED',
+                'lines' => [
+                    ['accountId' => $bankCoaId, 'description' => "Vendor refund received in {$bank['account_name']}", 'projectId' => $po['project_id'] ?? '', 'projectTitle' => $po['project_title'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $po['vendor_id'] ?? '', 'partyName' => $po['vendor_name'] ?? '', 'debit' => $refundAmount, 'credit' => 0],
+                    ['accountId' => $settings['default_ap_account_id'] ?? 'acc-2010', 'description' => "Vendor refund adjustment {$returnNumber} - {$po['vendor_name']}", 'projectId' => $po['project_id'] ?? '', 'projectTitle' => $po['project_title'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $po['vendor_id'] ?? '', 'partyName' => $po['vendor_name'] ?? '', 'debit' => 0, 'credit' => $refundAmount]
+                ]
+            ], $actor);
+        }
+
+        $pdo->prepare("INSERT INTO `solar_purchase_returns`
+            (`id`,`return_number`,`return_date`,`purchase_order_id`,`po_number`,`vendor_bill_id`,`vendor_id`,`vendor_name`,`project_id`,`project_title`,`reason`,`notes`,`warehouse_id`,`warehouse_name`,`deduct_inventory`,`subtotal`,`cgst_amount`,`sgst_amount`,`igst_amount`,`tax_amount`,`total_amount`,`settlement_mode`,`refund_amount`,`bank_account_id`,`bank_account_name`,`debit_journal_entry_id`,`refund_journal_entry_id`,`status`,`created_by`)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'POSTED',?)")
+            ->execute([
+                $id, $returnNumber, $returnDate, $po['id'], $po['po_number'], $bill['id'] ?? '', $po['vendor_id'] ?? '', $po['vendor_name'] ?? 'Vendor',
+                $po['project_id'] ?? '', $po['project_title'] ?? '', trim((string)($payload['reason'] ?? '')), trim((string)($payload['notes'] ?? '')),
+                $warehouseId, $warehouseName, $deductInventory ? 1 : 0, $subtotal, $cgstTotal, $sgstTotal, 0, $taxAmount, $totalAmount,
+                $settlementMode, $refundAmount, $bank['id'] ?? '', $bank['account_name'] ?? '', $debitJournalEntryId, $refundJournalEntryId, $actorName
+            ]);
+
+        $iStmt = $pdo->prepare("INSERT INTO `solar_purchase_return_items` (`id`,`return_id`,`line_order`,`product_id`,`description`,`hsn_code`,`unit`,`original_quantity`,`quantity`,`rate`,`taxable_amount`,`gst_rate`,`cgst_amount`,`sgst_amount`,`igst_amount`,`tax_amount`,`total_amount`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        foreach ($computedLines as $idx => $li) {
+            $iStmt->execute([
+                "pri-{$id}-{$idx}", $id, $idx, $li['productId'], $li['description'], $li['hsnCode'], $li['unit'],
+                $li['originalQuantity'], $li['quantity'], $li['rate'], $li['taxableAmount'], $li['gstRate'],
+                $li['cgstAmount'], $li['sgstAmount'], $li['igstAmount'], $li['taxAmount'], $li['totalAmount']
+            ]);
+        }
+
+        $nextReturned = accRound2($poReturned + $totalAmount);
+        $nextRefunded = accRound2($poRefunded + $refundAmount);
+        $nextNetPaid = accRound2(max(0, $poPaid - $nextRefunded));
+        $nextBalance = accRound2(max(0, $poTotal - $nextReturned - $nextNetPaid));
+        $nextPoPayStatus = ($nextBalance <= 0.01 && $poTotal > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING');
+
+        $pdo->prepare('UPDATE `solar_purchase_orders` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')
+            ->execute([$nextReturned, $nextRefunded, $nextBalance, $nextPoPayStatus, $po['id']]);
+
+        if ($bill) {
+            $nextBillStatus = ($nextBalance <= 0.01 && floatval($bill['total_amount'] ?? 0) > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+            $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')
+                ->execute([$nextReturned, $nextRefunded, $nextBalance, $nextBillStatus, $bill['id']]);
+        }
+
+        accLogAuditPhp($pdo, $actor, 'PURCHASE_RETURNS', 'CREATE_PURCHASE_RETURN', $id, $returnNumber, "Recorded Purchase Return {$returnNumber} (₹{$totalAmount}) for PO {$po['po_number']}");
+        $pdo->commit();
+        return ['id' => $id, 'returnNumber' => $returnNumber, 'totalAmount' => $totalAmount, 'refundAmount' => $refundAmount, 'debitJournalEntryId' => $debitJournalEntryId, 'refundJournalEntryId' => $refundJournalEntryId];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function accDeletePurchaseReturnPhp($pdo, $id, $actor) {
+    ensureAccountingTablesPhp($pdo);
+    $pdo->beginTransaction();
+    try {
+        $s = $pdo->prepare('SELECT * FROM `solar_purchase_returns` WHERE `id` = ? FOR UPDATE');
+        $s->execute([$id]);
+        $pr = $s->fetch(PDO::FETCH_ASSOC);
+        if (!$pr) throw new Exception('Purchase return not found.', 404);
+        accAssertNotLockedPhp($pdo, accToSqlDate($pr['return_date'] ?? '') ?: accTodaySql());
+
+        $is = $pdo->prepare('SELECT * FROM `solar_purchase_return_items` WHERE `return_id` = ?');
+        $is->execute([$id]);
+        $items = $is->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $actorName = trim((string)($actor['name'] ?? ($actor['email'] ?? 'Admin'))) ?: 'Admin';
+
+        if (!empty($pr['deduct_inventory'])) {
+            foreach ($items as $li) {
+                if (!empty($li['product_id'])) {
+                    accAdjustProductStockTxPhp($pdo, [
+                        'productId' => $li['product_id'],
+                        'deltaQty' => floatval($li['quantity'] ?? 0),
+                        'warehouseId' => $pr['warehouse_id'] ?? '',
+                        'warehouseName' => $pr['warehouse_name'] ?? '',
+                        'movementType' => 'PURCHASE_RETURN',
+                        'referenceNumber' => 'REV-' . $pr['return_number'],
+                        'referenceId' => $id . '-REV',
+                        'notes' => "Reversed Purchase Return {$pr['return_number']}",
+                        'actorName' => $actorName
+                    ]);
+                }
+            }
+            $pdo->prepare('DELETE FROM `solar_stock_movements` WHERE `reference_id` IN (?, ?)')->execute([$id, $id . '-REV']);
+        }
+
+        if (!empty($pr['bank_account_id']) && floatval($pr['refund_amount'] ?? 0) > 0) {
+            $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')
+                ->execute([accRound2($pr['refund_amount']), $pr['bank_account_id']]);
+        }
+
+        $retAmt = accRound2($pr['total_amount'] ?? 0);
+        $refAmt = accRound2($pr['refund_amount'] ?? 0);
+
+        $ps = $pdo->prepare('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? FOR UPDATE');
+        $ps->execute([$pr['purchase_order_id']]);
+        $po = $ps->fetch(PDO::FETCH_ASSOC);
+        if ($po) {
+            $total = accRound2($po['total_amount'] ?? 0);
+            $paid = accRound2($po['paid_amount'] ?? 0);
+            $nextRet = accRound2(max(0, floatval($po['returned_amount'] ?? 0) - $retAmt));
+            $nextRef = accRound2(max(0, floatval($po['refunded_amount'] ?? 0) - $refAmt));
+            $nextNetPaid = accRound2(max(0, $paid - $nextRef));
+            $nextBal = accRound2(max(0, $total - $nextRet - $nextNetPaid));
+            $nextSt = ($nextBal <= 0.01 && $total > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING');
+            $pdo->prepare('UPDATE `solar_purchase_orders` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')
+                ->execute([$nextRet, $nextRef, $nextBal, $nextSt, $po['id']]);
+        }
+
+        if (!empty($pr['vendor_bill_id'])) {
+            $bs = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? FOR UPDATE');
+            $bs->execute([$pr['vendor_bill_id']]);
+            $bill = $bs->fetch(PDO::FETCH_ASSOC);
+            if ($bill) {
+                $total = accRound2($bill['total_amount'] ?? 0);
+                $paid = accRound2($bill['paid_amount'] ?? 0);
+                $nextRet = accRound2(max(0, floatval($bill['returned_amount'] ?? 0) - $retAmt));
+                $nextRef = accRound2(max(0, floatval($bill['refunded_amount'] ?? 0) - $refAmt));
+                $nextNetPaid = accRound2(max(0, $paid - $nextRef));
+                $nextBal = accRound2(max(0, $total - $nextRet - $nextNetPaid));
+                $nextBillSt = ($nextBal <= 0.01 && $total > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+                $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')
+                    ->execute([$nextRet, $nextRef, $nextBal, $nextBillSt, $bill['id']]);
+            }
+        }
+
+        $jeIds = array_values(array_filter([$pr['debit_journal_entry_id'] ?? '', $pr['refund_journal_entry_id'] ?? '']));
+        if (!empty($jeIds)) {
+            $ph = implode(',', array_fill(0, count($jeIds), '?'));
+            $pdo->prepare("DELETE FROM `solar_acc_journal_entries` WHERE `id` IN ({$ph})")->execute($jeIds);
+            accRecalcBalancesPhp($pdo);
+        }
+
+        $pdo->prepare('DELETE FROM `solar_purchase_returns` WHERE `id` = ?')->execute([$id]);
+        accLogAuditPhp($pdo, $actor, 'PURCHASE_RETURNS', 'DELETE_PURCHASE_RETURN', $id, $pr['return_number'], "Deleted & reversed Purchase Return {$pr['return_number']}");
+        $pdo->commit();
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
 function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
     ensureAccountingTablesPhp($pdo);
+
+    if ($cleanPath === '/accounting/bank-accounts' && $method === 'GET') {
+        $role = trim((string)($actor['role'] ?? ''));
+        $acctType = strtoupper(trim((string)($actor['accountType'] ?? '')));
+        if ($acctType === 'CUSTOMER' || strtoupper($role) === 'CUSTOMER') {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Access denied.']);
+            exit;
+        }
+        echo json_encode(['success' => true, 'data' => accGetBankAccountsPhp($pdo)]);
+        exit;
+    }
+
     accRequireViewerPhp($actor);
 
     try {
@@ -998,8 +2702,11 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                         if ($oldInv) {
                             $revPaid = accRound2(max(0, floatval($oldInv['paid_amount']) - $oldAmt));
                             $tot = accRound2(floatval($oldInv['total_amount']));
-                            $revBal = accRound2(max(0, $tot - $revPaid));
-                            $revStat = $revBal <= 0.01 ? 'PAID' : ($revPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+                            $ret = accRound2(floatval($oldInv['returned_amount'] ?? 0));
+                            $ref = accRound2(floatval($oldInv['refunded_amount'] ?? 0));
+                            $revNetPaid = accRound2(max(0, $revPaid - $ref));
+                            $revBal = accRound2(max(0, $tot - $ret - $revNetPaid));
+                            $revStat = $revBal <= 0.01 ? 'PAID' : ($revNetPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
                             $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')->execute([$revPaid, $revBal, $revStat, $oldInv['id']]);
                         }
                     }
@@ -1012,12 +2719,12 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 if ($status === 'PAID') accAssertNotLockedPhp($pdo, $paidDate);
                 $rcptNo = !empty($body['receiptNumber']) ? $body['receiptNumber'] : ($existing['receipt_number'] ?? ('RCPT-' . substr($paidDate, 0, 4) . '-' . accRandDigits(4)));
 
+                $selectedBankId = trim((string)($body['bankAccountId'] ?? ''));
                 $bankCoa = $settings['default_bank_account_id'] ?? 'acc-1020';
-                if (!empty($body['bankAccountId'])) {
-                    $bs = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
-                    $bs->execute([$body['bankAccountId']]);
-                    $bRow = $bs->fetch(PDO::FETCH_ASSOC);
-                    if ($bRow) $bankCoa = $bRow['coa_account_id'] ?: ($bRow['account_type'] === 'CASH' ? 'acc-1010' : 'acc-1020');
+                if ($status === 'PAID') {
+                    $resolvedBank = accResolveBankAccountTxPhp($pdo, $selectedBankId ?: 'bank-main-current', $settings, $body['paymentMode'] ?? '');
+                    $selectedBankId = $resolvedBank['bank']['id'];
+                    $bankCoa = $resolvedBank['coaId'];
                 } elseif (stripos($body['paymentMode'] ?? '', 'cash') !== false) {
                     $bankCoa = $settings['default_cash_account_id'] ?? 'acc-1010';
                 }
@@ -1037,19 +2744,23 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                         if ($custName === 'Solar Customer') $custName = $inv['customer_name'];
                         if (!$projId) $projId = $inv['project_id'];
                         if ($status === 'PAID') {
+                            accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
                             $newPaid = accRound2(floatval($inv['paid_amount']) + $amt);
                             $tot = accRound2(floatval($inv['total_amount']));
-                            $newBal = accRound2(max(0, $tot - $newPaid));
+                            $ret = accRound2(floatval($inv['returned_amount'] ?? 0));
+                            $ref = accRound2(floatval($inv['refunded_amount'] ?? 0));
+                            $netPaid = accRound2(max(0, $newPaid - $ref));
+                            $newBal = accRound2(max(0, $tot - $ret - $netPaid));
                             $invStat = $newBal <= 0.01 ? 'PAID' : 'PARTIAL';
-                            $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $invStat, $inv['id']]);
+                            $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=?,`bank_account_id`=? WHERE `id`=?')->execute([$newPaid, $newBal, $invStat, $selectedBankId, $inv['id']]);
                         }
                     }
                 }
 
                 $jeId = '';
                 if ($status === 'PAID') {
-                    if (!empty($body['bankAccountId'])) {
-                        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')->execute([$amt, $body['bankAccountId']]);
+                    if ($selectedBankId !== '') {
+                        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')->execute([$amt, $selectedBankId]);
                     }
                     $jeId = accInsertJournalTxPhp($pdo, [
                         'entryDate' => $paidDate, 'referenceType' => 'CUSTOMER_RECEIPT', 'referenceId' => $id, 'referenceNumber' => $rcptNo,
@@ -1062,7 +2773,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 }
 
                 $pdo->prepare("INSERT INTO `solar_payments` (`id`,`receipt_number`,`project_id`,`customer_id`,`customer_name`,`milestone`,`amount`,`status`,`due_date`,`paid_date`,`payment_mode`,`transaction_reference`,`notes`,`invoice_id`,`invoice_number`,`bank_account_id`,`journal_entry_id`,`tally_sync_status`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT SYNCED') ON DUPLICATE KEY UPDATE `project_id`=VALUES(`project_id`),`customer_id`=VALUES(`customer_id`),`customer_name`=VALUES(`customer_name`),`milestone`=VALUES(`milestone`),`amount`=VALUES(`amount`),`status`=VALUES(`status`),`due_date`=VALUES(`due_date`),`paid_date`=VALUES(`paid_date`),`payment_mode`=VALUES(`payment_mode`),`transaction_reference`=VALUES(`transaction_reference`),`notes`=VALUES(`notes`),`invoice_id`=VALUES(`invoice_id`),`invoice_number`=VALUES(`invoice_number`),`bank_account_id`=VALUES(`bank_account_id`),`journal_entry_id`=VALUES(`journal_entry_id`)")
-                    ->execute([$id, $rcptNo, $projId, $custId, $custName, $body['milestone'] ?? 'Project Milestone', $amt, $status, $dueDate, $status === 'PAID' ? $paidDate : null, $body['paymentMode'] ?? 'Bank NEFT/RTGS', $body['transactionReference'] ?? '', $body['notes'] ?? '', $body['invoiceId'] ?? '', $invNo, $body['bankAccountId'] ?? '', $jeId]);
+                    ->execute([$id, $rcptNo, $projId, $custId, $custName, $body['milestone'] ?? 'Project Milestone', $amt, $status, $dueDate, $status === 'PAID' ? $paidDate : null, $body['paymentMode'] ?? 'Bank NEFT/RTGS', $body['transactionReference'] ?? '', $body['notes'] ?? '', $body['invoiceId'] ?? '', $invNo, $selectedBankId, $jeId]);
                 if (!empty($projId)) {
                     $pdo->prepare('UPDATE `solar_projects` SET `received_inflow` = NULL WHERE `id` = ?')->execute([$projId]);
                 }
@@ -1099,8 +2810,11 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                         if ($inv) {
                             $newPaid = accRound2(max(0, floatval($inv['paid_amount']) - $amt));
                             $tot = accRound2(floatval($inv['total_amount']));
-                            $newBal = accRound2(max(0, $tot - $newPaid));
-                            $invStat = $newBal <= 0.01 ? 'PAID' : ($newPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+                            $ret = accRound2(floatval($inv['returned_amount'] ?? 0));
+                            $ref = accRound2(floatval($inv['refunded_amount'] ?? 0));
+                            $netPaid = accRound2(max(0, $newPaid - $ref));
+                            $newBal = accRound2(max(0, $tot - $ret - $netPaid));
+                            $invStat = $newBal <= 0.01 ? 'PAID' : ($netPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
                             $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $invStat, $inv['id']]);
                         }
                     }
@@ -1272,11 +2986,14 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     ->execute([$payId, $payNo, $bill['id'], $bill['vendor_id'], $bill['vendor_name'], $payDate, $amt, $tds, $net, $bank['id'], $body['paymentMode'] ?? 'Bank NEFT/RTGS', $body['referenceNo'] ?? '', $body['notes'] ?? '', $jeId, $actor['name'] ?? 'Admin']);
                 $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$net, $bank['id']]);
                 $newPaid = accRound2(floatval($bill['paid_amount']) + $amt);
-                $newBal = accRound2(max(0, floatval($bill['total_amount']) - $newPaid));
+                $retAmt = accRound2(floatval($bill['returned_amount'] ?? 0));
+                $refAmt = accRound2(floatval($bill['refunded_amount'] ?? 0));
+                $netBillPaid = accRound2(max(0, $newPaid - $refAmt));
+                $newBal = accRound2(max(0, floatval($bill['total_amount']) - $retAmt - $netBillPaid));
                 $newStatus = $newBal <= 0.01 ? 'PAID' : 'PARTIAL';
                 $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `paid_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $newStatus, $bill['id']]);
                 if (!empty($bill['po_id'])) {
-                    $pdo->prepare('UPDATE `solar_purchase_orders` SET `payment_status`=? WHERE `id`=?')->execute([$newStatus === 'PAID' ? 'PAID' : 'PARTIALLY_PAID', $bill['po_id']]);
+                    $pdo->prepare('UPDATE `solar_purchase_orders` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=?,`bank_account_id`=? WHERE `id`=?')->execute([$newPaid, $newBal, $newStatus === 'PAID' ? 'PAID' : 'PARTIALLY_PAID', $bank['id'], $bill['po_id']]);
                 }
                 if ($tds > 0) {
                     $vs = $pdo->prepare('SELECT `pan_number` FROM `solar_vendors` WHERE `id` = ? LIMIT 1');
@@ -1325,12 +3042,15 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $bill = $bs->fetch(PDO::FETCH_ASSOC);
                 if ($bill) {
                     $newPaid = accRound2(max(0, floatval($bill['paid_amount']) - floatval($vp['amount'])));
-                    $newBal = accRound2(max(0, floatval($bill['total_amount']) - $newPaid));
-                    $newStatus = $newBal <= 0.01 ? 'PAID' : ($newPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+                    $retAmt = accRound2(floatval($bill['returned_amount'] ?? 0));
+                    $refAmt = accRound2(floatval($bill['refunded_amount'] ?? 0));
+                    $netBillPaid = accRound2(max(0, $newPaid - $refAmt));
+                    $newBal = accRound2(max(0, floatval($bill['total_amount']) - $retAmt - $netBillPaid));
+                    $newStatus = $newBal <= 0.01 ? 'PAID' : ($netBillPaid > 0.01 ? 'PARTIAL' : 'OPEN');
                     $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `paid_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $newStatus, $bill['id']]);
                     if (!empty($bill['po_id'])) {
-                        $poPayStatus = $newStatus === 'PAID' ? 'PAID' : ($newStatus === 'PARTIAL' ? 'PARTIALLY_PAID' : 'UNPAID');
-                        $pdo->prepare('UPDATE `solar_purchase_orders` SET `payment_status`=? WHERE `id`=?')->execute([$poPayStatus, $bill['po_id']]);
+                        $poPayStatus = $newStatus === 'PAID' ? 'PAID' : ($newStatus === 'PARTIAL' ? 'PARTIALLY_PAID' : 'PENDING');
+                        $pdo->prepare('UPDATE `solar_purchase_orders` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $poPayStatus, $bill['po_id']]);
                     }
                 }
 
@@ -1394,6 +3114,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 ['solar_acc_bank_reconciliations', 'bank_account_id = ?', [$id]],
                 ['solar_expenses', 'bank_account_id = ?', [$id]],
                 ['solar_acc_fixed_assets', 'payment_bank_account_id = ?', [$id]],
+                ['solar_sales_returns', 'bank_account_id = ?', [$id]],
+                ['solar_purchase_returns', 'bank_account_id = ?', [$id]],
+                ['solar_vendor_sales_payments', 'bank_account_id = ?', [$id]],
             ];
             foreach ($checks as $chk) {
                 $cs = $pdo->prepare("SELECT COUNT(*) FROM `{$chk[0]}` WHERE {$chk[1]}");
@@ -1841,7 +3564,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $posted = [];
                 foreach ($refs as $r) $posted[$r['reference_type'] . ':' . $r['reference_id']] = true;
 
-                $bd = ['salesInvoices' => 0, 'customerReceipts' => 0, 'expenses' => 0, 'payslips' => 0];
+                $bd = ['salesInvoices' => 0, 'vendorSalesInvoices' => 0, 'customerReceipts' => 0, 'vendorSalesReceipts' => 0, 'expenses' => 0, 'payslips' => 0];
                 $invs = $pdo->query("SELECT * FROM `solar_sales_invoices` WHERE `payment_status` NOT IN ('DRAFT','CANCELLED')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
                 foreach ($invs as $inv) {
                     if (isset($posted['SALES_INVOICE:' . $inv['id']])) continue;
@@ -1858,15 +3581,46 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     $bd['salesInvoices']++;
                 }
 
+                $vsinvs = $pdo->query("SELECT * FROM `solar_vendor_sales_invoices` WHERE `status` NOT IN ('DRAFT','CANCELLED')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($vsinvs as $vsi) {
+                    if (isset($posted['VENDOR_SALES_INVOICE:' . $vsi['id']])) continue;
+                    $tot = accRound2(floatval($vsi['total_amount']));
+                    $tax = accRound2(floatval($vsi['tax_amount']));
+                    if ($tot <= 0) continue;
+                    $rev = accRound2(($tot - $tax) > 0 ? ($tot - $tax) : floatval($vsi['subtotal']));
+                    $lines = [
+                        ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => $tot, 'credit' => 0, 'partyType' => 'VENDOR', 'partyId' => $vsi['vendor_id'], 'partyName' => $vsi['vendor_name']],
+                        ['accountId' => 'acc-4030', 'debit' => 0, 'credit' => $rev, 'partyType' => 'VENDOR', 'partyId' => $vsi['vendor_id'], 'partyName' => $vsi['vendor_name']]
+                    ];
+                    if (accRound2($tot - $rev) > 0) $lines[] = ['accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100', 'debit' => 0, 'credit' => accRound2($tot - $rev)];
+                    accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($vsi['invoice_date']), 'referenceType' => 'VENDOR_SALES_INVOICE', 'referenceId' => $vsi['id'], 'referenceNumber' => $vsi['invoice_number'], 'narration' => "Vendor Sales Invoice {$vsi['invoice_number']} ({$vsi['vendor_name']})", 'status' => 'POSTED', 'lines' => $lines], $actor);
+                    $bd['vendorSalesInvoices']++;
+                }
+
                 $pays = $pdo->query("SELECT * FROM `solar_payments` WHERE `status`='PAID' AND (`journal_entry_id` IS NULL OR `journal_entry_id`='')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
                 foreach ($pays as $p) {
                     if (isset($posted['CUSTOMER_RECEIPT:' . $p['id']])) continue;
                     $amt = accRound2(floatval($p['amount']));
                     if ($amt <= 0) continue;
-                    $bankCoa = stripos($p['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020');
-                    $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($p['paid_date'] ?: $p['due_date']), 'referenceType' => 'CUSTOMER_RECEIPT', 'referenceId' => $p['id'], 'referenceNumber' => $p['receipt_number'], 'narration' => "Receipt {$p['receipt_number']}", 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'debit' => $amt, 'credit' => 0], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => 0, 'credit' => $amt]]], $actor);
+                    $bankCoa = !empty($p['bank_account_id'])
+                        ? accResolveBankCoaTxPhp($pdo, $p['bank_account_id'], $settings)
+                        : (stripos($p['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+                    $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($p['paid_date'] ?: $p['due_date']), 'referenceType' => 'CUSTOMER_RECEIPT', 'referenceId' => $p['id'], 'referenceNumber' => $p['receipt_number'], 'narration' => "Receipt {$p['receipt_number']}", 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'debit' => $amt, 'credit' => 0, 'projectId' => $p['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $p['customer_id'] ?? '', 'partyName' => $p['customer_name'] ?? ''], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => 0, 'credit' => $amt, 'projectId' => $p['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $p['customer_id'] ?? '', 'partyName' => $p['customer_name'] ?? '']]], $actor);
                     $pdo->prepare('UPDATE `solar_payments` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $p['id']]);
                     $bd['customerReceipts']++;
+                }
+
+                $vsiPays = $pdo->query("SELECT p.*, v.`invoice_number`, v.`vendor_name` FROM `solar_vendor_sales_payments` p LEFT JOIN `solar_vendor_sales_invoices` v ON v.`id` = p.`invoice_id` WHERE (p.`journal_entry_id` IS NULL OR p.`journal_entry_id` = '')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($vsiPays as $vp) {
+                    if (isset($posted['VENDOR_SALES_RECEIPT:' . $vp['id']])) continue;
+                    $amt = accRound2(floatval($vp['amount']));
+                    if ($amt <= 0) continue;
+                    $bankCoa = !empty($vp['bank_account_id'])
+                        ? accResolveBankCoaTxPhp($pdo, $vp['bank_account_id'], $settings)
+                        : (stripos($vp['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+                    $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($vp['payment_date']), 'referenceType' => 'VENDOR_SALES_RECEIPT', 'referenceId' => $vp['id'], 'referenceNumber' => $vp['invoice_number'] ?? $vp['id'], 'narration' => "Vendor Sales Receipt for " . ($vp['invoice_number'] ?? $vp['invoice_id']), 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'debit' => $amt, 'credit' => 0, 'partyType' => 'VENDOR', 'partyId' => $vp['vendor_id'] ?? '', 'partyName' => $vp['vendor_name'] ?? ''], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => 0, 'credit' => $amt, 'partyType' => 'VENDOR', 'partyId' => $vp['vendor_id'] ?? '', 'partyName' => $vp['vendor_name'] ?? '']]], $actor);
+                    $pdo->prepare('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $vp['id']]);
+                    $bd['vendorSalesReceipts']++;
                 }
 
                 $exps = $pdo->query("SELECT * FROM `solar_expenses` WHERE (`status` IS NULL OR `status`='' OR `status`='PAID') AND (`journal_entry_id` IS NULL OR `journal_entry_id`='')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -1889,7 +3643,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     $bd['payslips']++;
                 }
 
-                $cnt = $bd['salesInvoices'] + $bd['customerReceipts'] + $bd['expenses'] + $bd['payslips'];
+                $cnt = $bd['salesInvoices'] + $bd['vendorSalesInvoices'] + $bd['customerReceipts'] + $bd['vendorSalesReceipts'] + $bd['expenses'] + $bd['payslips'];
                 $pdo->commit();
                 echo json_encode(['success' => true, 'data' => ['syncedCount' => $cnt, 'breakdown' => $bd]]);
             } catch (Exception $e) {

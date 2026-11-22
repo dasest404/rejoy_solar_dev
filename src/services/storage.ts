@@ -33,6 +33,8 @@ import {
   SalesInvoice,
   InvoiceLineItem,
   VendorSalesInvoice,
+  SalesReturn,
+  PurchaseReturn,
   StockMovement,
   Warehouse,
   StockAuditRecord,
@@ -91,6 +93,8 @@ const STORAGE_KEYS = {
   BOMS: 'solar_erp_boms_v3',
   SALES_INVOICES: 'solar_erp_sales_invoices_v3',
   VENDOR_SALES_INVOICES: 'solar_erp_vendor_sales_invoices_v3',
+  SALES_RETURNS: 'solar_erp_sales_returns_v3',
+  PURCHASE_RETURNS: 'solar_erp_purchase_returns_v3',
   STOCK_MOVEMENTS: 'solar_erp_stock_movements_v3',
   ACL_CONFIG: 'solar_erp_acl_config_v3',
   ACL_AUDIT_LOGS: 'solar_erp_acl_audit_logs_v3',
@@ -122,6 +126,8 @@ const initialPurchaseOrders: PurchaseOrder[] = [];
 const initialBOMs: BillOfMaterials[] = [];
 const initialSalesInvoices: SalesInvoice[] = [];
 const initialVendorSalesInvoices: VendorSalesInvoice[] = [];
+const initialSalesReturns: SalesReturn[] = [];
+const initialPurchaseReturns: PurchaseReturn[] = [];
 const initialStockMovements: StockMovement[] = [];
 
 const initialSettings: SystemSettings = {
@@ -162,6 +168,8 @@ const KEY_TO_COLLECTION: Record<string, string> = {
   [STORAGE_KEYS.BOMS]: 'boms',
   [STORAGE_KEYS.SALES_INVOICES]: 'sales_invoices',
   [STORAGE_KEYS.VENDOR_SALES_INVOICES]: 'vendor_sales_invoices',
+  [STORAGE_KEYS.SALES_RETURNS]: 'sales_returns',
+  [STORAGE_KEYS.PURCHASE_RETURNS]: 'purchase_returns',
   [STORAGE_KEYS.STOCK_MOVEMENTS]: 'stock_movements',
   [STORAGE_KEYS.ACL_CONFIG]: 'acl_config',
   [STORAGE_KEYS.ACL_AUDIT_LOGS]: 'acl_audit_logs',
@@ -3896,7 +3904,7 @@ class StorageService {
 
   async recordVendorSalesPaymentAsync(
     invoiceId: string,
-    payment: { amount: number; paymentDate?: string; paymentMode?: string; referenceNo?: string; notes?: string }
+    payment: { amount: number; paymentDate?: string; paymentMode?: string; bankAccountId?: string; referenceNo?: string; notes?: string }
   ): Promise<VendorSalesInvoice> {
     const updated = await apiClient.recordVendorSalesPayment(invoiceId, payment);
     const nextList = [...this.getVendorSalesInvoices()];
@@ -3915,6 +3923,159 @@ class StorageService {
     await apiClient.deleteVendorSalesInvoice(id);
     const nextList = this.getVendorSalesInvoices().filter(i => i.id !== id);
     this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, nextList);
+    this.notifyStorageUpdated();
+  }
+
+  // ==========================================
+  // Bank Account Selection & Invoice/PO Payments + Returns
+  // ==========================================
+  async fetchAccountingBankAccountsAsync(): Promise<any[]> {
+    return await apiClient.getAccountingBankAccounts();
+  }
+
+  async recordSalesInvoicePaymentAsync(
+    invoiceId: string,
+    payment: {
+      amount: number;
+      paymentDate?: string;
+      paymentMode?: string;
+      bankAccountId: string;
+      referenceNo?: string;
+      notes?: string;
+    }
+  ): Promise<any> {
+    const res = await apiClient.recordSalesInvoicePayment(invoiceId, payment);
+    const [invoices, payments, projects] = await Promise.all([
+      apiClient.getSalesInvoices().catch(() => null),
+      apiClient.getPayments().catch(() => null),
+      apiClient.getProjects().catch(() => null)
+    ]);
+    if (Array.isArray(invoices)) this.memStore.set(STORAGE_KEYS.SALES_INVOICES, invoices);
+    if (Array.isArray(payments)) this.memStore.set(STORAGE_KEYS.PAYMENTS, payments);
+    if (Array.isArray(projects)) this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
+    this.notifyStorageUpdated();
+    return res;
+  }
+
+  async recordPurchaseOrderPaymentAsync(
+    poId: string,
+    payment: {
+      amount: number;
+      tdsDeducted?: number;
+      tdsSection?: string;
+      paymentDate?: string;
+      paymentMode?: string;
+      bankAccountId: string;
+      referenceNo?: string;
+      notes?: string;
+    }
+  ): Promise<any> {
+    const res = await apiClient.recordPurchaseOrderPayment(poId, payment);
+    const orders = await apiClient.getPurchaseOrders().catch(() => null);
+    if (Array.isArray(orders)) this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, orders);
+    this.notifyStorageUpdated();
+    return res;
+  }
+
+  getSalesReturns(): SalesReturn[] {
+    return this.get<SalesReturn[]>(STORAGE_KEYS.SALES_RETURNS, initialSalesReturns);
+  }
+
+  async fetchSalesReturnsAsync(): Promise<SalesReturn[]> {
+    const list = await apiClient.getSalesReturns();
+    const cleaned = Array.isArray(list) ? list : [];
+    this.memStore.set(STORAGE_KEYS.SALES_RETURNS, cleaned);
+    this.notifyStorageUpdated();
+    return cleaned;
+  }
+
+  async createSalesReturnAsync(payload: any): Promise<any> {
+    const res = await apiClient.createSalesReturn(payload);
+    const [returnsList, salesInvoices, vendorSalesInvoices, products, stockMovements, projects] = await Promise.all([
+      apiClient.getSalesReturns().catch(() => null),
+      apiClient.getSalesInvoices().catch(() => null),
+      apiClient.getVendorSalesInvoices().catch(() => null),
+      apiClient.getProducts().catch(() => null),
+      apiClient.getStockMovements().catch(() => null),
+      apiClient.getProjects().catch(() => null)
+    ]);
+    if (Array.isArray(returnsList)) this.memStore.set(STORAGE_KEYS.SALES_RETURNS, returnsList);
+    if (Array.isArray(salesInvoices)) this.memStore.set(STORAGE_KEYS.SALES_INVOICES, salesInvoices);
+    if (Array.isArray(vendorSalesInvoices)) this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, vendorSalesInvoices);
+    if (Array.isArray(products)) this.memStore.set(STORAGE_KEYS.PRODUCTS, products);
+    if (Array.isArray(stockMovements)) this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, stockMovements);
+    if (Array.isArray(projects)) this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
+    this.notifyStorageUpdated();
+    return res;
+  }
+
+  async deleteSalesReturnAsync(id: string): Promise<void> {
+    await apiClient.deleteSalesReturn(id);
+    const [returnsList, salesInvoices, vendorSalesInvoices, products, stockMovements, projects] = await Promise.all([
+      apiClient.getSalesReturns().catch(() => null),
+      apiClient.getSalesInvoices().catch(() => null),
+      apiClient.getVendorSalesInvoices().catch(() => null),
+      apiClient.getProducts().catch(() => null),
+      apiClient.getStockMovements().catch(() => null),
+      apiClient.getProjects().catch(() => null)
+    ]);
+    if (Array.isArray(returnsList)) {
+      this.memStore.set(STORAGE_KEYS.SALES_RETURNS, returnsList);
+    } else {
+      this.memStore.set(STORAGE_KEYS.SALES_RETURNS, this.getSalesReturns().filter(r => r.id !== id));
+    }
+    if (Array.isArray(salesInvoices)) this.memStore.set(STORAGE_KEYS.SALES_INVOICES, salesInvoices);
+    if (Array.isArray(vendorSalesInvoices)) this.memStore.set(STORAGE_KEYS.VENDOR_SALES_INVOICES, vendorSalesInvoices);
+    if (Array.isArray(products)) this.memStore.set(STORAGE_KEYS.PRODUCTS, products);
+    if (Array.isArray(stockMovements)) this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, stockMovements);
+    if (Array.isArray(projects)) this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
+    this.notifyStorageUpdated();
+  }
+
+  getPurchaseReturns(): PurchaseReturn[] {
+    return this.get<PurchaseReturn[]>(STORAGE_KEYS.PURCHASE_RETURNS, initialPurchaseReturns);
+  }
+
+  async fetchPurchaseReturnsAsync(): Promise<PurchaseReturn[]> {
+    const list = await apiClient.getPurchaseReturns();
+    const cleaned = Array.isArray(list) ? list : [];
+    this.memStore.set(STORAGE_KEYS.PURCHASE_RETURNS, cleaned);
+    this.notifyStorageUpdated();
+    return cleaned;
+  }
+
+  async createPurchaseReturnAsync(payload: any): Promise<any> {
+    const res = await apiClient.createPurchaseReturn(payload);
+    const [returnsList, purchaseOrders, products, stockMovements] = await Promise.all([
+      apiClient.getPurchaseReturns().catch(() => null),
+      apiClient.getPurchaseOrders().catch(() => null),
+      apiClient.getProducts().catch(() => null),
+      apiClient.getStockMovements().catch(() => null)
+    ]);
+    if (Array.isArray(returnsList)) this.memStore.set(STORAGE_KEYS.PURCHASE_RETURNS, returnsList);
+    if (Array.isArray(purchaseOrders)) this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, purchaseOrders);
+    if (Array.isArray(products)) this.memStore.set(STORAGE_KEYS.PRODUCTS, products);
+    if (Array.isArray(stockMovements)) this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, stockMovements);
+    this.notifyStorageUpdated();
+    return res;
+  }
+
+  async deletePurchaseReturnAsync(id: string): Promise<void> {
+    await apiClient.deletePurchaseReturn(id);
+    const [returnsList, purchaseOrders, products, stockMovements] = await Promise.all([
+      apiClient.getPurchaseReturns().catch(() => null),
+      apiClient.getPurchaseOrders().catch(() => null),
+      apiClient.getProducts().catch(() => null),
+      apiClient.getStockMovements().catch(() => null)
+    ]);
+    if (Array.isArray(returnsList)) {
+      this.memStore.set(STORAGE_KEYS.PURCHASE_RETURNS, returnsList);
+    } else {
+      this.memStore.set(STORAGE_KEYS.PURCHASE_RETURNS, this.getPurchaseReturns().filter(r => r.id !== id));
+    }
+    if (Array.isArray(purchaseOrders)) this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, purchaseOrders);
+    if (Array.isArray(products)) this.memStore.set(STORAGE_KEYS.PRODUCTS, products);
+    if (Array.isArray(stockMovements)) this.memStore.set(STORAGE_KEYS.STOCK_MOVEMENTS, stockMovements);
     this.notifyStorageUpdated();
   }
 

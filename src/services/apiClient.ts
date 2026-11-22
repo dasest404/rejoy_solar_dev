@@ -878,7 +878,7 @@ class ApiClient {
 
   async recordVendorSalesPayment(
     invoiceId: string,
-    payment: { amount: number; paymentDate?: string; paymentMode?: string; referenceNo?: string; notes?: string }
+    payment: { amount: number; paymentDate?: string; paymentMode?: string; bankAccountId?: string; referenceNo?: string; notes?: string }
   ): Promise<any> {
     const res = await this.request(
       `${this.baseUrl}/vendor-sales-invoices/${encodeURIComponent(invoiceId)}/payments`,
@@ -889,6 +889,103 @@ class ApiClient {
       }
     );
     return await this.handleResponse(res);
+  }
+
+  async recordPurchaseOrderPayment(
+    poId: string,
+    payment: {
+      amount: number;
+      tdsDeducted?: number;
+      tdsSection?: string;
+      paymentDate?: string;
+      paymentMode?: string;
+      bankAccountId: string;
+      referenceNo?: string;
+      notes?: string;
+    }
+  ): Promise<any> {
+    const res = await this.request(
+      `${this.baseUrl}/purchase-orders/${encodeURIComponent(poId)}/payments`,
+      {
+        method: 'POST',
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payment)
+      }
+    );
+    return await this.handleResponse(res);
+  }
+
+  async recordSalesInvoicePayment(
+    invoiceId: string,
+    payment: {
+      amount: number;
+      paymentDate?: string;
+      paymentMode?: string;
+      bankAccountId: string;
+      referenceNo?: string;
+      notes?: string;
+    }
+  ): Promise<any> {
+    const res = await this.request(
+      `${this.baseUrl}/sales-invoices/${encodeURIComponent(invoiceId)}/payments`,
+      {
+        method: 'POST',
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payment)
+      }
+    );
+    return await this.handleResponse(res);
+  }
+
+  // --- Sales & Purchase Returns ---
+  async getSalesReturns(): Promise<any[]> {
+    const res = await this.request(`${this.baseUrl}/sales-returns`, {
+      headers: this.getAuthHeaders()
+    });
+    return (await this.handleResponse(res)) || [];
+  }
+
+  async createSalesReturn(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/sales-returns`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async deleteSalesReturn(id: string): Promise<boolean> {
+    const res = await this.request(`${this.baseUrl}/sales-returns/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
+    await this.handleResponse(res);
+    return true;
+  }
+
+  async getPurchaseReturns(): Promise<any[]> {
+    const res = await this.request(`${this.baseUrl}/purchase-returns`, {
+      headers: this.getAuthHeaders()
+    });
+    return (await this.handleResponse(res)) || [];
+  }
+
+  async createPurchaseReturn(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/purchase-returns`, {
+      method: 'POST',
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    return await this.handleResponse(res);
+  }
+
+  async deletePurchaseReturn(id: string): Promise<boolean> {
+    const res = await this.request(`${this.baseUrl}/purchase-returns/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
+    await this.handleResponse(res);
+    return true;
   }
 
   async deleteVendorSalesInvoice(id: string): Promise<boolean> {
@@ -1437,6 +1534,14 @@ class ApiClient {
   }
 
   // --- Accounting & Finance Module API ---
+  async getAccountingBankAccounts(): Promise<any[]> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-accounts`, {
+      headers: this.getAuthHeaders()
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to load active Cash & Bank accounts');
+    return Array.isArray(data?.data) ? data.data : [];
+  }
+
   async getAccountingWorkspace(): Promise<any> {
     const res = await this.request(`${this.baseUrl}/accounting/workspace`);
     const data = await this.parseJsonResponse(res, 'Failed to load Accounting & Finance workspace');

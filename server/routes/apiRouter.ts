@@ -230,7 +230,9 @@ apiRouter.get('/db/status', (_req: Request, res: Response) => {
         'solar_payments', 'solar_expenses', 'solar_employees', 'solar_attendance',
         'solar_payslips', 'solar_holidays', 'solar_service_tickets', 'solar_amc_contracts',
         'solar_notifications', 'solar_products', 'solar_vendors', 'solar_purchase_orders',
-        'solar_boms', 'solar_sales_invoices', 'solar_vendor_sales_invoices', 'solar_vendor_sales_invoice_items', 'solar_vendor_sales_payments', 'solar_warehouses', 'solar_stock_movements',
+        'solar_boms', 'solar_sales_invoices', 'solar_vendor_sales_invoices', 'solar_vendor_sales_invoice_items', 'solar_vendor_sales_payments',
+        'solar_sales_returns', 'solar_sales_return_items', 'solar_purchase_returns', 'solar_purchase_return_items',
+        'solar_warehouses', 'solar_stock_movements',
         'solar_stock_audits', 'solar_acl_config', 'solar_acl_audit_logs',
         'solar_system_settings', 'solar_workforce_locations'
       ]
@@ -310,6 +312,11 @@ apiRouter.get('/bootstrap', async (req: Request, res: Response) => {
     const role = String(user?.role || '').trim().toUpperCase();
     if (role !== 'ADMIN' && role !== 'SUPER ADMIN') {
       data.vendor_sales_invoices = [];
+    }
+    if (isCustomerUser(user)) {
+      data.sales_returns = [];
+      data.purchase_returns = [];
+      data.purchase_orders = [];
     }
     res.json({
       success: true,
@@ -1763,6 +1770,9 @@ apiRouter.get('/purchase-orders', async (_req: Request, res: Response) => {
 
 apiRouter.post('/purchase-orders', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot manage purchase orders.' });
     const po = { ...req.body, id: req.body.id || `po-${Date.now()}` };
     const saved = await dbManager.savePurchaseOrder(po);
     res.status(201).json({ success: true, data: saved });
@@ -1773,6 +1783,9 @@ apiRouter.post('/purchase-orders', async (req: Request, res: Response) => {
 
 apiRouter.put('/purchase-orders/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot manage purchase orders.' });
     const { id } = req.params;
     const saved = await dbManager.savePurchaseOrder({ ...req.body, id });
     res.json({ success: true, data: saved });
@@ -1781,8 +1794,24 @@ apiRouter.put('/purchase-orders/:id', async (req: Request, res: Response) => {
   }
 });
 
+apiRouter.post('/purchase-orders/:id/payments', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot record vendor payments.' });
+    const pool = getRequiredPool();
+    const result = await accountingService.recordPurchaseOrderPayment(pool, req.params.id, req.body || {}, actor);
+    res.status(201).json({ success: true, data: result });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to record purchase order payment');
+  }
+});
+
 apiRouter.delete('/purchase-orders/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot delete purchase orders.' });
     await dbManager.deletePurchaseOrder(req.params.id);
     res.json({ success: true, message: 'Purchase order deleted from MySQL.' });
   } catch (err: any) {
@@ -1870,7 +1899,7 @@ apiRouter.post('/sales-invoices', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to sales invoices.' });
     }
     const inv = { ...req.body, id: req.body?.id || `inv-${Date.now()}` };
-    const saved = await dbManager.saveSalesInvoice(inv);
+    const saved = await dbManager.saveSalesInvoice(inv, actor);
     res.status(201).json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to save sales invoice');
@@ -1887,10 +1916,27 @@ apiRouter.put('/sales-invoices/:id', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to sales invoices.' });
     }
     const { id } = req.params;
-    const saved = await dbManager.saveSalesInvoice({ ...req.body, id });
+    const saved = await dbManager.saveSalesInvoice({ ...req.body, id }, actor);
     res.json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update sales invoice');
+  }
+});
+
+apiRouter.post('/sales-invoices/:id/payments', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot record payments.' });
+    }
+    const pool = getRequiredPool();
+    const result = await accountingService.recordSalesInvoicePayment(pool, req.params.id, req.body || {}, actor);
+    res.status(201).json({ success: true, data: result });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to record sales invoice payment');
   }
 });
 
@@ -1907,6 +1953,86 @@ apiRouter.delete('/sales-invoices/:id', async (req: Request, res: Response) => {
     res.json({ success: true, message: 'Sales invoice deleted from MySQL.' });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to delete sales invoice');
+  }
+});
+
+// Sales Returns (Credit Notes + Inventory Restock + Bank Refund + GL)
+apiRouter.get(['/sales-returns', '/sales-returns/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customer accounts cannot access internal sales returns.' });
+    const pool = getRequiredPool();
+    const items = await accountingService.getSalesReturns(pool);
+    res.json({ success: true, count: items.length, data: items });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch sales returns');
+  }
+});
+
+apiRouter.post(['/sales-returns', '/sales-returns/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot create sales returns.' });
+    const pool = getRequiredPool();
+    const result = await accountingService.createSalesReturn(pool, req.body || {}, actor);
+    res.status(201).json({ success: true, data: result });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to create sales return');
+  }
+});
+
+apiRouter.delete(['/sales-returns/:id', '/sales-returns/:id/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot delete sales returns.' });
+    const pool = getRequiredPool();
+    await accountingService.deleteSalesReturn(pool, req.params.id, actor);
+    res.json({ success: true, message: 'Sales return reversed and deleted from MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete sales return');
+  }
+});
+
+// Purchase Returns (Debit Notes + Inventory Deduction + Vendor Refund + GL)
+apiRouter.get(['/purchase-returns', '/purchase-returns/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customer accounts cannot access internal purchase returns.' });
+    const pool = getRequiredPool();
+    const items = await accountingService.getPurchaseReturns(pool);
+    res.json({ success: true, count: items.length, data: items });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch purchase returns');
+  }
+});
+
+apiRouter.post(['/purchase-returns', '/purchase-returns/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot create purchase returns.' });
+    const pool = getRequiredPool();
+    const result = await accountingService.createPurchaseReturn(pool, req.body || {}, actor);
+    res.status(201).json({ success: true, data: result });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to create purchase return');
+  }
+});
+
+apiRouter.delete(['/purchase-returns/:id', '/purchase-returns/:id/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot delete purchase returns.' });
+    const pool = getRequiredPool();
+    await accountingService.deletePurchaseReturn(pool, req.params.id, actor);
+    res.json({ success: true, message: 'Purchase return reversed and deleted from MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete purchase return');
   }
 });
 
@@ -2878,6 +3004,23 @@ const getRequiredPool = () => {
   }
   return pool;
 };
+
+apiRouter.get('/accounting/bank-accounts', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, message: 'Access denied: Customer accounts cannot access internal cash/bank accounts.' });
+    }
+    const pool = getRequiredPool();
+    const accounts = await accountingService.getBankAccounts(pool);
+    res.json({ success: true, count: accounts.length, data: accounts });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to fetch cash/bank accounts');
+  }
+});
 
 apiRouter.get('/accounting/workspace', requireFinanceViewer, async (_req: Request, res: Response) => {
   try {

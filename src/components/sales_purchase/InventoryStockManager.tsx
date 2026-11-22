@@ -514,7 +514,7 @@ export const InventoryStockManager: React.FC = () => {
         <div className="space-y-4">
           {/* Movement Type Filter */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {['ALL', 'PURCHASE_RECEIPT', 'BOM_ALLOCATION', 'WAREHOUSE_TRANSFER', 'AUDIT_RECONCILIATION', 'INVOICE_SALE', 'ADJUSTMENT'].map(
+            {['ALL', 'PURCHASE_RECEIPT', 'PURCHASE_RETURN', 'BOM_ALLOCATION', 'WAREHOUSE_TRANSFER', 'AUDIT_RECONCILIATION', 'INVOICE_SALE', 'SALES_RETURN', 'ADJUSTMENT'].map(
               type => (
                 <button
                   key={type}
@@ -565,6 +565,10 @@ export const InventoryStockManager: React.FC = () => {
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-flex items-center gap-1 ${
                               m.movementType === 'PURCHASE_RECEIPT'
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : m.movementType === 'SALES_RETURN'
+                                ? 'bg-teal-50 text-teal-700 border-teal-200'
+                                : m.movementType === 'PURCHASE_RETURN'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
                                 : m.movementType === 'BOM_ALLOCATION'
                                 ? 'bg-blue-50 text-blue-700 border-blue-200'
                                 : m.movementType === 'WAREHOUSE_TRANSFER'
