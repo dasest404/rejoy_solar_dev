@@ -7,6 +7,20 @@ import type { EmailDispatchType } from '../components/common/EmailDispatchModal'
 
 export type SettingsTab = 'general' | 'tally' | 'whatsapp' | 'acl' | 'users' | 'email';
 
+export type FinanceTab =
+  | 'dashboard'
+  | 'ledger'
+  | 'receivables'
+  | 'payables'
+  | 'banking'
+  | 'expenses'
+  | 'gst'
+  | 'budgets'
+  | 'assets'
+  | 'project_costing'
+  | 'reports'
+  | 'settings';
+
 export interface EmailModalPayload {
   recipientEmail: string;
   recipientName: string;
@@ -90,6 +104,9 @@ interface AppContextType {
   activeSettingsTab: SettingsTab;
   setActiveSettingsTab: (tab: SettingsTab) => void;
   openSettingsTab: (tab: SettingsTab) => void;
+  activeFinanceTab: FinanceTab;
+  setActiveFinanceTab: (tab: FinanceTab) => void;
+  openFinanceTab: (tab: FinanceTab) => void;
   refreshTrigger: number;
   triggerRefresh: () => void;
   bootstrapStatus: 'idle' | 'loading' | 'ready' | 'error';
@@ -109,9 +126,31 @@ const getNormalizedPath = (pathname: string): string => {
   return p.replace(/\/+$/, '') || '/';
 };
 
-const getInitialViewFromPath = (): { view: AppView; filterKey: string | null; settingsTab?: SettingsTab } => {
+const FINANCE_PATH_TO_TAB: Record<string, FinanceTab> = {
+  '/finance': 'dashboard',
+  '/accounts': 'dashboard',
+  '/finance/dashboard': 'dashboard',
+  '/finance/ledger': 'ledger',
+  '/finance/receivables': 'receivables',
+  '/finance/payables': 'payables',
+  '/finance/banking': 'banking',
+  '/finance/expenses': 'expenses',
+  '/finance/gst': 'gst',
+  '/finance/budgets': 'budgets',
+  '/finance/assets': 'assets',
+  '/finance/project-costing': 'project_costing',
+  '/finance/reports': 'reports',
+  '/finance/settings': 'settings'
+};
+
+const getInitialViewFromPath = (): {
+  view: AppView;
+  filterKey: string | null;
+  settingsTab?: SettingsTab;
+  financeTab?: FinanceTab;
+} => {
   if (typeof window === 'undefined') {
-    return { view: 'dashboard', filterKey: null, settingsTab: 'general' };
+    return { view: 'dashboard', filterKey: null, settingsTab: 'general', financeTab: 'dashboard' };
   }
   const path = getNormalizedPath(window.location.pathname);
 
@@ -138,6 +177,13 @@ const getInitialViewFromPath = (): { view: AppView; filterKey: string | null; se
     return { view: 'settings', filterKey: null, settingsTab: 'general' };
   }
 
+  // Finance & Accounting sub-routes
+  for (const [subPath, finTab] of Object.entries(FINANCE_PATH_TO_TAB)) {
+    if (path === subPath || path.endsWith(subPath)) {
+      return { view: 'finance', filterKey: null, financeTab: finTab };
+    }
+  }
+
   // Role-specific dashboard URLs
   if (
     path === '/admin/dashboard' ||
@@ -145,7 +191,6 @@ const getInitialViewFromPath = (): { view: AppView; filterKey: string | null; se
     path === '/projects/dashboard' ||
     path === '/field/dashboard' ||
     path === '/service/dashboard' ||
-    path === '/finance/dashboard' ||
     path === '/hr/dashboard'
   ) {
     return { view: 'dashboard', filterKey: null };
@@ -257,7 +302,12 @@ const getInitialViewFromPath = (): { view: AppView; filterKey: string | null; se
   return { view: 'dashboard', filterKey: null };
 };
 
-const getPathForView = (view: AppView, filterKey?: string | null, settingsTab?: SettingsTab): string => {
+const getPathForView = (
+  view: AppView,
+  filterKey?: string | null,
+  settingsTab?: SettingsTab,
+  financeTab?: FinanceTab
+): string => {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
   let route = '/dashboard';
 
@@ -288,9 +338,16 @@ const getPathForView = (view: AppView, filterKey?: string | null, settingsTab?: 
     case 'customer_control_center':
       route = '/control-center';
       break;
-    case 'finance':
-      route = '/finance';
+    case 'finance': {
+      if (!financeTab || financeTab === 'dashboard') {
+        route = '/finance';
+      } else if (financeTab === 'project_costing') {
+        route = '/finance/project-costing';
+      } else {
+        route = `/finance/${financeTab}`;
+      }
       break;
+    }
     case 'hrms':
       route = '/hrms';
       break;
@@ -355,6 +412,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [stageFilterKey, setStageFilterKeyInternal] = useState<string | null>(initialRoute.filterKey);
   const [activeReportCategory, setActiveReportCategory] = useState<ReportCategory>('sales');
   const [activeSettingsTab, setActiveSettingsTabState] = useState<SettingsTab>(initialRoute.settingsTab || 'general');
+  const [activeFinanceTab, setActiveFinanceTabState] = useState<FinanceTab>(initialRoute.financeTab || 'dashboard');
 
   const openReport = (category: ReportCategory) => {
     setActiveReportCategory(category);
@@ -364,7 +422,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setActiveSettingsTab = (tab: SettingsTab) => {
     setActiveSettingsTabState(tab);
     if (typeof window !== 'undefined' && activeView === 'settings') {
-      const targetPath = getPathForView('settings', null, tab);
+      const targetPath = getPathForView('settings', null, tab, activeFinanceTab);
       if (window.location.pathname !== targetPath) {
         window.history.pushState({ view: 'settings', tab }, '', targetPath);
       }
@@ -375,9 +433,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveSettingsTabState(tab);
     setActiveViewState('settings');
     if (typeof window !== 'undefined') {
-      const targetPath = getPathForView('settings', null, tab);
+      const targetPath = getPathForView('settings', null, tab, activeFinanceTab);
       if (window.location.pathname !== targetPath) {
         window.history.pushState({ view: 'settings', tab }, '', targetPath);
+      }
+    }
+  };
+
+  const setActiveFinanceTab = (tab: FinanceTab) => {
+    setActiveFinanceTabState(tab);
+    if (typeof window !== 'undefined' && activeView === 'finance') {
+      const targetPath = getPathForView('finance', null, activeSettingsTab, tab);
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState({ view: 'finance', financeTab: tab }, '', targetPath);
+      }
+    }
+  };
+
+  const openFinanceTab = (tab: FinanceTab) => {
+    setActiveFinanceTabState(tab);
+    setActiveViewState('finance');
+    if (typeof window !== 'undefined') {
+      const targetPath = getPathForView('finance', null, activeSettingsTab, tab);
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState({ view: 'finance', financeTab: tab }, '', targetPath);
       }
     }
   };
@@ -385,7 +464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setActiveView = (view: AppView) => {
     setActiveViewState(view);
     if (typeof window !== 'undefined') {
-      const targetPath = getPathForView(view, stageFilterKey, activeSettingsTab);
+      const targetPath = getPathForView(view, stageFilterKey, activeSettingsTab, activeFinanceTab);
       if (window.location.pathname !== targetPath) {
         window.history.pushState({ view }, '', targetPath);
       }
@@ -410,6 +489,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setStageFilterKeyInternal(current.filterKey);
       if (current.settingsTab) {
         setActiveSettingsTabState(current.settingsTab);
+      }
+      if (current.financeTab) {
+        setActiveFinanceTabState(current.financeTab);
       }
     };
 
@@ -598,6 +680,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeSettingsTab,
         setActiveSettingsTab,
         openSettingsTab,
+        activeFinanceTab,
+        setActiveFinanceTab,
+        openFinanceTab,
         refreshTrigger,
         triggerRefresh,
         bootstrapStatus,

@@ -1,3 +1,5 @@
+export * from './accounting';
+
 export type UserRole =
   | 'Admin'
   | 'Sales Manager'
@@ -422,6 +424,10 @@ export interface PaymentRecord {
   paymentMode?: 'Bank NEFT/RTGS' | 'UPI' | 'Cheque' | 'Credit Card' | 'Cash' | string;
   transactionReference?: string;
   notes?: string;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  bankAccountId?: string;
+  journalEntryId?: string;
   tallySyncStatus: 'NOT SYNCED' | 'SYNCING' | 'SYNCED' | 'FAILED';
   tallyReference?: string;
   createdAt?: string;
@@ -437,11 +443,25 @@ export interface ExpenseRecord {
   category: 'Material - Solar Panels' | 'Material - Inverter' | 'Material - Cables & BOS' | 'Civil Raw Materials' | 'Structure Steel' | 'Labor & Contractors' | 'Transport & Logistics' | 'Travel & Food' | 'Government Permits' | 'Tools & Safety' | string;
   amount: number;
   date: string;
+  expenseDate?: string;
   paymentMode: string;
   referenceNo: string;
   notes: string;
   receiptUrl?: string;
   approvedBy?: string;
+  expenseType?: 'DIRECT_EXPENSE' | 'REIMBURSEMENT' | string;
+  status?: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'PAID' | string;
+  employeeId?: string;
+  employeeName?: string;
+  gstAmount?: number;
+  itcEligible?: boolean;
+  bankAccountId?: string;
+  expenseAccountId?: string;
+  journalEntryId?: string;
+  approvedAt?: string;
+  rejectionReason?: string;
+  paidAt?: string;
+  paidBy?: string;
   tallySyncStatus: 'NOT SYNCED' | 'SYNCING' | 'SYNCED' | 'FAILED';
   createdAt?: string;
   updatedAt?: string;
@@ -1045,6 +1065,16 @@ export interface SalesInvoice {
   status: InvoiceStatus;
   paymentTerms: string;
   notes?: string;
+  paidAmount?: number;
+  balanceAmount?: number;
+  paymentStatus?: string;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
+  einvoiceIrn?: string;
+  einvoiceAckNo?: string;
+  einvoiceAckDate?: string;
+  einvoiceStatus?: 'NOT_GENERATED' | 'GENERATED' | 'CANCELLED' | string;
   deductStock: boolean;
   stockDeducted: boolean;
   createdAt: string;

@@ -665,6 +665,9 @@ function ensureRequiredTables($pdo) {
         error_log('Notice ensuring vendor sales invoice schema: ' . $e->getMessage());
     }
 
+    require_once __DIR__ . '/accounting.php';
+    ensureAccountingTablesPhp($pdo);
+
     $tablesVerified = true;
 }
 
@@ -7981,6 +7984,10 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'paymentMode' => $r['payment_mode'] ?? 'Bank NEFT/RTGS',
                 'transactionReference' => $r['transaction_reference'] ?? '',
                 'notes' => $r['notes'] ?? '',
+                'invoiceId' => $r['invoice_id'] ?? '',
+                'invoiceNumber' => $r['invoice_number'] ?? '',
+                'bankAccountId' => $r['bank_account_id'] ?? '',
+                'journalEntryId' => $r['journal_entry_id'] ?? '',
                 'tallySyncStatus' => $r['tally_sync_status'] ?? 'NOT SYNCED',
                 'tallyReference' => $r['tally_reference'] ?? '',
                 'createdAt' => $r['created_at']
@@ -8008,6 +8015,19 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'notes' => $r['notes'] ?? '',
                 'receiptUrl' => $r['receipt_url'] ?? '',
                 'approvedBy' => $r['approved_by'] ?? '',
+                'expenseType' => $r['expense_type'] ?? 'DIRECT_EXPENSE',
+                'status' => $r['status'] ?? 'PAID',
+                'employeeId' => $r['employee_id'] ?? '',
+                'employeeName' => $r['employee_name'] ?? '',
+                'gstAmount' => floatval($r['gst_amount'] ?? 0),
+                'itcEligible' => !empty($r['itc_eligible']),
+                'bankAccountId' => $r['bank_account_id'] ?? '',
+                'expenseAccountId' => $r['expense_account_id'] ?? '',
+                'journalEntryId' => $r['journal_entry_id'] ?? '',
+                'approvedAt' => $r['approved_at'] ?? '',
+                'rejectionReason' => $r['rejection_reason'] ?? '',
+                'paidAt' => $r['paid_at'] ?? '',
+                'paidBy' => $r['paid_by'] ?? '',
                 'tallySyncStatus' => $r['tally_sync_status'] ?? 'NOT SYNCED',
                 'createdAt' => $r['created_at']
             ];
@@ -10938,6 +10958,19 @@ if (in_array($cleanPath, ['/expenses', '/expenses/'], true)) {
                 'notes' => $r['notes'] ?? '',
                 'receiptUrl' => $r['receipt_url'] ?? '',
                 'approvedBy' => $r['approved_by'] ?? '',
+                'expenseType' => $r['expense_type'] ?? 'DIRECT_EXPENSE',
+                'status' => $r['status'] ?? 'PAID',
+                'employeeId' => $r['employee_id'] ?? '',
+                'employeeName' => $r['employee_name'] ?? '',
+                'gstAmount' => floatval($r['gst_amount'] ?? 0),
+                'itcEligible' => !empty($r['itc_eligible']),
+                'bankAccountId' => $r['bank_account_id'] ?? '',
+                'expenseAccountId' => $r['expense_account_id'] ?? '',
+                'journalEntryId' => $r['journal_entry_id'] ?? '',
+                'approvedAt' => $r['approved_at'] ?? '',
+                'rejectionReason' => $r['rejection_reason'] ?? '',
+                'paidAt' => $r['paid_at'] ?? '',
+                'paidBy' => $r['paid_by'] ?? '',
                 'tallySyncStatus' => $r['tally_sync_status'] ?? 'NOT SYNCED',
                 'createdAt' => $r['created_at']
             ];
@@ -10977,6 +11010,16 @@ if (preg_match('#^/expenses/([^/]+)/?$#', $cleanPath, $matches)) {
             exit;
         }
     }
+}
+
+// /api/accounting/* (Accounting & Finance Module)
+if (strpos($cleanPath, '/accounting') === 0) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    require_once __DIR__ . '/accounting.php';
+    handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor);
+    exit;
 }
 
 // Default 404 for unhandled API routes (Always returns JSON, NEVER index.html)

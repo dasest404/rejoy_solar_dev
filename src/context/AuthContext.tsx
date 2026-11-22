@@ -504,7 +504,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const canEditFinancials = (): boolean => {
-    return isAdmin || currentRole === 'Accountant' || hasPermission('finance.invoices') || hasPermission('finance.receipts');
+    if (isCustomer) return false;
+    return (
+      isAdmin ||
+      currentRole === 'Accountant' ||
+      hasPermission('finance.invoices') ||
+      hasPermission('finance.receipts') ||
+      hasPermission('finance.ledger') ||
+      hasPermission('finance.vendors') ||
+      hasPermission('finance.banking')
+    );
   };
 
   const canAccessHR = (): boolean => {
@@ -628,7 +637,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           hasPermission('finance.receipts') ||
           hasPermission('finance.tally_sync') ||
           hasPermission('finance.audit') ||
-          hasPermission('finance.expenses')
+          hasPermission('finance.expenses') ||
+          hasPermission('finance.ledger') ||
+          hasPermission('finance.vendors') ||
+          hasPermission('finance.banking') ||
+          hasPermission('finance.tax') ||
+          hasPermission('finance.budgets') ||
+          hasPermission('finance.assets') ||
+          hasPermission('finance.project_costing') ||
+          hasPermission('finance.reports') ||
+          hasPermission('finance.settings')
         );
       case 'hrms':
       case 'employees':

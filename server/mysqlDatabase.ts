@@ -7,6 +7,7 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { ensureLocalMySqlRunning } from './mysqlDaemon';
 import { authService } from './services/authService';
+import { accountingService } from './services/accountingService';
 import {
   EmailSettingsRecord,
   SanitizedEmailSettings,
@@ -688,6 +689,7 @@ class MySqlDatabaseManager {
 
       await this.ensureHashedPasswords();
       await authService.initAuthSchema(this.pool);
+      await accountingService.ensureAccountingSchema(this.pool);
     } catch (err: any) {
       console.error('[MySQL] Schema execution notice:', err?.message || err);
       throw err;
@@ -4447,6 +4449,10 @@ class MySqlDatabaseManager {
       paymentMode: r.payment_mode,
       transactionReference: r.transaction_reference,
       notes: r.notes,
+      invoiceId: r.invoice_id || '',
+      invoiceNumber: r.invoice_number || '',
+      bankAccountId: r.bank_account_id || '',
+      journalEntryId: r.journal_entry_id || '',
       tallySyncStatus: r.tally_sync_status,
       tallyReference: r.tally_reference,
       createdAt: r.created_at
@@ -4537,6 +4543,19 @@ class MySqlDatabaseManager {
         notes: r.notes,
         receiptUrl: r.receipt_url,
         approvedBy: r.approved_by,
+        expenseType: r.expense_type || 'DIRECT_EXPENSE',
+        status: r.status || 'PAID',
+        employeeId: r.employee_id || '',
+        employeeName: r.employee_name || '',
+        gstAmount: Number(r.gst_amount) || 0,
+        itcEligible: Boolean(r.itc_eligible),
+        bankAccountId: r.bank_account_id || '',
+        expenseAccountId: r.expense_account_id || '',
+        journalEntryId: r.journal_entry_id || '',
+        approvedAt: r.approved_at || '',
+        rejectionReason: r.rejection_reason || '',
+        paidAt: r.paid_at || '',
+        paidBy: r.paid_by || '',
         tallySyncStatus: r.tally_sync_status,
         createdAt: r.created_at
       };
@@ -5259,6 +5278,13 @@ class MySqlDatabaseManager {
         balanceDue: Number(r.balance_amount) || 0,
         ewayBillNumber: r.eway_bill_number || '',
         ewayBillDetails,
+        cgstAmount: Number(r.cgst_amount) || 0,
+        sgstAmount: Number(r.sgst_amount) || 0,
+        igstAmount: Number(r.igst_amount) || 0,
+        einvoiceIrn: r.einvoice_irn || '',
+        einvoiceAckNo: r.einvoice_ack_no || '',
+        einvoiceAckDate: r.einvoice_ack_date || '',
+        einvoiceStatus: r.einvoice_status || 'NOT_GENERATED',
         warehouseId: r.warehouse_id || '',
         deductStock: r.deduct_stock != null ? Boolean(r.deduct_stock) : true,
         stockDeducted: Boolean(r.stock_deducted),
@@ -8898,6 +8924,19 @@ class MySqlDatabaseManager {
       'solar_project_stages',
       'solar_payments',
       'solar_expenses',
+      'solar_acc_journal_lines',
+      'solar_acc_journal_entries',
+      'solar_acc_bank_transfers',
+      'solar_acc_bank_reconciliations',
+      'solar_acc_vendor_payments',
+      'solar_acc_vendor_bills',
+      'solar_acc_tds_entries',
+      'solar_acc_budgets',
+      'solar_acc_asset_depreciation',
+      'solar_acc_fixed_assets',
+      'solar_acc_audit_logs',
+      'solar_acc_bank_accounts',
+      'solar_acc_accounts',
       'solar_service_tickets',
       'solar_amc_contracts',
       'solar_projects',

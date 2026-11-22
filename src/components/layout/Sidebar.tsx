@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useApp, AppView } from '../../context/AppContext';
+import { useApp, AppView, FinanceTab } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard,
@@ -38,13 +38,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     activeReportCategory,
     openReport,
     activeSettingsTab,
-    openSettingsTab
+    openSettingsTab,
+    activeFinanceTab,
+    openFinanceTab
   } = useApp();
   const { currentUser, isCustomer, isAdmin, isFieldStaff, canAccessModule, hasPermission, currentRole, logout } = useAuth();
 
   const [crmOpen, setCrmOpen] = useState(true);
   const [salesPurchaseOpen, setSalesPurchaseOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [financeOpen, setFinanceOpen] = useState(true);
   const [reportsOpen, setReportsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(true);
 
@@ -425,16 +428,64 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
               {/* Accounting & Finance */}
               {canAccessModule('finance') && (
                 <div className="space-y-1">
-                  <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                    Finance & Accounts
-                  </div>
-                  <button
-                    onClick={() => navigateTo('finance')}
-                    className={navItemClass(activeView === 'finance')}
+                  <div
+                    onClick={() => {
+                      if (!financeOpen) setFinanceOpen(true);
+                      openFinanceTab(activeFinanceTab || 'dashboard');
+                      onCloseMobile();
+                    }}
+                    className={parentNavItemClass(activeView === 'finance', false)}
                   >
-                    <CreditCard className="w-4 h-4" />
-                    <span>Invoices & Tally Sync</span>
-                  </button>
+                    <div className="flex items-center justify-between py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-600 transition-colors select-none">
+                      <span className={activeView === 'finance' ? 'text-white font-bold' : ''}>Accounting & Finance</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFinanceOpen(!financeOpen);
+                      }}
+                      className="p-0.5 rounded text-current opacity-70 hover:opacity-100 transition-opacity"
+                      aria-label="Toggle Accounting & Finance menu"
+                    >
+                      {financeOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+
+                  {financeOpen && (
+                    <div className="space-y-0.5">
+                      {(
+                        [
+                          { id: 'dashboard', label: 'Finance Dashboard', show: true },
+                          { id: 'ledger', label: 'Accounts & Ledger', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.ledger') || hasPermission('finance.audit') },
+                          { id: 'receivables', label: 'Customer Payments', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.receipts') || hasPermission('finance.view') },
+                          { id: 'payables', label: 'Vendor Payments', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.vendors') || hasPermission('finance.expenses') },
+                          { id: 'banking', label: 'Cash & Bank', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.banking') || hasPermission('finance.audit') },
+                          { id: 'expenses', label: 'Expenses & Reimbursements', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.expenses') },
+                          { id: 'gst', label: 'GST, TDS & E-Invoicing', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.tax') || hasPermission('finance.invoices') },
+                          { id: 'budgets', label: 'Budgets & Forecasting', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.budgets') },
+                          { id: 'assets', label: 'Fixed Assets Register', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.assets') },
+                          { id: 'project_costing', label: 'Project Costing', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.project_costing') || hasPermission('finance.view') },
+                          { id: 'reports', label: 'Financial Reports', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.reports') || hasPermission('finance.audit') },
+                          { id: 'settings', label: 'Accounting Settings', show: isAdmin || currentRole === 'Accountant' || hasPermission('finance.settings') }
+                        ] as { id: FinanceTab; label: string; show: boolean }[]
+                      )
+                        .filter(item => item.show)
+                        .map(item => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              openFinanceTab(item.id);
+                              onCloseMobile();
+                            }}
+                            className={subNavItemClass(activeView === 'finance' && activeFinanceTab === item.id)}
+                          >
+                            <span>{item.label}</span>
+                          </button>
+                        ))}
+                    </div>
+                  )}
                 </div>
               )}
 

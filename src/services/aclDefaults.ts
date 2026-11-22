@@ -608,6 +608,87 @@ export const ACL_PERMISSIONS_CATALOG: AclPermissionDefinition[] = [
     actions: ['view', 'create', 'edit', 'delete'],
     riskLevel: 'HIGH'
   },
+  {
+    id: 'finance.ledger',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Chart of Accounts & General Ledger',
+    description: 'Manage Chart of Accounts, create/post/reverse journal entries, view General Ledger & Trial Balance',
+    actions: ['view', 'create', 'edit', 'approve'],
+    riskLevel: 'CRITICAL'
+  },
+  {
+    id: 'finance.vendors',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Vendor Bills & Payables',
+    description: 'Record vendor bills, convert POs to bills, manage TDS deductions, and disburse vendor payments',
+    actions: ['view', 'create', 'edit', 'approve'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'finance.banking',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Cash Book, Bank & Reconciliation',
+    description: 'Manage cash drawers and bank accounts, record contra transfers, and reconcile bank statements',
+    actions: ['view', 'create', 'edit', 'approve'],
+    riskLevel: 'CRITICAL'
+  },
+  {
+    id: 'finance.tax',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'GST, ITC, TDS & E-Invoicing',
+    description: 'Review GSTR-1/3B summaries, Input Tax Credit, record TDS challans, and generate B2B IRN e-invoices',
+    actions: ['view', 'create', 'approve'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'finance.budgets',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Budgets & Forecasting',
+    description: 'Create fiscal budgets, track budget vs actual utilization, and monitor expenditure forecasts',
+    actions: ['view', 'create', 'edit', 'delete'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'finance.assets',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Fixed Assets & Depreciation',
+    description: 'Maintain fixed asset register, run SLM/WDV depreciation batches, and record asset disposals',
+    actions: ['view', 'create', 'edit', 'approve'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'finance.project_costing',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Project Costing & Margin Control',
+    description: 'Analyze project-wise contract value, billed/collected revenue, BOM vs actual costs, and profitability',
+    actions: ['view'],
+    riskLevel: 'MEDIUM'
+  },
+  {
+    id: 'finance.reports',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Financial Statements & Ageing Reports',
+    description: 'Access P&L Statement, Balance Sheet, Cash Flow Statement, and Receivable/Payable Ageing reports',
+    actions: ['view', 'approve'],
+    riskLevel: 'HIGH'
+  },
+  {
+    id: 'finance.settings',
+    domain: 'finance',
+    domainLabel: 'Finance, Invoicing & Tally',
+    name: 'Accounting Configuration & Audit Trail',
+    description: 'Configure fiscal year, transaction lock dates, CoA mappings, approval thresholds, and inspect audit logs',
+    actions: ['view', 'edit'],
+    riskLevel: 'CRITICAL'
+  },
 
   // HRMS & Attendance
   {
@@ -941,7 +1022,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'survey.view', 'survey.approve',
     'inventory.hub_view', 'inventory.view', 'inventory.products_manage', 'inventory.bom_edit', 'inventory.bom_manage',
     'inventory.vendors_view', 'inventory.purchase_orders',
-    'finance.view', 'finance.expenses',
+    'finance.view', 'finance.expenses', 'finance.budgets', 'finance.project_costing', 'finance.reports',
     'hrms.view', 'hrms.attendance_punch',
     'service.tickets_view', 'service.tickets_create',
     ...ALL_REPORT_PERMISSIONS,
@@ -974,7 +1055,7 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'projects.view', 'projects.workflows_view',
     'survey.view',
     'inventory.hub_view', 'inventory.view', 'inventory.bom_manage', 'inventory.vendors_view',
-    'finance.view',
+    'finance.view', 'finance.reports',
     'hrms.view', 'hrms.attendance_punch',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'
@@ -1049,6 +1130,8 @@ export const DEFAULT_SYSTEM_ACL_CONFIG: SystemAclConfig = {
     'projects.view', 'projects.workflows_view',
     'inventory.hub_view', 'inventory.view', 'inventory.vendors_view', 'inventory.vendors_manage', 'inventory.purchase_orders',
     'finance.view', 'finance.invoices', 'finance.receipts', 'finance.tally_sync', 'finance.audit', 'finance.expenses',
+    'finance.ledger', 'finance.vendors', 'finance.banking', 'finance.tax', 'finance.budgets', 'finance.assets',
+    'finance.project_costing', 'finance.reports', 'finance.settings',
     'hrms.view', 'hrms.attendance_punch', 'hrms.payroll',
     ...ALL_REPORT_PERMISSIONS,
     'settings.view'

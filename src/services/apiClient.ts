@@ -1397,6 +1397,251 @@ class ApiClient {
       data: data.data
     };
   }
+
+  // --- Accounting & Finance Module API ---
+  async getAccountingWorkspace(): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/workspace`);
+    const data = await this.parseJsonResponse(res, 'Failed to load Accounting & Finance workspace');
+    return data.data;
+  }
+
+  async saveAccountingAccount(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save ledger account');
+    return data.data;
+  }
+
+  async deleteAccountingAccount(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/accounts/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete ledger account');
+  }
+
+  async saveJournalEntry(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/journals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save journal entry');
+    return data.data;
+  }
+
+  async postJournalEntry(id: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/journals/${encodeURIComponent(id)}/post`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to post journal entry');
+    return data.data;
+  }
+
+  async reverseJournalEntry(id: string, reason?: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/journals/${encodeURIComponent(id)}/reverse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason || '' })
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to reverse journal entry');
+    return data.data;
+  }
+
+  async deleteJournalEntry(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/journals/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete draft journal entry');
+  }
+
+  async recordCustomerReceipt(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/customer-receipts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to record customer receipt');
+    return data.data;
+  }
+
+  async saveVendorBill(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/vendor-bills`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save vendor bill');
+    return data.data;
+  }
+
+  async deleteVendorBill(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/vendor-bills/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete vendor bill');
+  }
+
+  async recordVendorPayment(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/vendor-payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to record vendor payment');
+    return data.data;
+  }
+
+  async saveBankAccount(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save cash/bank account');
+    return data.data;
+  }
+
+  async recordBankTransfer(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-transfers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to record fund transfer');
+    return data.data;
+  }
+
+  async saveBankReconciliation(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-reconciliations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save bank reconciliation');
+    return data.data;
+  }
+
+  async saveAccountingExpense(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/expenses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to submit expense');
+    return data.data;
+  }
+
+  async approveAccountingExpense(id: string, decision: 'APPROVED' | 'REJECTED', reason?: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/expenses/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, reason: reason || '' })
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to update expense approval');
+    return data.data;
+  }
+
+  async payAccountingExpense(id: string, payload: { bankAccountId: string; paidDate?: string }): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/expenses/${encodeURIComponent(id)}/pay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to disburse expense payment');
+    return data.data;
+  }
+
+  async depositTdsEntry(id: string, payload: { challanNo: string; bsrCode?: string; depositDate: string; bankAccountId: string }): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/tds/${encodeURIComponent(id)}/deposit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to record TDS deposit');
+    return data.data;
+  }
+
+  async generateEinvoiceIrn(invoiceId: string): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/einvoice/${encodeURIComponent(invoiceId)}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to generate E-Invoice IRN');
+    return data.data;
+  }
+
+  async saveBudget(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/budgets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save budget');
+    return data.data;
+  }
+
+  async deleteBudget(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/budgets/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete budget');
+  }
+
+  async saveFixedAsset(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save fixed asset');
+    return data.data;
+  }
+
+  async runAssetDepreciation(id: string, payload: { runDate: string; months?: number; periodLabel?: string; customAmount?: number }): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/assets/${encodeURIComponent(id)}/depreciate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to post asset depreciation');
+    return data.data;
+  }
+
+  async disposeAsset(id: string, payload: { disposalDate: string; disposalProceeds: number; bankAccountId?: string }): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/assets/${encodeURIComponent(id)}/dispose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to dispose fixed asset');
+    return data.data;
+  }
+
+  async updateAccountingSettings(payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to save finance settings');
+    return data.data;
+  }
+
+  async syncErpVouchersToLedger(): Promise<{ syncedCount: number; breakdown: Record<string, number> }> {
+    const res = await this.request(`${this.baseUrl}/accounting/sync-erp-vouchers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to sync ERP vouchers into General Ledger');
+    return data.data;
+  }
 }
 
 export interface EmailSettingsInfo {
