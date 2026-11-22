@@ -430,16 +430,11 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Payment Status</label>
-              <select
-                value={paymentStatus}
-                onChange={e => setPaymentStatus(e.target.value as PurchaseOrder['paymentStatus'])}
-                className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500/20"
-              >
-                <option value="UNPAID">UNPAID</option>
-                <option value="PARTIALLY_PAID">PARTIALLY_PAID</option>
-                <option value="PAID">PAID</option>
-              </select>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Payment Status (Ledger Derived)</label>
+              <div className="w-full px-3 py-2 text-xs bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-700 flex items-center justify-between">
+                <span>{(paymentStatus || 'PENDING').replace(/_/g, ' ')}</span>
+                <span className="text-[10px] font-normal text-slate-500">Use Pay Vendor to settle</span>
+              </div>
             </div>
 
             <div>

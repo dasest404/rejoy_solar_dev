@@ -916,6 +916,22 @@ function accGetBankAccountsPhp($pdo) {
     }, $rows);
 }
 
+function accResolveBankAccountIdOrPrimaryPhp($pdo, $preferredId = '', $paymentMode = '') {
+    ensureAccountingTablesPhp($pdo);
+    $clean = trim((string)($preferredId ?? ''));
+    if ($clean !== '') return $clean;
+    $isCash = (stripos((string)$paymentMode, 'cash') !== false) ? 1 : 0;
+    $st = $pdo->prepare(
+        "SELECT `id` FROM `solar_acc_bank_accounts`
+         WHERE `is_active` = 1
+         ORDER BY (CASE WHEN ? = 1 AND `account_type` = 'CASH' THEN 0 WHEN ? = 0 AND `account_type` = 'BANK' THEN 0 ELSE 1 END), `is_primary` DESC, `id` ASC
+         LIMIT 1"
+    );
+    $st->execute([$isCash, $isCash]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    return ($row && !empty($row['id'])) ? (string)$row['id'] : '';
+}
+
 function accResolveBankAccountTxPhp($pdo, $bankAccountId, $settings, $paymentMode = '') {
     $cleanId = trim((string)($bankAccountId ?? ''));
     if ($cleanId === '') {
@@ -1270,7 +1286,8 @@ function accRecordSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $actor) {
     if (!is_finite($amt) || $amt <= 0) {
         throw new Exception('Payment amount must be greater than zero.', 400);
     }
-    $pdo->beginTransaction();
+    $startedTx = !$pdo->inTransaction();
+    if ($startedTx) $pdo->beginTransaction();
     try {
         $settings = accGetSettingsRowPhp($pdo);
         $payDate = accToSqlDate($payload['paymentDate'] ?? ($payload['paidDate'] ?? '')) ?: accTodaySql();
@@ -1366,7 +1383,7 @@ function accRecordSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $actor) {
         }
 
         accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', 'RECORD_INVOICE_PAYMENT', $receiptId, $receiptNumber, "Received ₹{$amt} for Invoice {$inv['invoice_number']} into {$bank['account_name']}");
-        $pdo->commit();
+        if ($startedTx && $pdo->inTransaction()) $pdo->commit();
         return [
             'invoiceId' => $inv['id'],
             'receiptId' => $receiptId,
@@ -1380,7 +1397,7 @@ function accRecordSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $actor) {
             'journalEntryId' => $jeId
         ];
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($startedTx && $pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
 }
@@ -1391,7 +1408,8 @@ function accRecordVendorSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $acto
     if (!is_finite($amt) || $amt <= 0) {
         throw new Exception('Payment amount must be greater than zero.', 400);
     }
-    $pdo->beginTransaction();
+    $startedTx = !$pdo->inTransaction();
+    if ($startedTx) $pdo->beginTransaction();
     try {
         $settings = accGetSettingsRowPhp($pdo);
         $payDate = accToSqlDate($payload['paymentDate'] ?? '') ?: accTodaySql();
@@ -1477,7 +1495,7 @@ function accRecordVendorSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $acto
             ->execute([$nextPaid, $nextBalance, $nextStatus, $bank['id'], $actorName, $invoiceId]);
 
         accLogAuditPhp($pdo, $actor, 'VENDOR_SALES', 'RECORD_VSI_PAYMENT', $paymentId, $inv['invoice_number'], "Received ₹{$amt} for Vendor Sales Invoice {$inv['invoice_number']} into {$bank['account_name']}");
-        $pdo->commit();
+        if ($startedTx && $pdo->inTransaction()) $pdo->commit();
         return [
             'paymentId' => $paymentId,
             'bankAccountId' => $bank['id'],
@@ -1488,7 +1506,7 @@ function accRecordVendorSalesInvoicePaymentPhp($pdo, $invoiceId, $payload, $acto
             'nextStatus' => $nextStatus
         ];
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($startedTx && $pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
 }
@@ -1505,7 +1523,8 @@ function accRecordPurchaseOrderPaymentPhp($pdo, $poId, $payload, $actor) {
     }
     $netPaid = accRound2($amt - $tds);
 
-    $pdo->beginTransaction();
+    $startedTx = !$pdo->inTransaction();
+    if ($startedTx) $pdo->beginTransaction();
     try {
         $settings = accGetSettingsRowPhp($pdo);
         $payDate = accToSqlDate($payload['paymentDate'] ?? '') ?: accTodaySql();
@@ -1618,9 +1637,11 @@ function accRecordPurchaseOrderPaymentPhp($pdo, $poId, $payload, $actor) {
         }
 
         accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', 'RECORD_PO_PAYMENT', $payId, $payNo, "Paid ₹{$netPaid} for PO {$po['po_number']} via {$bank['account_name']}");
-        $pdo->commit();
+        if ($startedTx && $pdo->inTransaction()) $pdo->commit();
         return [
             'purchaseOrderId' => $po['id'],
+            'purchaseNumber' => $po['po_number'],
+            'poNumber' => $po['po_number'],
             'billId' => $bill['id'],
             'paymentId' => $payId,
             'paymentNumber' => $payNo,
@@ -1635,7 +1656,7 @@ function accRecordPurchaseOrderPaymentPhp($pdo, $poId, $payload, $actor) {
             'journalEntryId' => $jeId
         ];
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($startedTx && $pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
 }
@@ -2720,13 +2741,16 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $rcptNo = !empty($body['receiptNumber']) ? $body['receiptNumber'] : ($existing['receipt_number'] ?? ('RCPT-' . substr($paidDate, 0, 4) . '-' . accRandDigits(4)));
 
                 $selectedBankId = trim((string)($body['bankAccountId'] ?? ''));
-                $bankCoa = $settings['default_bank_account_id'] ?? 'acc-1020';
+                $bankCoa = stripos($body['paymentMode'] ?? '', 'cash') !== false
+                    ? ($settings['default_cash_account_id'] ?? 'acc-1010')
+                    : ($settings['default_bank_account_id'] ?? 'acc-1020');
                 if ($status === 'PAID') {
-                    $resolvedBank = accResolveBankAccountTxPhp($pdo, $selectedBankId ?: 'bank-main-current', $settings, $body['paymentMode'] ?? '');
-                    $selectedBankId = $resolvedBank['bank']['id'];
-                    $bankCoa = $resolvedBank['coaId'];
-                } elseif (stripos($body['paymentMode'] ?? '', 'cash') !== false) {
-                    $bankCoa = $settings['default_cash_account_id'] ?? 'acc-1010';
+                    $candidateBankId = accResolveBankAccountIdOrPrimaryPhp($pdo, $selectedBankId, $body['paymentMode'] ?? '');
+                    if ($candidateBankId !== '') {
+                        $resolvedBank = accResolveBankAccountTxPhp($pdo, $candidateBankId, $settings, $body['paymentMode'] ?? '');
+                        $selectedBankId = $resolvedBank['bank']['id'];
+                        $bankCoa = $resolvedBank['coaId'];
+                    }
                 }
 
                 $invNo = $body['invoiceNumber'] ?? '';
@@ -2735,25 +2759,36 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $projId = $body['projectId'] ?? '';
 
                 if (!empty($body['invoiceId'])) {
-                    $is = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1');
+                    $is = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE');
                     $is->execute([$body['invoiceId']]);
                     $inv = $is->fetch(PDO::FETCH_ASSOC);
-                    if ($inv) {
-                        $invNo = $inv['invoice_number'];
-                        if (!$custId) $custId = $inv['customer_id'];
-                        if ($custName === 'Solar Customer') $custName = $inv['customer_name'];
-                        if (!$projId) $projId = $inv['project_id'];
-                        if ($status === 'PAID') {
-                            accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
-                            $newPaid = accRound2(floatval($inv['paid_amount']) + $amt);
-                            $tot = accRound2(floatval($inv['total_amount']));
-                            $ret = accRound2(floatval($inv['returned_amount'] ?? 0));
-                            $ref = accRound2(floatval($inv['refunded_amount'] ?? 0));
-                            $netPaid = accRound2(max(0, $newPaid - $ref));
-                            $newBal = accRound2(max(0, $tot - $ret - $netPaid));
-                            $invStat = $newBal <= 0.01 ? 'PAID' : 'PARTIAL';
-                            $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=?,`bank_account_id`=? WHERE `id`=?')->execute([$newPaid, $newBal, $invStat, $selectedBankId, $inv['id']]);
+                    if (!$inv) {
+                        throw new Exception('Selected sales invoice was not found.', 404);
+                    }
+                    $invStatChk = strtoupper(trim((string)($inv['payment_status'] ?? 'ISSUED')));
+                    if ($invStatChk === 'DRAFT' || $invStatChk === 'CANCELLED') {
+                        throw new Exception("Cannot record customer receipt against a {$invStatChk} invoice.", 400);
+                    }
+                    $invNo = $inv['invoice_number'];
+                    if (!$custId) $custId = $inv['customer_id'];
+                    if ($custName === 'Solar Customer') $custName = $inv['customer_name'];
+                    if (!$projId) $projId = $inv['project_id'];
+                    if ($status === 'PAID') {
+                        $tot = accRound2(floatval($inv['total_amount']));
+                        $ret = accRound2(floatval($inv['returned_amount'] ?? 0));
+                        $ref = accRound2(floatval($inv['refunded_amount'] ?? 0));
+                        $curPaid = accRound2(floatval($inv['paid_amount'] ?? 0));
+                        $curNetPaid = accRound2(max(0, $curPaid - $ref));
+                        $remaining = accRound2(max(0, $tot - $ret - $curNetPaid));
+                        if ($amt > $remaining + 0.01) {
+                            throw new Exception("Receipt amount (₹" . number_format($amt, 2, '.', '') . ") exceeds remaining invoice balance due (₹" . number_format($remaining, 2, '.', '') . ").", 400);
                         }
+                        accEnsureSalesInvoiceJournalTxPhp($pdo, $inv, $settings, $actor);
+                        $newPaid = accRound2($curPaid + $amt);
+                        $netPaid = accRound2(max(0, $newPaid - $ref));
+                        $newBal = accRound2(max(0, $tot - $ret - $netPaid));
+                        $invStat = ($newBal <= 0.01 && $tot > 0) ? 'PAID' : 'PARTIAL';
+                        $pdo->prepare("UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=?,`bank_account_id`=COALESCE(NULLIF(?,''),`bank_account_id`) WHERE `id`=?")->execute([$newPaid, $newBal, $invStat, $selectedBankId, $inv['id']]);
                     }
                 }
 
@@ -2878,10 +2913,22 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     if (floatval($existing['paid_amount'] ?? 0) > 0) {
                         throw new Exception('Vendor bills with recorded payments cannot be edited. Reverse the vendor payment first.');
                     }
+                    if (floatval($existing['returned_amount'] ?? 0) > 0) {
+                        throw new Exception('Vendor bills with recorded purchase returns cannot be edited. Reverse the purchase return first.');
+                    }
                     $vpc = $pdo->prepare('SELECT COUNT(*) FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?');
                     $vpc->execute([$id]);
                     if ((int)$vpc->fetchColumn() > 0) {
                         throw new Exception('Vendor bills with payment history cannot be edited.');
+                    }
+                    try {
+                        $prc = $pdo->prepare('SELECT COUNT(*) FROM `solar_purchase_returns` WHERE `vendor_bill_id` = ?');
+                        $prc->execute([$id]);
+                        if ((int)$prc->fetchColumn() > 0) {
+                            throw new Exception('Vendor bills referenced by purchase returns cannot be edited.');
+                        }
+                    } catch (Exception $e) {
+                        if (strpos($e->getMessage(), 'purchase returns') !== false) throw $e;
                     }
                     if (!empty($existing['journal_entry_id'])) {
                         $oldBillDate = accToSqlDate($existing['bill_date'] ?? '') ?: accTodaySql();
@@ -2928,9 +2975,17 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $bill = $s->fetch(PDO::FETCH_ASSOC);
                 if (!$bill) throw new Exception('Vendor bill not found.');
                 if (floatval($bill['paid_amount']) > 0) throw new Exception('Cannot delete a vendor bill with payments recorded. Reverse vendor payments first.');
+                if (floatval($bill['returned_amount'] ?? 0) > 0) throw new Exception('Cannot delete a vendor bill with purchase returns recorded. Reverse purchase returns first.');
                 $vpc = $pdo->prepare('SELECT COUNT(*) FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?');
                 $vpc->execute([$id]);
                 if ((int)$vpc->fetchColumn() > 0) throw new Exception('Cannot delete a vendor bill referenced by vendor payments.');
+                try {
+                    $prc = $pdo->prepare('SELECT COUNT(*) FROM `solar_purchase_returns` WHERE `vendor_bill_id` = ?');
+                    $prc->execute([$id]);
+                    if ((int)$prc->fetchColumn() > 0) throw new Exception('Cannot delete a vendor bill referenced by purchase returns.');
+                } catch (Exception $e) {
+                    if (strpos($e->getMessage(), 'purchase returns') !== false) throw $e;
+                }
                 if (!empty($bill['journal_entry_id'])) {
                     accAssertNotLockedPhp($pdo, accToSqlDate($bill['bill_date'] ?? '') ?: accTodaySql());
                     $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$bill['journal_entry_id']]);

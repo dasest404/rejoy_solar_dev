@@ -75,6 +75,9 @@ export const InvoiceCreator: React.FC = () => {
   const [formNotes, setFormNotes] = useState('');
   const [formDeductStock, setFormDeductStock] = useState(true);
   const [formBankAccountId, setFormBankAccountId] = useState('');
+  const [formInitialPaidAmount, setFormInitialPaidAmount] = useState<number>(0);
+  const [formPaymentMode, setFormPaymentMode] = useState('Bank NEFT/RTGS');
+  const [formPaymentReference, setFormPaymentReference] = useState('');
 
   // Dynamic items in modal
   const [lineItems, setLineItems] = useState<DraftInvoiceLineItem[]>([]);
@@ -189,6 +192,11 @@ export const InvoiceCreator: React.FC = () => {
     setFormPaymentTerms('15 Days Net');
     setFormNotes('');
     setFormDeductStock(true);
+    setFormInitialPaidAmount(0);
+    setFormPaymentMode('Bank NEFT/RTGS');
+    setFormPaymentReference('');
+    const primaryBank = bankAccounts.find(b => b.isPrimary) || bankAccounts[0];
+    setFormBankAccountId(primaryBank?.id || '');
     setLineItems([]);
     setSelectedProductId('');
     setCustomItemDesc('');
@@ -218,6 +226,9 @@ export const InvoiceCreator: React.FC = () => {
     setFormNotes(inv.notes || '');
     setFormDeductStock(Boolean(inv.deductStock));
     setFormBankAccountId(inv.bankAccountId || bankAccounts.find(b => b.isPrimary)?.id || bankAccounts[0]?.id || '');
+    setFormInitialPaidAmount(Number(inv.paidAmount || 0));
+    setFormPaymentMode('Bank NEFT/RTGS');
+    setFormPaymentReference('');
     setLineItems((inv.items || []).map(it => ({ ...it })));
     setSelectedProductId('');
     setCustomItemDesc('');
@@ -384,16 +395,40 @@ export const InvoiceCreator: React.FC = () => {
     const existingPaid = Number(editingInvoice?.paidAmount ?? 0);
     const existingReturned = Number(editingInvoice?.returnedAmount ?? 0);
     const existingRefunded = Number(editingInvoice?.refundedAmount ?? 0);
-    const nextPaidAmount =
-      formStatus === 'PAID'
-        ? Math.max(existingPaid, Math.max(0, formGrandTotal - existingReturned) + existingRefunded)
-        : existingPaid;
-    const netPaid = Math.max(0, nextPaidAmount - existingRefunded);
+    const maxPayable = Math.max(0, Number((formGrandTotal - existingReturned + existingRefunded).toFixed(2)));
+    let requestedPaid = existingPaid;
+    if (formStatus === 'PAID') {
+      requestedPaid = Math.max(existingPaid, maxPayable);
+    } else if (formStatus === 'PARTIAL') {
+      if (!Number.isFinite(formInitialPaidAmount) || formInitialPaidAmount <= 0) {
+        const msg = 'Enter the partial payment amount received (> ₹0).';
+        setFormError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+      if (formInitialPaidAmount > maxPayable + 0.01) {
+        const msg = `Partial paid amount cannot exceed ₹${maxPayable.toLocaleString('en-IN')}.`;
+        setFormError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+      requestedPaid = Math.max(existingPaid, Number(formInitialPaidAmount.toFixed(2)));
+    }
+    const isRecordingSettlement =
+      (formStatus === 'PAID' || formStatus === 'PARTIAL') && requestedPaid > existingPaid + 0.01;
+    const selectedBank = bankAccounts.find(b => b.id === formBankAccountId);
+    if (isRecordingSettlement && bankAccounts.length > 0 && !formBankAccountId) {
+      const msg = 'Please select a Cash / Bank account to deposit the received payment into.';
+      setFormError(msg);
+      showToast(msg, 'warning');
+      return;
+    }
+
+    const netPaid = Math.max(0, requestedPaid - existingRefunded);
     const nextBalanceAmount =
       formStatus === 'PAID'
         ? 0
         : Math.max(0, Number((formGrandTotal - existingReturned - netPaid).toFixed(2)));
-    const selectedBank = bankAccounts.find(b => b.id === formBankAccountId);
 
     const isInterState =
       Boolean(editingInvoice?.igstAmount && editingInvoice.igstAmount > 0) &&
@@ -409,7 +444,7 @@ export const InvoiceCreator: React.FC = () => {
       formStatus !== 'DRAFT' &&
       formStatus !== 'CANCELLED';
 
-    const payloadInvoice: SalesInvoice = {
+    const payloadInvoice: SalesInvoice & { paymentMode?: string; transactionReference?: string } = {
       id: editingInvoice ? editingInvoice.id : `inv-${Date.now()}`,
       invoiceNumber: editingInvoice
         ? editingInvoice.invoiceNumber
@@ -429,12 +464,14 @@ export const InvoiceCreator: React.FC = () => {
       paymentStatus: formStatus,
       paymentTerms: formPaymentTerms,
       notes: formNotes,
-      paidAmount: nextPaidAmount,
+      paidAmount: requestedPaid,
       returnedAmount: existingReturned,
       refundedAmount: existingRefunded,
       balanceAmount: nextBalanceAmount,
       bankAccountId: selectedBank?.id || editingInvoice?.bankAccountId,
       bankAccountName: selectedBank?.accountName || editingInvoice?.bankAccountName,
+      paymentMode: formPaymentMode,
+      transactionReference: formPaymentReference.trim() || undefined,
       cgstAmount: nextCgst,
       sgstAmount: nextSgst,
       igstAmount: nextIgst,
@@ -464,6 +501,10 @@ export const InvoiceCreator: React.FC = () => {
         canDeductNow,
         currentUser?.name || 'Accounts Officer'
       );
+      const latestBanks = await storageService.fetchAccountingBankAccountsAsync().catch(() => []);
+      if (Array.isArray(latestBanks) && latestBanks.length > 0) {
+        setBankAccounts(latestBanks.filter((b: any) => b && b.isActive !== false));
+      }
       triggerRefresh();
       showToast(
         isEditing
@@ -533,6 +574,10 @@ export const InvoiceCreator: React.FC = () => {
         referenceNo: payReference.trim() || undefined,
         notes: payNotes.trim() || undefined
       });
+      const latestBanks = await storageService.fetchAccountingBankAccountsAsync().catch(() => []);
+      if (Array.isArray(latestBanks) && latestBanks.length > 0) {
+        setBankAccounts(latestBanks.filter((b: any) => b && b.isActive !== false));
+      }
       triggerRefresh();
       showToast(
         `Recorded ₹${Number(payAmount).toLocaleString('en-IN')} against ${paymentInvoice.invoiceNumber} (${res?.bankAccountName || 'Bank'})`,
@@ -974,12 +1019,18 @@ export const InvoiceCreator: React.FC = () => {
                   <label className="block text-xs font-bold text-slate-700 mb-1">Status</label>
                   <select
                     value={formStatus}
-                    onChange={e => setFormStatus(e.target.value)}
+                    onChange={e => {
+                      const next = e.target.value;
+                      setFormStatus(next);
+                      if (next === 'PARTIAL' && formInitialPaidAmount <= 0 && formGrandTotal > 0) {
+                        setFormInitialPaidAmount(Math.round(formGrandTotal * 0.5));
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
                   >
                     <option value="DRAFT">DRAFT</option>
                     <option value="ISSUED">ISSUED</option>
-                    {formStatus === 'PARTIAL' && <option value="PARTIAL">PARTIAL</option>}
+                    <option value="PARTIAL">PARTIAL (Upfront Payment)</option>
                     <option value="PAID">PAID</option>
                     <option value="CANCELLED">CANCELLED</option>
                   </select>
@@ -1322,24 +1373,86 @@ export const InvoiceCreator: React.FC = () => {
                 </label>
               </div>
 
-              {/* Optional Settlement Bank Account when saving as PAID */}
-              {formStatus === 'PAID' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Deposit Cash / Bank Account
-                  </label>
-                  <select
-                    value={formBankAccountId}
-                    onChange={e => setFormBankAccountId(e.target.value)}
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
-                  >
-                    <option value="">-- Default Primary Bank / Cash --</option>
-                    {bankAccounts.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.accountName} ({b.accountType}) — Bal: ₹{Number(b.currentBalance || 0).toLocaleString('en-IN')}
-                      </option>
-                    ))}
-                  </select>
+              {/* Settlement Cash/Bank Account when saving as PAID or PARTIAL */}
+              {(formStatus === 'PAID' || formStatus === 'PARTIAL') && (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-950">
+                    <Landmark className="w-4 h-4 text-amber-600" />
+                    <span>
+                      {formStatus === 'PAID'
+                        ? 'Full Settlement Cash / Bank Deposit'
+                        : 'Partial Payment Receipt & Bank Deposit'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className={formStatus === 'PARTIAL' ? 'sm:col-span-2' : 'sm:col-span-2'}>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Deposit Cash / Bank Account *
+                      </label>
+                      <select
+                        required={bankAccounts.length > 0}
+                        value={formBankAccountId}
+                        onChange={e => setFormBankAccountId(e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                      >
+                        {bankAccounts.length === 0 && (
+                          <option value="">Default Primary Bank / Cash</option>
+                        )}
+                        {bankAccounts.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.accountName} ({b.accountType}) — Bal: ₹{Number(b.currentBalance || 0).toLocaleString('en-IN')}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {formStatus === 'PARTIAL' && (
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Total Paid Amount (₹) *
+                        </label>
+                        <input
+                          type="number"
+                          min={0.01}
+                          max={Math.max(0.01, formGrandTotal - Number(editingInvoice?.returnedAmount || 0) + Number(editingInvoice?.refundedAmount || 0))}
+                          step="0.01"
+                          required
+                          value={formInitialPaidAmount}
+                          onChange={e => setFormInitialPaidAmount(Number(e.target.value))}
+                          className="w-full px-3 py-2 text-xs font-mono font-bold bg-white border border-slate-300 rounded-xl"
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Payment Mode
+                      </label>
+                      <select
+                        value={formPaymentMode}
+                        onChange={e => setFormPaymentMode(e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                      >
+                        <option value="Bank NEFT/RTGS">Bank NEFT/RTGS</option>
+                        <option value="UPI">UPI</option>
+                        <option value="Cheque">Cheque</option>
+                        <option value="Cash">Cash</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        UTR / Ref No.
+                      </label>
+                      <input
+                        type="text"
+                        value={formPaymentReference}
+                        onChange={e => setFormPaymentReference(e.target.value)}
+                        placeholder="Optional UTR / Cheque #"
+                        className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-300 rounded-xl"
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 

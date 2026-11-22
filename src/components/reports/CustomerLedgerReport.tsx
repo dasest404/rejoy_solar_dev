@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Customer, SalesInvoice, PaymentRecord } from '../../types/solar';
+import { Customer, SalesInvoice, PaymentRecord, SalesReturn } from '../../types/solar';
 import { ReportFilterState, ReportCategoryMeta } from '../../types/reports';
 import { exportToCSV } from '../../services/exportImport';
 import { ReportFilterBar } from './ReportFilterBar';
@@ -17,6 +17,7 @@ interface CustomerLedgerReportProps {
   customers: Customer[];
   invoices: SalesInvoice[];
   payments: PaymentRecord[];
+  salesReturns?: SalesReturn[];
   filters: ReportFilterState;
   onFilterChange: (updated: Partial<ReportFilterState>) => void;
   onFilterReset: () => void;
@@ -27,13 +28,14 @@ interface CustomerLedgerReportProps {
 interface CustomerLedgerEntry {
   customer: Customer;
   totalBilled: number;
+  totalReturned: number;
   totalReceived: number;
   balance: number;
   invoiceCount: number;
   hasOverdue: boolean;
   transactions: {
     date: string;
-    type: 'INVOICE' | 'PAYMENT';
+    type: 'INVOICE' | 'PAYMENT' | 'CREDIT_NOTE' | 'BANK_REFUND';
     refNumber: string;
     description: string;
     debit: number;
@@ -42,10 +44,13 @@ interface CustomerLedgerEntry {
   }[];
 }
 
+const round2 = (n: number): number => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
 export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
   customers,
   invoices,
   payments,
+  salesReturns = [],
   filters,
   onFilterChange,
   onFilterReset,
@@ -56,30 +61,55 @@ export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
 
   // Build ledger per customer
   const ledgerData: CustomerLedgerEntry[] = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
     return (customers || []).filter(Boolean).map(cust => {
+      const custNameLower = (cust.name || '').trim().toLowerCase();
       // Find invoices for this customer
-      const custInvoices = (invoices || []).filter(inv => inv && (inv.customerId === cust.id || inv.customerName === cust.name));
+      const custInvoices = (invoices || []).filter(
+        inv =>
+          inv &&
+          (inv.customerId === cust.id ||
+            (!inv.customerId && (inv.customerName || '').trim().toLowerCase() === custNameLower))
+      );
+      const custInvIds = new Set(custInvoices.map(i => i.id));
       // Find payments for this customer
-      const custPayments = (payments || []).filter(p => p && (p.customerId === cust.id || (cust.activeProjectId && p.projectId === cust.activeProjectId)));
+      const custPayments = (payments || []).filter(
+        p =>
+          p &&
+          (p.customerId === cust.id ||
+            (p.invoiceId && custInvIds.has(p.invoiceId)) ||
+            (cust.activeProjectId && p.projectId === cust.activeProjectId) ||
+            (!p.customerId && (p.customerName || '').trim().toLowerCase() === custNameLower))
+      );
+      // Find active sales returns (Credit Notes) for this customer
+      const custReturns = (salesReturns || []).filter(
+        sr =>
+          sr &&
+          sr.status !== 'REVERSED' &&
+          sr.status !== 'CANCELLED' &&
+          sr.targetType === 'CUSTOMER_INVOICE' &&
+          (sr.partyId === cust.id ||
+            (sr.invoiceId && custInvIds.has(sr.invoiceId)) ||
+            (!sr.partyId && (sr.partyName || '').trim().toLowerCase() === custNameLower))
+      );
 
-      const txns: {
-        date: string;
-        type: 'INVOICE' | 'PAYMENT';
-        refNumber: string;
-        description: string;
-        debit: number;
-        credit: number;
-        runningBalance: number;
-      }[] = [];
+      const txns: CustomerLedgerEntry['transactions'] = [];
+
+      let totalInvoices = 0;
+      let totalReturned = 0;
+      let grossReceipts = 0;
+      let totalRefunded = 0;
 
       custInvoices.forEach(inv => {
-        if (inv.status !== 'CANCELLED') {
+        if (inv.status !== 'CANCELLED' && inv.status !== 'DRAFT') {
+          const amt = round2(Number(inv.totalAmount || 0));
+          totalInvoices = round2(totalInvoices + amt);
           txns.push({
             date: inv.invoiceDate,
             type: 'INVOICE',
             refNumber: inv.invoiceNumber,
             description: `${inv.invoiceType} - ${inv.projectTitle || 'Solar Installation'}`,
-            debit: inv.totalAmount,
+            debit: amt,
             credit: 0,
             runningBalance: 0
           });
@@ -87,14 +117,43 @@ export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
       });
 
       custPayments.forEach(pay => {
-        if (pay.status === 'PAID' && pay.paidDate) {
+        if (pay.status === 'PAID') {
+          const amt = round2(Number(pay.amount || 0));
+          grossReceipts = round2(grossReceipts + amt);
           txns.push({
-            date: pay.paidDate,
+            date: pay.paidDate || pay.dueDate || today,
             type: 'PAYMENT',
             refNumber: pay.receiptNumber || `RCPT-${pay.id.slice(0, 6)}`,
-            description: `Payment: ${pay.milestone} (${pay.paymentMode || 'Bank Transfer'})`,
+            description: `Receipt: ${pay.milestone} (${pay.paymentMode || 'Bank Transfer'})`,
             debit: 0,
-            credit: pay.amount,
+            credit: amt,
+            runningBalance: 0
+          });
+        }
+      });
+
+      custReturns.forEach(sr => {
+        const retAmt = round2(Number(sr.totalAmount || 0));
+        totalReturned = round2(totalReturned + retAmt);
+        txns.push({
+          date: sr.returnDate,
+          type: 'CREDIT_NOTE',
+          refNumber: sr.returnNumber,
+          description: `Sales Return (vs ${sr.invoiceNumber}) — ${sr.reason || 'Goods Returned'}`,
+          debit: 0,
+          credit: retAmt,
+          runningBalance: 0
+        });
+        if (sr.settlementMode === 'BANK_REFUND' && Number(sr.refundAmount || 0) > 0) {
+          const refAmt = round2(Number(sr.refundAmount || 0));
+          totalRefunded = round2(totalRefunded + refAmt);
+          txns.push({
+            date: sr.returnDate,
+            type: 'BANK_REFUND',
+            refNumber: `${sr.returnNumber}-REF`,
+            description: `Bank Refund Paid (${sr.bankAccountName || 'Bank/Cash'})`,
+            debit: refAmt,
+            credit: 0,
             runningBalance: 0
           });
         }
@@ -106,20 +165,31 @@ export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
       // Compute running balance
       let currentRunning = 0;
       txns.forEach(t => {
-        currentRunning += t.debit - t.credit;
+        currentRunning = round2(currentRunning + t.debit - t.credit);
         t.runningBalance = currentRunning;
       });
 
-      const totalBilled = txns.reduce((sum, t) => sum + t.debit, 0);
-      const totalReceived = txns.reduce((sum, t) => sum + t.credit, 0);
-      const balance = totalBilled - totalReceived;
+      const totalBilled = round2(Math.max(0, totalInvoices - totalReturned));
+      const totalReceived = round2(Math.max(0, grossReceipts - totalRefunded));
+      const balance = round2(currentRunning);
 
-      const hasOverdue = custPayments.some(p => p.status === 'OVERDUE') ||
-        custInvoices.some(inv => inv.status === 'ISSUED' && inv.dueDate && inv.dueDate < new Date().toISOString().slice(0, 10));
+      const hasOverdue =
+        balance > 0.01 &&
+        (custPayments.some(p => p.status === 'OVERDUE') ||
+          custInvoices.some(
+            inv =>
+              inv.status !== 'CANCELLED' &&
+              inv.status !== 'DRAFT' &&
+              inv.status !== 'PAID' &&
+              Number(inv.balanceAmount ?? inv.totalAmount) > 0.01 &&
+              inv.dueDate &&
+              inv.dueDate < today
+          ));
 
       return {
         customer: cust,
         totalBilled,
+        totalReturned,
         totalReceived,
         balance,
         invoiceCount: custInvoices.length,
@@ -127,7 +197,7 @@ export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
         transactions: txns
       };
     });
-  }, [customers, invoices, payments]);
+  }, [customers, invoices, payments, salesReturns]);
 
   // Filter the ledger
   const filteredLedger = useMemo(() => {
@@ -185,8 +255,9 @@ export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
       'Phone Number',
       'City / Region',
       'System Capacity (kW)',
-      'Total Billed (Debit)',
-      'Total Paid (Credit)',
+      'Net Billed (Dr)',
+      'Sales Returns (Cr Note)',
+      'Net Collected (Cr)',
       'Net Outstanding Balance',
       'Account Status'
     ];
@@ -197,9 +268,10 @@ export const CustomerLedgerReport: React.FC<CustomerLedgerReportProps> = ({
       l.customer?.city || '',
       l.customer?.sanctionedLoadKw ? `${l.customer.sanctionedLoadKw} kW` : (l.customer?.customerType || 'Commercial'),
       l.totalBilled,
+      l.totalReturned,
       l.totalReceived,
       l.balance,
-      l.balance <= 0 ? 'Settled' : l.hasOverdue ? 'Overdue' : 'Outstanding'
+      l.balance <= 0.01 ? 'Settled' : l.hasOverdue ? 'Overdue' : 'Outstanding'
     ]);
     exportToCSV(`SolarPulse_Customer_Ledger_${new Date().toISOString().slice(0, 10)}`, headers, rows);
     showToast('Customer ledger exported to CSV', 'success');

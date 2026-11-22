@@ -1774,7 +1774,7 @@ apiRouter.post('/purchase-orders', async (req: Request, res: Response) => {
     if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
     if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot manage purchase orders.' });
     const po = { ...req.body, id: req.body.id || `po-${Date.now()}` };
-    const saved = await dbManager.savePurchaseOrder(po);
+    const saved = await dbManager.savePurchaseOrder(po, actor);
     res.status(201).json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to save purchase order');
@@ -1787,7 +1787,7 @@ apiRouter.put('/purchase-orders/:id', async (req: Request, res: Response) => {
     if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
     if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot manage purchase orders.' });
     const { id } = req.params;
-    const saved = await dbManager.savePurchaseOrder({ ...req.body, id });
+    const saved = await dbManager.savePurchaseOrder({ ...req.body, id }, actor);
     res.json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update purchase order');

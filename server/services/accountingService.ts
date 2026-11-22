@@ -1468,14 +1468,18 @@ class AccountingService {
 
       const receiptNumber = data.receiptNumber || existing?.receipt_number || `RCPT-${paidDate.slice(0, 4)}-${randDigits(4)}`;
 
-      let bankCoaId = settings.default_bank_account_id || 'acc-1020';
-      if (data.bankAccountId) {
-        const [bRows]: any = await conn.query('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1', [data.bankAccountId]);
-        if (bRows?.[0]) {
-          bankCoaId = bRows[0].coa_account_id || (bRows[0].account_type === 'CASH' ? settings.default_cash_account_id : settings.default_bank_account_id);
+      let resolvedBankId = '';
+      let bankCoaId = String(data.paymentMode || '').toLowerCase().includes('cash')
+        ? (settings.default_cash_account_id || 'acc-1010')
+        : (settings.default_bank_account_id || 'acc-1020');
+
+      if (status === 'PAID') {
+        const candidateBankId = await this.resolveDefaultActiveBankAccountIdTx(conn, data.bankAccountId, data.paymentMode);
+        if (candidateBankId) {
+          const resolved = await this.resolveBankAccountTx(conn, candidateBankId, settings, data.paymentMode);
+          resolvedBankId = resolved.bank.id;
+          bankCoaId = resolved.coaId;
         }
-      } else if (String(data.paymentMode || '').toLowerCase().includes('cash')) {
-        bankCoaId = settings.default_cash_account_id || 'acc-1010';
       }
 
       let invoiceNumber = data.invoiceNumber || '';
@@ -1484,36 +1488,47 @@ class AccountingService {
       let projectId = data.projectId || '';
 
       if (data.invoiceId) {
-        const [invRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1', [data.invoiceId]);
+        const [invRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? FOR UPDATE', [data.invoiceId]);
         const inv = invRows?.[0];
-        if (inv) {
-          invoiceNumber = inv.invoice_number;
-          customerId = customerId || inv.customer_id;
-          customerName = customerName === 'Solar Customer' ? inv.customer_name : customerName;
-          projectId = projectId || inv.project_id;
-          if (status === 'PAID') {
-            await this.ensureSalesInvoiceJournalTx(conn, inv, settings, actor);
-            const newPaid = round2(Number(inv.paid_amount || 0) + amount);
-            const total = round2(Number(inv.total_amount || 0));
-            const returned = round2(Number(inv.returned_amount || 0));
-            const refunded = round2(Number(inv.refunded_amount || 0));
-            const netPaid = round2(Math.max(0, newPaid - refunded));
-            const newBal = round2(Math.max(0, total - returned - netPaid));
-            const newInvStatus = newBal <= 0.01 ? 'PAID' : 'PARTIAL';
-            await conn.query(
-              'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = COALESCE(NULLIF(?, \'\'), `bank_account_id`) WHERE `id` = ?',
-              [newPaid, newBal, newInvStatus, data.bankAccountId || '', inv.id]
-            );
+        if (!inv) {
+          throw new Error('Selected sales invoice was not found.');
+        }
+        const invStat = String(inv.payment_status || 'ISSUED').toUpperCase();
+        if (invStat === 'DRAFT' || invStat === 'CANCELLED') {
+          throw new Error(`Cannot record customer receipt against a ${invStat} invoice.`);
+        }
+        invoiceNumber = inv.invoice_number;
+        customerId = customerId || inv.customer_id;
+        customerName = customerName === 'Solar Customer' ? inv.customer_name : customerName;
+        projectId = projectId || inv.project_id;
+        if (status === 'PAID') {
+          const total = round2(Number(inv.total_amount || 0));
+          const returned = round2(Number(inv.returned_amount || 0));
+          const refunded = round2(Number(inv.refunded_amount || 0));
+          const curPaid = round2(Number(inv.paid_amount || 0));
+          const curNetPaid = round2(Math.max(0, curPaid - refunded));
+          const remaining = round2(Math.max(0, total - returned - curNetPaid));
+          if (amount > remaining + 0.01) {
+            throw new Error(`Receipt amount (₹${amount.toFixed(2)}) exceeds remaining invoice balance due (₹${remaining.toFixed(2)}).`);
           }
+          await this.ensureSalesInvoiceJournalTx(conn, inv, settings, actor);
+          const newPaid = round2(curPaid + amount);
+          const netPaid = round2(Math.max(0, newPaid - refunded));
+          const newBal = round2(Math.max(0, total - returned - netPaid));
+          const newInvStatus = newBal <= 0.01 && total > 0 ? 'PAID' : 'PARTIAL';
+          await conn.query(
+            'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ?, `bank_account_id` = COALESCE(NULLIF(?, \'\'), `bank_account_id`) WHERE `id` = ?',
+            [newPaid, newBal, newInvStatus, resolvedBankId, inv.id]
+          );
         }
       }
 
       let journalEntryId = '';
       if (status === 'PAID') {
-        if (data.bankAccountId) {
+        if (resolvedBankId) {
           await conn.query(
             'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
-            [amount, data.bankAccountId]
+            [amount, resolvedBankId]
           );
         }
         journalEntryId = await this.insertAndPostJournalTx(
@@ -1579,7 +1594,7 @@ class AccountingService {
           data.notes || '',
           data.invoiceId || '',
           invoiceNumber,
-          data.bankAccountId || '',
+          resolvedBankId || data.bankAccountId || '',
           journalEntryId
         ]
       );
@@ -1711,9 +1726,16 @@ class AccountingService {
         if (Number(existing.paid_amount || 0) > 0) {
           throw new Error('Vendor bills with recorded payments cannot be edited. Reverse the vendor payment first.');
         }
+        if (Number(existing.returned_amount || 0) > 0) {
+          throw new Error('Vendor bills with recorded purchase returns cannot be edited. Reverse the purchase return first.');
+        }
         const [vpCnt]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?', [id]);
         if (Number(vpCnt?.[0]?.cnt || 0) > 0) {
           throw new Error('Vendor bills with payment history cannot be edited.');
+        }
+        const [prCnt]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_purchase_returns` WHERE `vendor_bill_id` = ?', [id]).catch(() => [[{ cnt: 0 }]]);
+        if (Number(prCnt?.[0]?.cnt || 0) > 0) {
+          throw new Error('Vendor bills referenced by purchase returns cannot be edited.');
         }
         if (existing.journal_entry_id) {
           const oldBillDate = toSqlDate(existing.bill_date) || todaySql();
@@ -1839,9 +1861,16 @@ class AccountingService {
       if (Number(bill.paid_amount || 0) > 0) {
         throw new Error('Cannot delete a vendor bill with payments recorded. Reverse vendor payments first.');
       }
+      if (Number(bill.returned_amount || 0) > 0) {
+        throw new Error('Cannot delete a vendor bill with purchase returns recorded. Reverse purchase returns first.');
+      }
       const [vpCnt]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?', [id]);
       if (Number(vpCnt?.[0]?.cnt || 0) > 0) {
         throw new Error('Cannot delete a vendor bill referenced by vendor payments.');
+      }
+      const [prCnt]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_purchase_returns` WHERE `vendor_bill_id` = ?', [id]).catch(() => [[{ cnt: 0 }]]);
+      if (Number(prCnt?.[0]?.cnt || 0) > 0) {
+        throw new Error('Cannot delete a vendor bill referenced by purchase returns.');
       }
       if (bill.journal_entry_id) {
         const billDate = toSqlDate(bill.bill_date) || todaySql();
@@ -3080,7 +3109,20 @@ class AccountingService {
         breakdown.salesInvoices++;
       }
 
-      // 2. Customer Receipts (PAID without journal_entry_id)
+      // 2. Vendor Sales Invoices (non-DRAFT, non-CANCELLED)
+      const [vsInvoices]: any = await conn.query(
+        "SELECT * FROM `solar_vendor_sales_invoices` WHERE `status` NOT IN ('DRAFT', 'CANCELLED')"
+      ).catch(() => [[]]);
+      for (const vsi of vsInvoices || []) {
+        if (postedKeys.has(`VENDOR_SALES_INVOICE:${vsi.id}`)) continue;
+        const jeId = await this.ensureVendorSalesInvoiceJournalTx(conn, vsi, settings, actor);
+        if (jeId) {
+          postedKeys.add(`VENDOR_SALES_INVOICE:${vsi.id}`);
+          (breakdown as any).vendorSalesInvoices = ((breakdown as any).vendorSalesInvoices || 0) + 1;
+        }
+      }
+
+      // 3. Customer Receipts (PAID without journal_entry_id)
       const [payments]: any = await conn.query(
         "SELECT * FROM `solar_payments` WHERE `status` = 'PAID' AND (`journal_entry_id` IS NULL OR `journal_entry_id` = '')"
       );
@@ -3089,7 +3131,9 @@ class AccountingService {
         const amt = round2(Number(p.amount || 0));
         if (amt <= 0) continue;
         const isCash = String(p.payment_mode || '').toLowerCase().includes('cash');
-        const bankCoa = isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020');
+        const bankCoa = p.bank_account_id
+          ? await this.resolveBankCoaTx(conn, p.bank_account_id, settings)
+          : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
         const jeId = await this.insertAndPostJournalTx(
           conn,
           {
@@ -3109,6 +3153,39 @@ class AccountingService {
         await conn.query('UPDATE `solar_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, p.id]);
         postedKeys.add(`CUSTOMER_RECEIPT:${p.id}`);
         breakdown.customerReceipts++;
+      }
+
+      // 4. Vendor Sales Receipts without journal_entry_id
+      const [vsiPays]: any = await conn.query(
+        "SELECT p.*, v.`invoice_number`, v.`vendor_name` FROM `solar_vendor_sales_payments` p LEFT JOIN `solar_vendor_sales_invoices` v ON v.`id` = p.`invoice_id` WHERE (p.`journal_entry_id` IS NULL OR p.`journal_entry_id` = '')"
+      ).catch(() => [[]]);
+      for (const vp of vsiPays || []) {
+        if (postedKeys.has(`VENDOR_SALES_RECEIPT:${vp.id}`)) continue;
+        const amt = round2(Number(vp.amount || 0));
+        if (amt <= 0) continue;
+        const isCash = String(vp.payment_mode || '').toLowerCase().includes('cash');
+        const bankCoa = vp.bank_account_id
+          ? await this.resolveBankCoaTx(conn, vp.bank_account_id, settings)
+          : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
+        const jeId = await this.insertAndPostJournalTx(
+          conn,
+          {
+            entryDate: safeDate(vp.payment_date),
+            referenceType: 'VENDOR_SALES_RECEIPT',
+            referenceId: vp.id,
+            referenceNumber: vp.invoice_number || vp.id,
+            narration: `Vendor Sales Receipt for ${vp.invoice_number || vp.invoice_id}`,
+            status: 'POSTED',
+            lines: [
+              { accountId: bankCoa, description: vp.payment_mode || 'Receipt', partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: amt, credit: 0 },
+              { accountId: settings.default_ar_account_id || 'acc-1100', description: `Receivable settlement - ${vp.invoice_number || ''}`, partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: 0, credit: amt }
+            ]
+          },
+          actor
+        );
+        await conn.query('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, vp.id]);
+        postedKeys.add(`VENDOR_SALES_RECEIPT:${vp.id}`);
+        (breakdown as any).vendorSalesReceipts = ((breakdown as any).vendorSalesReceipts || 0) + 1;
       }
 
       // 3. Legacy/PAID Expenses without journal_entry_id
@@ -3251,6 +3328,33 @@ class AccountingService {
       isPrimary: Boolean(b.is_primary),
       isActive: b.is_active !== 0
     }));
+  }
+
+  private async resolveDefaultActiveBankAccountIdTx(
+    conn: mysql.PoolConnection | mysql.Pool,
+    preferredId?: string,
+    paymentMode?: string
+  ): Promise<string> {
+    const clean = String(preferredId || '').trim();
+    if (clean) return clean;
+    const isCash = String(paymentMode || '').toLowerCase().includes('cash');
+    const [rows]: any = await conn.query(
+      `SELECT \`id\` FROM \`solar_acc_bank_accounts\`
+       WHERE \`is_active\` = 1
+       ORDER BY (CASE WHEN ? = 1 AND \`account_type\` = 'CASH' THEN 0 WHEN ? = 0 AND \`account_type\` = 'BANK' THEN 0 ELSE 1 END), \`is_primary\` DESC, \`id\` ASC
+       LIMIT 1`,
+      [isCash ? 1 : 0, isCash ? 1 : 0]
+    );
+    return rows?.[0]?.id ? String(rows[0].id) : '';
+  }
+
+  public async resolveBankAccountIdOrPrimary(
+    pool: mysql.Pool,
+    preferredId?: string,
+    paymentMode?: string
+  ): Promise<string> {
+    await this.ensureAccountingSchema(pool);
+    return await this.resolveDefaultActiveBankAccountIdTx(pool, preferredId, paymentMode);
   }
 
   private async resolveBankAccountTx(
@@ -4122,6 +4226,8 @@ class AccountingService {
       await conn.commit();
       return {
         purchaseOrderId: po.id,
+        purchaseNumber: po.po_number,
+        poNumber: po.po_number,
         billId: bill.id,
         paymentId: payId,
         paymentNumber,

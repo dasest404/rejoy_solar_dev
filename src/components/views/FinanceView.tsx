@@ -107,7 +107,9 @@ export const FinanceView: React.FC = () => {
   const refreshAll = useCallback(async () => {
     await Promise.all([
       loadWorkspace(),
-      storageService.hydrateFromBackend().catch(() => undefined)
+      storageService.hydrateFromBackend().catch(() => undefined),
+      storageService.fetchSalesReturnsAsync().catch(() => null),
+      storageService.fetchPurchaseReturnsAsync().catch(() => null)
     ]);
     triggerRefresh();
   }, [loadWorkspace, triggerRefresh]);
@@ -137,6 +139,8 @@ export const FinanceView: React.FC = () => {
   const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger, localSyncCounter]);
   const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger, localSyncCounter]);
   const employees = useMemo(() => storageService.getEmployees(), [refreshTrigger, localSyncCounter]);
+  const salesReturns = useMemo(() => storageService.getSalesReturns(), [refreshTrigger, localSyncCounter]);
+  const purchaseReturns = useMemo(() => storageService.getPurchaseReturns(), [refreshTrigger, localSyncCounter]);
 
   const canManage = isPrivilegedFinance || canEditFinancials();
   const canTallySync = isPrivilegedFinance || hasPermission('finance.tally_sync');
@@ -330,6 +334,8 @@ export const FinanceView: React.FC = () => {
               salesInvoices={salesInvoices}
               vendorSalesInvoices={vendorSalesInvoices}
               expenses={expenses}
+              salesReturns={salesReturns}
+              purchaseReturns={purchaseReturns}
               canManage={isPrivilegedFinance || hasPermission('finance.tax')}
               onRefresh={refreshAll}
               showToast={showToast}
@@ -365,6 +371,8 @@ export const FinanceView: React.FC = () => {
               boms={boms}
               purchaseOrders={purchaseOrders}
               expenses={expenses}
+              salesReturns={salesReturns}
+              purchaseReturns={purchaseReturns}
             />
           )}
 

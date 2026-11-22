@@ -12,7 +12,9 @@ import {
   VendorSalesInvoice,
   PurchaseOrder,
   BillOfMaterials,
-  SolarProject
+  SolarProject,
+  SalesReturn,
+  PurchaseReturn
 } from '../../types/solar';
 
 export const round2 = (n: number): number => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
@@ -661,7 +663,13 @@ export function buildReceivablesAgeing(
   for (const inv of salesInvoices || []) {
     if (inv.status === 'CANCELLED' || inv.status === 'DRAFT' || inv.status === 'PAID') continue;
     const paid = Number(inv.paidAmount ?? paidByInv.get(inv.id) ?? 0);
-    const bal = inv.balanceAmount != null ? Number(inv.balanceAmount) : round2(Number(inv.totalAmount || 0) - paid);
+    const returned = Number(inv.returnedAmount || 0);
+    const refunded = Number(inv.refundedAmount || 0);
+    const netPaid = Math.max(0, round2(paid - refunded));
+    const bal =
+      inv.balanceAmount != null
+        ? Number(inv.balanceAmount)
+        : Math.max(0, round2(Number(inv.totalAmount || 0) - returned - netPaid));
     if (bal > 0.01) {
       addBucket(inv.customerName || 'Customer', 'CUSTOMER', inv.dueDate || inv.invoiceDate, bal);
     }
@@ -676,7 +684,11 @@ export function buildReceivablesAgeing(
 
   for (const vsi of vendorSalesInvoices || []) {
     if (vsi.status === 'DRAFT' || vsi.status === 'PAID') continue;
-    const bal = Number(vsi.balanceAmount ?? Math.max(0, Number(vsi.totalAmount || 0) - Number(vsi.paidAmount || 0)));
+    const netPaid = Math.max(0, round2(Number(vsi.paidAmount || 0) - Number(vsi.refundedAmount || 0)));
+    const bal = Number(
+      vsi.balanceAmount ??
+        Math.max(0, round2(Number(vsi.totalAmount || 0) - Number(vsi.returnedAmount || 0) - netPaid))
+    );
     if (bal > 0.01) {
       addBucket(vsi.vendorName || 'Vendor', 'VENDOR', vsi.dueDate || vsi.invoiceDate, bal);
     }
@@ -733,7 +745,11 @@ export function buildPayablesAgeing(
 
   for (const bill of vendorBills || []) {
     if (bill.status === 'DRAFT' || bill.status === 'PAID') continue;
-    const bal = Number(bill.balanceAmount ?? Math.max(0, Number(bill.totalAmount || 0) - Number(bill.paidAmount || 0)));
+    const netPaid = Math.max(0, round2(Number(bill.paidAmount || 0) - Number(bill.refundedAmount || 0)));
+    const bal = Number(
+      bill.balanceAmount ??
+        Math.max(0, round2(Number(bill.totalAmount || 0) - Number(bill.returnedAmount || 0) - netPaid))
+    );
     addBucket(bill.vendorName || 'Vendor', bill.dueDate || bill.billDate, bal);
   }
 
@@ -741,7 +757,12 @@ export function buildPayablesAgeing(
   for (const po of purchaseOrders || []) {
     if (billedPoIds.has(po.id)) continue;
     if ((po.status === 'RECEIVED' || po.status === 'PARTIALLY_RECEIVED') && po.paymentStatus !== 'PAID') {
-      addBucket(po.vendorName || 'Vendor', po.paymentDueDate || po.purchaseDate, Number(po.totalAmount || 0));
+      const netPaid = Math.max(0, round2(Number(po.paidAmount || 0) - Number(po.refundedAmount || 0)));
+      const bal =
+        po.balanceAmount != null
+          ? Number(po.balanceAmount)
+          : Math.max(0, round2(Number(po.totalAmount || 0) - Number(po.returnedAmount || 0) - netPaid));
+      addBucket(po.vendorName || 'Vendor', po.paymentDueDate || po.purchaseDate, bal);
     }
   }
 
@@ -765,11 +786,25 @@ export function buildPayablesAgeing(
 // GST & TAX SUMMARY
 // ========================
 export interface GstSummaryResult {
+  grossOutputTaxable: number;
+  grossOutputTotalTax: number;
+  salesReturnTaxable: number;
+  salesReturnCgst: number;
+  salesReturnSgst: number;
+  salesReturnIgst: number;
+  salesReturnTotalTax: number;
   outputTaxable: number;
   outputCgst: number;
   outputSgst: number;
   outputIgst: number;
   outputTotalTax: number;
+  grossInputTaxable: number;
+  grossInputTotalItc: number;
+  purchaseReturnTaxable: number;
+  purchaseReturnCgst: number;
+  purchaseReturnSgst: number;
+  purchaseReturnIgst: number;
+  purchaseReturnTotalTax: number;
   inputTaxable: number;
   inputCgst: number;
   inputSgst: number;
@@ -787,12 +822,14 @@ export function buildGstSummary(
   salesInvoices: SalesInvoice[],
   vendorSalesInvoices: VendorSalesInvoice[],
   vendorBills: VendorBill[],
-  expenses: ExpenseRecord[]
+  expenses: ExpenseRecord[],
+  salesReturns: SalesReturn[] = [],
+  purchaseReturns: PurchaseReturn[] = []
 ): GstSummaryResult {
-  let outputTaxable = 0;
-  let outputCgst = 0;
-  let outputSgst = 0;
-  let outputIgst = 0;
+  let grossOutputTaxable = 0;
+  let grossOutputCgst = 0;
+  let grossOutputSgst = 0;
+  let grossOutputIgst = 0;
   let b2bInvoicesCount = 0;
   let b2cInvoicesCount = 0;
   let einvoiceGeneratedCount = 0;
@@ -800,14 +837,14 @@ export function buildGstSummary(
 
   for (const inv of salesInvoices || []) {
     if (inv.status === 'CANCELLED' || inv.status === 'DRAFT') continue;
-    outputTaxable = round2(outputTaxable + Number(inv.subtotal || 0));
+    grossOutputTaxable = round2(grossOutputTaxable + Number(inv.subtotal || 0));
     const tax = Number(inv.taxAmount || 0);
     const cgst = inv.cgstAmount != null ? Number(inv.cgstAmount) : round2(tax / 2);
     const sgst = inv.sgstAmount != null ? Number(inv.sgstAmount) : round2(tax - cgst);
     const igst = Number(inv.igstAmount || 0);
-    outputCgst = round2(outputCgst + cgst);
-    outputSgst = round2(outputSgst + sgst);
-    outputIgst = round2(outputIgst + igst);
+    grossOutputCgst = round2(grossOutputCgst + cgst);
+    grossOutputSgst = round2(grossOutputSgst + sgst);
+    grossOutputIgst = round2(grossOutputIgst + igst);
 
     if ((inv.customerGst || '').trim().length >= 10) {
       b2bInvoicesCount++;
@@ -820,33 +857,57 @@ export function buildGstSummary(
 
   for (const vsi of vendorSalesInvoices || []) {
     if (vsi.status === 'DRAFT') continue;
-    outputTaxable = round2(outputTaxable + Number(vsi.subtotal || 0));
-    outputCgst = round2(outputCgst + Number(vsi.cgstAmount || 0));
-    outputSgst = round2(outputSgst + Number(vsi.sgstAmount || 0));
-    outputIgst = round2(outputIgst + Number(vsi.igstAmount || 0));
+    grossOutputTaxable = round2(grossOutputTaxable + Number(vsi.subtotal || 0));
+    grossOutputCgst = round2(grossOutputCgst + Number(vsi.cgstAmount || 0));
+    grossOutputSgst = round2(grossOutputSgst + Number(vsi.sgstAmount || 0));
+    grossOutputIgst = round2(grossOutputIgst + Number(vsi.igstAmount || 0));
     if ((vsi.vendorGst || '').trim().length >= 10) b2bInvoicesCount++;
     else b2cInvoicesCount++;
   }
 
-  let inputTaxable = 0;
-  let inputCgst = 0;
-  let inputSgst = 0;
-  let inputIgst = 0;
+  let salesReturnTaxable = 0;
+  let salesReturnCgst = 0;
+  let salesReturnSgst = 0;
+  let salesReturnIgst = 0;
+
+  for (const sr of salesReturns || []) {
+    if (sr.status === 'REVERSED' || sr.status === 'CANCELLED') continue;
+    salesReturnTaxable = round2(salesReturnTaxable + Number(sr.subtotal || 0));
+    const cgst = Number(sr.cgstAmount || 0);
+    const sgst = Number(sr.sgstAmount || 0);
+    const igst = Number(sr.igstAmount || 0);
+    if (cgst + sgst + igst > 0) {
+      salesReturnCgst = round2(salesReturnCgst + cgst);
+      salesReturnSgst = round2(salesReturnSgst + sgst);
+      salesReturnIgst = round2(salesReturnIgst + igst);
+    } else if (Number(sr.taxAmount || 0) > 0) {
+      const half = round2(Number(sr.taxAmount) / 2);
+      salesReturnCgst = round2(salesReturnCgst + half);
+      salesReturnSgst = round2(salesReturnSgst + round2(Number(sr.taxAmount) - half));
+    }
+  }
+
+  let grossInputTaxable = 0;
+  let grossInputCgst = 0;
+  let grossInputSgst = 0;
+  let grossInputIgst = 0;
+
+  const billMap = new Map((vendorBills || []).map(b => [b.id, b]));
 
   for (const bill of vendorBills || []) {
     if (bill.status === 'DRAFT' || !bill.itcEligible) continue;
-    inputTaxable = round2(inputTaxable + Number(bill.subtotal || 0));
+    grossInputTaxable = round2(grossInputTaxable + Number(bill.subtotal || 0));
     const cgst = Number(bill.cgstAmount || 0);
     const sgst = Number(bill.sgstAmount || 0);
     const igst = Number(bill.igstAmount || 0);
     if (cgst + sgst + igst > 0) {
-      inputCgst = round2(inputCgst + cgst);
-      inputSgst = round2(inputSgst + sgst);
-      inputIgst = round2(inputIgst + igst);
+      grossInputCgst = round2(grossInputCgst + cgst);
+      grossInputSgst = round2(grossInputSgst + sgst);
+      grossInputIgst = round2(grossInputIgst + igst);
     } else if (Number(bill.gstAmount || 0) > 0) {
       const half = round2(Number(bill.gstAmount) / 2);
-      inputCgst = round2(inputCgst + half);
-      inputSgst = round2(inputSgst + round2(Number(bill.gstAmount) - half));
+      grossInputCgst = round2(grossInputCgst + half);
+      grossInputSgst = round2(grossInputSgst + round2(Number(bill.gstAmount) - half));
     }
   }
 
@@ -855,22 +916,75 @@ export function buildGstSummary(
     if (exp.itcEligible && Number(exp.gstAmount || 0) > 0) {
       const g = Number(exp.gstAmount || 0);
       const half = round2(g / 2);
-      inputCgst = round2(inputCgst + half);
-      inputSgst = round2(inputSgst + round2(g - half));
-      inputTaxable = round2(inputTaxable + Math.max(0, Number(exp.amount || 0) - g));
+      grossInputCgst = round2(grossInputCgst + half);
+      grossInputSgst = round2(grossInputSgst + round2(g - half));
+      grossInputTaxable = round2(grossInputTaxable + Math.max(0, Number(exp.amount || 0) - g));
     }
   }
 
+  let purchaseReturnTaxable = 0;
+  let purchaseReturnCgst = 0;
+  let purchaseReturnSgst = 0;
+  let purchaseReturnIgst = 0;
+
+  for (const pr of purchaseReturns || []) {
+    if (pr.status === 'REVERSED' || pr.status === 'CANCELLED') continue;
+    const linkedBill = pr.vendorBillId ? billMap.get(pr.vendorBillId) : undefined;
+    if (linkedBill && linkedBill.itcEligible === false) continue;
+
+    purchaseReturnTaxable = round2(purchaseReturnTaxable + Number(pr.subtotal || 0));
+    const cgst = Number(pr.cgstAmount || 0);
+    const sgst = Number(pr.sgstAmount || 0);
+    const igst = Number(pr.igstAmount || 0);
+    if (cgst + sgst + igst > 0) {
+      purchaseReturnCgst = round2(purchaseReturnCgst + cgst);
+      purchaseReturnSgst = round2(purchaseReturnSgst + sgst);
+      purchaseReturnIgst = round2(purchaseReturnIgst + igst);
+    } else if (Number(pr.taxAmount || 0) > 0) {
+      const half = round2(Number(pr.taxAmount) / 2);
+      purchaseReturnCgst = round2(purchaseReturnCgst + half);
+      purchaseReturnSgst = round2(purchaseReturnSgst + round2(Number(pr.taxAmount) - half));
+    }
+  }
+
+  const grossOutputTotalTax = round2(grossOutputCgst + grossOutputSgst + grossOutputIgst);
+  const salesReturnTotalTax = round2(salesReturnCgst + salesReturnSgst + salesReturnIgst);
+  const outputTaxable = round2(grossOutputTaxable - salesReturnTaxable);
+  const outputCgst = round2(grossOutputCgst - salesReturnCgst);
+  const outputSgst = round2(grossOutputSgst - salesReturnSgst);
+  const outputIgst = round2(grossOutputIgst - salesReturnIgst);
   const outputTotalTax = round2(outputCgst + outputSgst + outputIgst);
+
+  const grossInputTotalItc = round2(grossInputCgst + grossInputSgst + grossInputIgst);
+  const purchaseReturnTotalTax = round2(purchaseReturnCgst + purchaseReturnSgst + purchaseReturnIgst);
+  const inputTaxable = round2(grossInputTaxable - purchaseReturnTaxable);
+  const inputCgst = round2(grossInputCgst - purchaseReturnCgst);
+  const inputSgst = round2(grossInputSgst - purchaseReturnSgst);
+  const inputIgst = round2(grossInputIgst - purchaseReturnIgst);
   const inputTotalItc = round2(inputCgst + inputSgst + inputIgst);
+
   const diff = round2(outputTotalTax - inputTotalItc);
 
   return {
+    grossOutputTaxable,
+    grossOutputTotalTax,
+    salesReturnTaxable,
+    salesReturnCgst,
+    salesReturnSgst,
+    salesReturnIgst,
+    salesReturnTotalTax,
     outputTaxable,
     outputCgst,
     outputSgst,
     outputIgst,
     outputTotalTax,
+    grossInputTaxable,
+    grossInputTotalItc,
+    purchaseReturnTaxable,
+    purchaseReturnCgst,
+    purchaseReturnSgst,
+    purchaseReturnIgst,
+    purchaseReturnTotalTax,
     inputTaxable,
     inputCgst,
     inputSgst,
@@ -993,15 +1107,55 @@ export function buildProjectCosting(
   purchaseOrders: PurchaseOrder[],
   vendorBills: VendorBill[],
   expenses: ExpenseRecord[],
-  budgets: BudgetRecord[]
+  budgets: BudgetRecord[],
+  salesReturns: SalesReturn[] = [],
+  purchaseReturns: PurchaseReturn[] = []
 ): ProjectCostingRow[] {
+  const srByInv = new Map<string, number>();
+  for (const sr of salesReturns || []) {
+    if (sr.status === 'REVERSED' || sr.status === 'CANCELLED') continue;
+    if (sr.targetType === 'CUSTOMER_INVOICE' && sr.invoiceId) {
+      srByInv.set(sr.invoiceId, round2((srByInv.get(sr.invoiceId) || 0) + Number(sr.totalAmount || 0)));
+    }
+  }
+
+  const prByBill = new Map<string, number>();
+  const prByPo = new Map<string, number>();
+  for (const pr of purchaseReturns || []) {
+    if (pr.status === 'REVERSED' || pr.status === 'CANCELLED') continue;
+    if (pr.vendorBillId) {
+      prByBill.set(pr.vendorBillId, round2((prByBill.get(pr.vendorBillId) || 0) + Number(pr.totalAmount || 0)));
+    }
+    const poKey = pr.poId || pr.purchaseOrderId;
+    if (poKey) {
+      prByPo.set(poKey, round2((prByPo.get(poKey) || 0) + Number(pr.totalAmount || 0)));
+    }
+  }
+
   return (projects || []).map(p => {
     const billedRevenue = round2(
       (salesInvoices || [])
         .filter(i => i.projectId === p.id && i.status !== 'CANCELLED' && i.status !== 'DRAFT')
-        .reduce((s, i) => s + Number(i.totalAmount || 0), 0)
+        .reduce((s, i) => {
+          const ret = Math.max(Number(i.returnedAmount || 0), srByInv.get(i.id) || 0);
+          return s + Math.max(0, Number(i.totalAmount || 0) - ret);
+        }, 0)
     );
-    const collectedRevenue = getProjectReceivedInflow(p, payments);
+    const baseCollected = getProjectReceivedInflow(p, payments);
+    const fallbackBankRefunds =
+      p.receivedInflow !== undefined && p.receivedInflow !== null
+        ? 0
+        : (salesReturns || [])
+            .filter(
+              sr =>
+                sr.status !== 'REVERSED' &&
+                sr.status !== 'CANCELLED' &&
+                sr.settlementMode === 'BANK_REFUND' &&
+                sr.projectId === p.id
+            )
+            .reduce((s, sr) => s + Number(sr.refundAmount || 0), 0);
+    const collectedRevenue = round2(Math.max(0, baseCollected - fallbackBankRefunds));
+
     const bomEstimatedCost = round2(
       (boms || [])
         .filter(b => b.projectId === p.id)
@@ -1009,7 +1163,12 @@ export function buildProjectCosting(
     );
     const projectBills = (vendorBills || []).filter(b => b.projectId === p.id && b.status !== 'DRAFT');
     const billedPoIds = new Set(projectBills.map(b => b.poId).filter(Boolean) as string[]);
-    const vendorBillsCost = round2(projectBills.reduce((s, b) => s + Number(b.totalAmount || 0), 0));
+    const vendorBillsCost = round2(
+      projectBills.reduce((s, b) => {
+        const ret = Math.max(Number(b.returnedAmount || 0), prByBill.get(b.id) || 0);
+        return s + Math.max(0, Number(b.totalAmount || 0) - ret);
+      }, 0)
+    );
 
     const expensesCost = round2(
       (expenses || [])
@@ -1020,7 +1179,10 @@ export function buildProjectCosting(
     const poCommittedCost = round2(
       (purchaseOrders || [])
         .filter(po => po.projectId === p.id && po.status !== 'CANCELLED' && !billedPoIds.has(po.id))
-        .reduce((s, po) => s + Number(po.totalAmount || 0), 0)
+        .reduce((s, po) => {
+          const ret = Math.max(Number(po.returnedAmount || 0), prByPo.get(po.id) || 0);
+          return s + Math.max(0, Number(po.totalAmount || 0) - ret);
+        }, 0)
     );
 
     const actualTotalCost = round2(vendorBillsCost + expensesCost);

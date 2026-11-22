@@ -191,6 +191,10 @@ export const VendorSalesInvoiceManager: React.FC = () => {
   const [formStatus, setFormStatus] = useState<VendorSalesInvoiceStatus>('ISSUED');
   const [formNotes, setFormNotes] = useState('');
   const [formItems, setFormItems] = useState<DraftLineItem[]>([]);
+  const [formInitialSettlement, setFormInitialSettlement] = useState<'UNPAID' | 'PARTIAL' | 'PAID'>('UNPAID');
+  const [formInitialPaidAmount, setFormInitialPaidAmount] = useState<number>(0);
+  const [formPaymentMode, setFormPaymentMode] = useState('Bank NEFT / RTGS');
+  const [formBankAccountId, setFormBankAccountId] = useState('');
 
   // Line Item Draft Builder controls
   const [draftProductId, setDraftProductId] = useState('');
@@ -411,6 +415,11 @@ export const VendorSalesInvoiceManager: React.FC = () => {
     setFormStatus('ISSUED');
     setFormNotes('');
     setFormItems([]);
+    setFormInitialSettlement('UNPAID');
+    setFormInitialPaidAmount(0);
+    setFormPaymentMode('Bank NEFT / RTGS');
+    const primaryBank = activeBankAccounts.find(b => b.isPrimary) || activeBankAccounts[0];
+    setFormBankAccountId(primaryBank?.id || '');
     resetDraftLineBuilder();
 
     const year = new Date().getFullYear();
@@ -573,7 +582,28 @@ export const VendorSalesInvoiceManager: React.FC = () => {
       ? invoices.find(inv => inv.id === editingInvoiceId)
       : undefined;
 
-    const payload: Partial<VendorSalesInvoice> = {
+    let initialPaidAmount = 0;
+    if (!editingInvoiceId && formStatus !== 'DRAFT' && formInitialSettlement !== 'UNPAID') {
+      if (formInitialSettlement === 'PAID') {
+        initialPaidAmount = liveTotals.totalAmount;
+      } else {
+        if (!Number.isFinite(formInitialPaidAmount) || formInitialPaidAmount <= 0 || formInitialPaidAmount > liveTotals.totalAmount + 0.01) {
+          const msg = `Upfront partial payment must be between ₹0.01 and ${fmtCurrency(liveTotals.totalAmount)}.`;
+          setEditorError(msg);
+          showToast(msg, 'warning');
+          return;
+        }
+        initialPaidAmount = roundCurrency(formInitialPaidAmount);
+      }
+      if (activeBankAccounts.length > 0 && !formBankAccountId) {
+        const msg = 'Please select an active Cash / Bank account for the upfront payment.';
+        setEditorError(msg);
+        showToast(msg, 'warning');
+        return;
+      }
+    }
+
+    const payload: Partial<VendorSalesInvoice> & { paymentMode?: string } = {
       id: editingInvoiceId || undefined,
       invoiceNumber: formInvoiceNumber.trim(),
       vendorId: selectedVendor.id,
@@ -596,12 +626,18 @@ export const VendorSalesInvoiceManager: React.FC = () => {
         editingTarget && editingTarget.paidAmount > 0 && formStatus !== 'DRAFT'
           ? editingTarget.status
           : formStatus,
+      paidAmount: !editingInvoiceId && formStatus !== 'DRAFT' ? initialPaidAmount : undefined,
+      bankAccountId:
+        !editingInvoiceId && initialPaidAmount > 0 ? formBankAccountId || undefined : editingTarget?.bankAccountId,
+      paymentMode: !editingInvoiceId && initialPaidAmount > 0 ? formPaymentMode : undefined,
       items: liveTotals.items
     };
 
     setIsSaving(true);
     try {
       const saved = await storageService.saveVendorSalesInvoiceAsync(payload, Boolean(editingInvoiceId));
+      const latestBanks = await storageService.fetchAccountingBankAccountsAsync().catch(() => []);
+      if (latestBanks.length > 0) setBankAccounts(latestBanks);
       triggerRefresh();
       showToast(
         editingInvoiceId
@@ -1723,6 +1759,97 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Upfront Settlement (Create + Issued only) */}
+              {!editingInvoiceId && formStatus !== 'DRAFT' && (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                      <Landmark className="w-4 h-4 text-amber-600" />
+                      <span>Upfront Payment &amp; Bank Deposit (Optional)</span>
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {(['UNPAID', 'PARTIAL', 'PAID'] as const).map(opt => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => {
+                            setFormInitialSettlement(opt);
+                            if (opt === 'PAID') setFormInitialPaidAmount(liveTotals.totalAmount);
+                            else if (opt === 'PARTIAL' && formInitialPaidAmount <= 0) setFormInitialPaidAmount(roundCurrency(liveTotals.totalAmount * 0.5));
+                            else if (opt === 'UNPAID') setFormInitialPaidAmount(0);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                            formInitialSettlement === opt
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          {opt === 'UNPAID' ? 'Credit / Unpaid' : opt === 'PARTIAL' ? 'Partial Receipt' : 'Fully Paid'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {formInitialSettlement !== 'UNPAID' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Deposit Into Cash / Bank Account *
+                        </label>
+                        <select
+                          required={activeBankAccounts.length > 0}
+                          value={formBankAccountId}
+                          onChange={e => setFormBankAccountId(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                        >
+                          {activeBankAccounts.length === 0 && (
+                            <option value="">Default Cash / Bank Ledger</option>
+                          )}
+                          {activeBankAccounts.map(acc => (
+                            <option key={acc.id} value={acc.id}>
+                              {acc.accountName} ({acc.accountType}) — Bal: {fmtCurrency(acc.currentBalance)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          {formInitialSettlement === 'PAID' ? 'Full Payment (₹)' : 'Partial Amount (₹) *'}
+                        </label>
+                        <input
+                          type="number"
+                          min={0.01}
+                          max={Math.max(0.01, liveTotals.totalAmount)}
+                          step="0.01"
+                          disabled={formInitialSettlement === 'PAID'}
+                          required
+                          value={formInitialSettlement === 'PAID' ? liveTotals.totalAmount : formInitialPaidAmount}
+                          onChange={e => setFormInitialPaidAmount(Number(e.target.value))}
+                          className="w-full px-3 py-2 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg disabled:bg-slate-100"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Payment Mode
+                        </label>
+                        <select
+                          value={formPaymentMode}
+                          onChange={e => setFormPaymentMode(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                        >
+                          <option value="Bank NEFT / RTGS">Bank NEFT / RTGS</option>
+                          <option value="UPI">UPI</option>
+                          <option value="Cheque">Cheque</option>
+                          <option value="Cash">Cash</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
                 <button

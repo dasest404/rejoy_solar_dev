@@ -6,7 +6,9 @@ import {
   PaymentRecord,
   BillOfMaterials,
   PurchaseOrder,
-  ExpenseRecord
+  ExpenseRecord,
+  SalesReturn,
+  PurchaseReturn
 } from '../../types/solar';
 import { buildProjectCosting, formatINR, round2, ProjectCostingRow, downloadCsv } from './accountingUtils';
 import { Search, Download, AlertTriangle, X } from 'lucide-react';
@@ -19,6 +21,8 @@ interface ProjectCostingTabProps {
   boms: BillOfMaterials[];
   purchaseOrders: PurchaseOrder[];
   expenses: ExpenseRecord[];
+  salesReturns?: SalesReturn[];
+  purchaseReturns?: PurchaseReturn[];
 }
 
 export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
@@ -28,7 +32,9 @@ export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
   payments,
   boms,
   purchaseOrders,
-  expenses
+  expenses,
+  salesReturns = [],
+  purchaseReturns = []
 }) => {
   const [search, setSearch] = useState('');
   const [selectedRow, setSelectedRow] = useState<ProjectCostingRow | null>(null);
@@ -43,9 +49,11 @@ export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
         purchaseOrders,
         workspace.vendorBills,
         expenses,
-        workspace.budgets
+        workspace.budgets,
+        salesReturns,
+        purchaseReturns
       ),
-    [projects, salesInvoices, payments, boms, purchaseOrders, workspace.vendorBills, expenses, workspace.budgets]
+    [projects, salesInvoices, payments, boms, purchaseOrders, workspace.vendorBills, expenses, workspace.budgets, salesReturns, purchaseReturns]
   );
 
   const filtered = useMemo(() => {

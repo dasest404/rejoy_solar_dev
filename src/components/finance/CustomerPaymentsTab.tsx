@@ -82,10 +82,16 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
       .filter(inv => inv.status !== 'CANCELLED' && inv.status !== 'DRAFT')
       .map(inv => {
         const paid = Number(inv.paidAmount ?? paidByInv.get(inv.id) ?? 0);
+        const returned = Number(inv.returnedAmount || 0);
+        const refunded = Number(inv.refundedAmount || 0);
+        const netPaid = Math.max(0, round2(paid - refunded));
         const total = Number(inv.totalAmount || 0);
-        const balance = inv.balanceAmount != null ? Number(inv.balanceAmount) : Math.max(0, round2(total - paid));
+        const balance =
+          inv.balanceAmount != null
+            ? Number(inv.balanceAmount)
+            : Math.max(0, round2(total - returned - netPaid));
         const isOverdue = balance > 0.01 && (inv.dueDate || '') < today;
-        const payStatus = balance <= 0.01 ? 'PAID' : isOverdue ? 'OVERDUE' : paid > 0 ? 'PARTIAL' : 'UNPAID';
+        const payStatus = balance <= 0.01 ? 'PAID' : isOverdue ? 'OVERDUE' : netPaid > 0 ? 'PARTIAL' : 'UNPAID';
         return { inv, paid, balance, isOverdue, payStatus };
       });
   }, [salesInvoices, payments, today]);
@@ -225,6 +231,28 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
     if (!form.customerName.trim() || Number(form.amount) <= 0) {
       setErrorMsg('Customer name and a positive receipt amount are required.');
       return;
+    }
+    const activeBanks = workspace.bankAccounts.filter(b => b.isActive);
+    if (activeBanks.length > 0 && !form.bankAccountId) {
+      setErrorMsg('Please select an active Cash / Bank account to deposit this receipt.');
+      return;
+    }
+    if (form.invoiceId) {
+      const targetRow = invoiceRows.find(r => r.inv.id === form.invoiceId);
+      if (targetRow) {
+        const origReceipt = editingReceiptId ? payments.find(p => p.id === editingReceiptId) : undefined;
+        const prevLinkedAmt =
+          origReceipt && origReceipt.invoiceId === form.invoiceId && origReceipt.status === 'PAID'
+            ? Number(origReceipt.amount || 0)
+            : 0;
+        const maxAllowed = round2(targetRow.balance + prevLinkedAmt);
+        if (round2(Number(form.amount)) > maxAllowed + 0.01) {
+          setErrorMsg(
+            `Receipt amount (${formatINR(Number(form.amount))}) cannot exceed remaining invoice balance (${formatINR(maxAllowed)}).`
+          );
+          return;
+        }
+      }
     }
     setSaving(true);
     try {

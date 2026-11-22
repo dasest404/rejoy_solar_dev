@@ -127,6 +127,14 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
   const openBillFromPo = (po?: PurchaseOrder) => {
     setBillError(null);
     if (po) {
+      if (billedPoIds.has(po.id)) {
+        showToast(`Purchase Order ${po.purchaseNumber} has already been converted to a Vendor Bill.`, 'warning');
+        return;
+      }
+      const poReturnNote =
+        Number(po.returnedAmount || 0) > 0
+          ? ` (Note: PO has ${formatINR(Number(po.returnedAmount || 0))} purchase return recorded — verify quantities)`
+          : '';
       setBillForm({
         id: '',
         billNumber: `BILL-${po.purchaseNumber}`,
@@ -141,7 +149,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
         tdsRate: 0,
         itcEligible: true,
         expenseAccountId: 'acc-5010',
-        notes: `Converted from Purchase Order ${po.purchaseNumber}`
+        notes: `Converted from Purchase Order ${po.purchaseNumber}${poReturnNote}`
       });
       const items: VendorBillLineItem[] = (po.items || []).map((it, idx) => {
         const qty = Number(it.orderedQuantity || it.quantity || 1);
@@ -355,6 +363,23 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
     e.preventDefault();
     if (!payTargetBill || savingPayment) return;
     setPayError(null);
+    const grossAmt = round2(Number(payForm.amount || 0));
+    const tdsAmt = round2(Number(payForm.tdsDeducted || 0));
+    const activeBanks = workspace.bankAccounts.filter(b => b.isActive);
+    if (activeBanks.length > 0 && !payForm.bankAccountId) {
+      setPayError('Please select an active Bank / Cash account for this disbursement.');
+      return;
+    }
+    if (grossAmt <= 0 || grossAmt > round2(Number(payTargetBill.balanceAmount || 0)) + 0.01) {
+      setPayError(
+        `Settlement amount must be between ₹0.01 and remaining bill balance (${formatINR(payTargetBill.balanceAmount)}).`
+      );
+      return;
+    }
+    if (tdsAmt < 0 || tdsAmt > grossAmt) {
+      setPayError('TDS deducted cannot be negative or exceed the gross settlement amount.');
+      return;
+    }
     setSavingPayment(true);
     try {
       await apiClient.recordVendorPayment({
@@ -547,7 +572,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </button>
-                          {canManage && b.paidAmount === 0 && (
+                          {canManage && Number(b.paidAmount || 0) === 0 && Number(b.returnedAmount || 0) === 0 && (
                             <button
                               type="button"
                               onClick={() => openEditBill(b)}
@@ -566,7 +591,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                               Pay
                             </button>
                           )}
-                          {canManage && b.paidAmount === 0 && (
+                          {canManage && Number(b.paidAmount || 0) === 0 && Number(b.returnedAmount || 0) === 0 && (
                             confirmDeleteId === b.id ? (
                               <button
                                 type="button"
@@ -1213,7 +1238,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
               )}
 
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                {canManage && viewBill.paidAmount === 0 && (
+                {canManage && Number(viewBill.paidAmount || 0) === 0 && Number(viewBill.returnedAmount || 0) === 0 && (
                   <button
                     type="button"
                     onClick={() => {

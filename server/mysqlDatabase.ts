@@ -5338,7 +5338,7 @@ class MySqlDatabaseManager {
     return mapped;
   }
 
-  public async savePurchaseOrder(item: any): Promise<any> {
+  public async savePurchaseOrder(item: any, actor?: any): Promise<any> {
     this.assertDbConnected();
     const id = item.id || `po-${Date.now()}`;
     const existing = await this.getExistingRow('solar_purchase_orders', id);
@@ -5366,15 +5366,20 @@ class MySqlDatabaseManager {
     const gstAmount = roundCurrency(Number(item.taxAmount ?? item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0);
     const totalAmount = roundCurrency(Number(item.totalAmount ?? item.grandTotal ?? item.total_amount ?? existing?.total_amount) || (subtotal + gstAmount));
     const status = item.status ?? existing?.status ?? 'ISSUED';
-    const paidAmount = roundCurrency(Number(existing ? existing.paid_amount : (item.paidAmount ?? 0)) || 0);
     const returnedAmount = roundCurrency(Number(existing?.returned_amount ?? item.returnedAmount ?? 0) || 0);
     const refundedAmount = roundCurrency(Number(existing?.refunded_amount ?? item.refundedAmount ?? 0) || 0);
-    const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
+    const existingPaid = roundCurrency(Number(existing?.paid_amount || 0));
+    const requestedPayStatus = String(item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'PENDING').toUpperCase();
+    const rawReqPaid = Number(item.paidAmount ?? (requestedPayStatus === 'PAID' ? totalAmount : 0)) || 0;
+    const initialPayToRecord = !existing && status !== 'CANCELLED' && status !== 'DRAFT' && rawReqPaid > 0.01
+      ? roundCurrency(Math.min(totalAmount, rawReqPaid))
+      : 0;
+    const storedPaid = existing ? existingPaid : 0;
+    const netPaid = roundCurrency(Math.max(0, storedPaid - refundedAmount));
     const balanceAmount = roundCurrency(Math.max(0, totalAmount - returnedAmount - netPaid));
-    const requestedPayStatus = item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'PENDING';
-    const paymentStatus = existing && (paidAmount > 0 || returnedAmount > 0)
-      ? (balanceAmount <= 0.01 && totalAmount > 0 ? 'PAID' : (netPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING'))
-      : requestedPayStatus;
+    const paymentStatus = totalAmount > 0 && balanceAmount <= 0.01
+      ? 'PAID'
+      : (netPaid > 0.01 ? 'PARTIALLY_PAID' : 'PENDING');
     const bankAccountId = String(item.bankAccountId ?? existing?.bank_account_id ?? '').trim();
     const rawReceipts = item.deliveryReceipts ?? item.receipts ?? (existing?.receipts_json ? JSON.parse(existing.receipts_json) : []);
     const receiptsArr = typeof rawReceipts === 'string' ? JSON.parse(rawReceipts) : rawReceipts;
@@ -5413,9 +5418,35 @@ class MySqlDatabaseManager {
       warehouseId, warehouseName, paymentDueDate,
       invoiceReference, stockUpdated, receivedDate,
       itemsJson, subtotal, gstAmount, totalAmount,
-      paidAmount, returnedAmount, refundedAmount, balanceAmount, bankAccountId,
+      storedPaid, returnedAmount, refundedAmount, balanceAmount, bankAccountId,
       status, paymentStatus, receiptsJson, notes
     ]);
+
+    if (initialPayToRecord > 0.01) {
+      const effectiveBankId = await accountingService.resolveBankAccountIdOrPrimary(this.pool!, bankAccountId, item.paymentMode);
+      if (!effectiveBankId) {
+        const err: any = new Error('Please configure or select an active Cash/Bank account to record this PO payment.');
+        err.statusCode = 400;
+        throw err;
+      }
+      await accountingService.recordPurchaseOrderPayment(
+        this.pool!,
+        id,
+        {
+          amount: initialPayToRecord,
+          tdsDeducted: Number(item.tdsDeducted || 0),
+          tdsSection: item.tdsSection || '194C',
+          paymentDate: poDate,
+          paymentMode: item.paymentMode || 'Bank NEFT/RTGS',
+          bankAccountId: effectiveBankId,
+          referenceNo: item.referenceNo || '',
+          notes: 'Initial payment recorded on Purchase Order creation'
+        },
+        actor
+      );
+      const fresh = (await this.getPurchaseOrders()).find(p => p.id === id);
+      if (fresh) return fresh;
+    }
 
     const saved = {
       ...item,
@@ -5442,7 +5473,7 @@ class MySqlDatabaseManager {
       gstAmount,
       totalAmount,
       grandTotal: totalAmount,
-      paidAmount,
+      paidAmount: storedPaid,
       returnedAmount,
       refundedAmount,
       balanceAmount,
@@ -5473,13 +5504,15 @@ class MySqlDatabaseManager {
     }
     const [vbRows]: any = await this.pool!.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `po_id` = ? LIMIT 1', [id]).catch(() => [[]]);
     if (vbRows?.[0]) {
-      if (Number(vbRows[0].paid_amount || 0) > 0) {
+      const [vpRows]: any = await this.pool!.query('SELECT COUNT(*) AS cnt FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?', [vbRows[0].id]).catch(() => [[{ cnt: 0 }]]);
+      if (Number(vbRows[0].paid_amount || 0) > 0 || Number(vpRows?.[0]?.cnt || 0) > 0) {
         const err: any = new Error('Cannot delete Purchase Order with vendor payments recorded. Reverse vendor payments first.');
         err.statusCode = 400;
         throw err;
       }
       if (vbRows[0].journal_entry_id) {
         await this.pool!.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [vbRows[0].journal_entry_id]).catch(() => {});
+        await accountingService.recalculateAccountBalances(this.pool!).catch(() => {});
       }
       await this.pool!.query('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?', [vbRows[0].id]).catch(() => {});
     }
@@ -5726,15 +5759,25 @@ class MySqlDatabaseManager {
     const returnedAmount = roundCurrency(Number(existing?.returned_amount ?? item.returnedAmount ?? 0) || 0);
     const refundedAmount = roundCurrency(Number(existing?.refunded_amount ?? item.refundedAmount ?? 0) || 0);
     const bankAccountId = String(item.bankAccountId ?? existing?.bank_account_id ?? '').trim();
-    const status = String(item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'ISSUED');
-    const paidAmount = roundCurrency(Number(item.amountPaid ?? item.paidAmount ?? item.paid_amount ?? existing?.paid_amount) || 0);
-    const netPaid = roundCurrency(Math.max(0, paidAmount - refundedAmount));
-    const rawBal = item.balanceDue ?? item.balanceAmount ?? item.balance_amount;
-    const balanceAmount = roundCurrency(
-      rawBal !== undefined && rawBal !== null && !returnedAmount
-        ? Math.max(0, Number(rawBal) || 0)
-        : (status === 'PAID' && returnedAmount <= 0 ? 0 : Math.max(0, totalAmount - returnedAmount - netPaid))
-    );
+    const requestedStatus = String(item.status ?? item.paymentStatus ?? item.payment_status ?? existing?.payment_status ?? 'ISSUED').toUpperCase();
+    const existingPaid = roundCurrency(Number(existing?.paid_amount || 0));
+    const rawRequestedPaid = Number(item.amountPaid ?? item.paidAmount ?? item.paid_amount ?? (requestedStatus === 'PAID' ? totalAmount : existingPaid)) || 0;
+    const requestedPaid = (requestedStatus === 'DRAFT' || requestedStatus === 'CANCELLED')
+      ? existingPaid
+      : roundCurrency(Math.min(totalAmount, rawRequestedPaid));
+
+    const netExistingPaid = roundCurrency(Math.max(0, existingPaid - refundedAmount));
+    const maxPayableRemaining = roundCurrency(Math.max(0, totalAmount - returnedAmount - netExistingPaid));
+    const paymentDelta = (requestedStatus !== 'DRAFT' && requestedStatus !== 'CANCELLED' && requestedPaid > existingPaid + 0.01)
+      ? roundCurrency(Math.min(maxPayableRemaining, requestedPaid - existingPaid))
+      : 0;
+
+    const storedPaid = existingPaid;
+    const storedBalance = roundCurrency(Math.max(0, totalAmount - returnedAmount - netExistingPaid));
+    const baseStatus = (requestedStatus === 'DRAFT' || requestedStatus === 'CANCELLED')
+      ? requestedStatus
+      : (totalAmount > 0 && storedBalance <= 0.01 ? 'PAID' : (netExistingPaid > 0.01 ? 'PARTIAL' : 'ISSUED'));
+    const status = baseStatus;
     const ewayBillNumber = item.ewayBillNumber ?? item.eway_bill_number ?? existing?.eway_bill_number ?? '';
     const ewayObj = item.ewayBillDetails !== undefined ? item.ewayBillDetails : (existing?.eway_bill_details_json ? JSON.parse(existing.eway_bill_details_json) : null);
     const ewayBillDetailsJson = ewayObj ? JSON.stringify(ewayObj) : null;
@@ -5805,12 +5848,44 @@ class MySqlDatabaseManager {
       invoiceDate, dueDate, paymentTerms, itemsJson, subtotal, gstAmount,
       cgstAmount, sgstAmount, igstAmount,
       einvoiceIrn, einvoiceAckNo, einvoiceAckDate, einvoiceStatus,
-      totalAmount, status, paidAmount, returnedAmount, refundedAmount, balanceAmount, bankAccountId,
+      totalAmount, baseStatus, storedPaid, returnedAmount, refundedAmount, storedBalance, bankAccountId,
       ewayBillNumber, ewayBillDetailsJson, warehouseId, deductStock, stockDeducted, notes
     ]);
 
-    if (status !== 'DRAFT' && status !== 'CANCELLED' && totalAmount > 0) {
+    if (existing && existingPaid === 0 && returnedAmount === 0) {
+      await this.pool!.query(
+        "DELETE FROM `solar_acc_journal_entries` WHERE `reference_type` = 'SALES_INVOICE' AND `reference_id` = ? AND `status` = 'POSTED'",
+        [id]
+      ).catch(() => {});
+      await accountingService.recalculateAccountBalances(this.pool!).catch(() => {});
+    }
+
+    if (baseStatus !== 'DRAFT' && baseStatus !== 'CANCELLED' && totalAmount > 0) {
       await accountingService.ensureSalesInvoiceJournal(this.pool!, id, actor).catch(() => {});
+    }
+
+    if (paymentDelta > 0.01) {
+      const effectiveBankId = await accountingService.resolveBankAccountIdOrPrimary(this.pool!, bankAccountId, item.paymentMode);
+      if (!effectiveBankId) {
+        const err: any = new Error('Please configure or select an active Cash/Bank account to record this invoice payment.');
+        err.statusCode = 400;
+        throw err;
+      }
+      await accountingService.recordSalesInvoicePayment(
+        this.pool!,
+        id,
+        {
+          amount: paymentDelta,
+          paymentDate: invoiceDate,
+          paymentMode: item.paymentMode || 'Bank NEFT/RTGS',
+          bankAccountId: effectiveBankId,
+          referenceNo: item.transactionReference || item.referenceNo || '',
+          notes: existing ? 'Payment recorded on invoice update' : 'Initial payment recorded on invoice creation'
+        },
+        actor
+      );
+      const fresh = (await this.getSalesInvoices()).find(i => i.id === id);
+      if (fresh) return fresh;
     }
 
     const saved = {
@@ -5842,12 +5917,12 @@ class MySqlDatabaseManager {
       grandTotal: totalAmount,
       status,
       paymentStatus: status,
-      paidAmount,
-      amountPaid: paidAmount,
+      paidAmount: storedPaid,
+      amountPaid: storedPaid,
       returnedAmount,
       refundedAmount,
-      balanceAmount,
-      balanceDue: balanceAmount,
+      balanceAmount: storedBalance,
+      balanceDue: storedBalance,
       bankAccountId,
       ewayBillNumber,
       ewayBillDetails: ewayObj || undefined,
@@ -5887,6 +5962,7 @@ class MySqlDatabaseManager {
       "DELETE FROM `solar_acc_journal_entries` WHERE `reference_type` = 'SALES_INVOICE' AND `reference_id` = ?",
       [id]
     ).catch(() => {});
+    await accountingService.recalculateAccountBalances(this.pool!).catch(() => {});
     await this.pool!.query('DELETE FROM `solar_sales_invoices` WHERE `id` = ?', [id]);
     const items = this.getFallbackItems('sales_invoices').filter(i => i.id !== id);
     this.setFallbackItems('sales_invoices', items);
@@ -6427,7 +6503,7 @@ class MySqlDatabaseManager {
       }
 
       if (initialPayToRecord > 0) {
-        const effectiveBankId = bankAccountId || 'bank-main-current';
+        const effectiveBankId = await accountingService.resolveBankAccountIdOrPrimary(this.pool!, bankAccountId, item.paymentMode);
         await accountingService.recordVendorSalesInvoicePayment(
           this.pool!,
           id,

@@ -3067,6 +3067,13 @@ class StorageService {
       nextList.unshift(committed);
     }
     this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, nextList);
+
+    const committedPaid = Number((committed as any).paidAmount || 0);
+    if (committedPaid > 0.01) {
+      const projects = await apiClient.getProjects().catch(() => null);
+      if (Array.isArray(projects)) this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
+    }
+
     this.notifyStorageUpdated();
     return committed;
   }
@@ -3795,6 +3802,22 @@ class StorageService {
       nextInvoices.unshift(committedInvoice);
     }
     this.memStore.set(STORAGE_KEYS.SALES_INVOICES, nextInvoices);
+
+    const requestedPaid = Number((invoice as any).paidAmount || (invoice as any).amountPaid || 0);
+    const prevPaid = Number(existingInv?.paidAmount || 0);
+    if (
+      committedInvoice.status !== 'DRAFT' &&
+      committedInvoice.status !== 'CANCELLED' &&
+      (requestedPaid > prevPaid + 0.01 || committedInvoice.status === 'PAID' || committedInvoice.status === 'PARTIAL')
+    ) {
+      const [payments, projects] = await Promise.all([
+        apiClient.getPayments().catch(() => null),
+        apiClient.getProjects().catch(() => null)
+      ]);
+      if (Array.isArray(payments)) this.memStore.set(STORAGE_KEYS.PAYMENTS, payments);
+      if (Array.isArray(projects)) this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
+    }
+
     this.notifyStorageUpdated();
     return committedInvoice;
   }
@@ -3971,8 +3994,12 @@ class StorageService {
     }
   ): Promise<any> {
     const res = await apiClient.recordPurchaseOrderPayment(poId, payment);
-    const orders = await apiClient.getPurchaseOrders().catch(() => null);
+    const [orders, projects] = await Promise.all([
+      apiClient.getPurchaseOrders().catch(() => null),
+      apiClient.getProjects().catch(() => null)
+    ]);
     if (Array.isArray(orders)) this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, orders);
+    if (Array.isArray(projects)) this.memStore.set(STORAGE_KEYS.PROJECTS, projects);
     this.notifyStorageUpdated();
     return res;
   }

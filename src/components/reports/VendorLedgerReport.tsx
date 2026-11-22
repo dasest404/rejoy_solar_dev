@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Vendor, PurchaseOrder } from '../../types/solar';
+import { Vendor, PurchaseOrder, VendorBill, VendorPayment, PurchaseReturn, VendorSalesInvoice } from '../../types/solar';
 import { ReportFilterState, ReportCategoryMeta } from '../../types/reports';
 import { exportToCSV } from '../../services/exportImport';
 import { ReportFilterBar } from './ReportFilterBar';
@@ -16,6 +16,10 @@ import {
 interface VendorLedgerReportProps {
   vendors: Vendor[];
   purchaseOrders: PurchaseOrder[];
+  vendorBills?: VendorBill[];
+  vendorPayments?: VendorPayment[];
+  purchaseReturns?: PurchaseReturn[];
+  vendorSalesInvoices?: VendorSalesInvoice[];
   filters: ReportFilterState;
   onFilterChange: (updated: Partial<ReportFilterState>) => void;
   onFilterReset: () => void;
@@ -26,15 +30,23 @@ interface VendorLedgerReportProps {
 interface VendorLedgerEntry {
   vendor: Vendor;
   totalBilled: number;
+  totalReturned: number;
   totalPaid: number;
   balanceDue: number;
   poCount: number;
   orders: PurchaseOrder[];
+  bills: VendorBill[];
+  returns: PurchaseReturn[];
 }
+
+const round2 = (n: number): number => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 
 export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
   vendors,
   purchaseOrders,
+  vendorBills = [],
+  vendorPayments = [],
+  purchaseReturns = [],
   filters,
   onFilterChange,
   onFilterReset,
@@ -45,47 +57,120 @@ export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
 
   const ledgerData: VendorLedgerEntry[] = useMemo(() => {
     return vendors.map(v => {
+      const vNameLower = v.name.trim().toLowerCase();
       const orders = purchaseOrders.filter(
-        po => po.vendorId === v.id || po.vendorName.toLowerCase() === v.name.toLowerCase()
+        po => po.vendorId === v.id || po.vendorName.trim().toLowerCase() === vNameLower
+      );
+      const bills = (vendorBills || []).filter(
+        b => b.status !== 'DRAFT' && (b.vendorId === v.id || b.vendorName.trim().toLowerCase() === vNameLower)
+      );
+      const returns = (purchaseReturns || []).filter(
+        pr =>
+          pr.status !== 'REVERSED' &&
+          pr.status !== 'CANCELLED' &&
+          (pr.vendorId === v.id || pr.vendorName.trim().toLowerCase() === vNameLower)
+      );
+      const vPayments = (vendorPayments || []).filter(
+        vp => vp.vendorId === v.id || vp.vendorName.trim().toLowerCase() === vNameLower
       );
 
-      let totalBilled = 0;
-      let totalPaid = 0;
+      const billedPoIds = new Set(bills.map(b => b.poId).filter(Boolean) as string[]);
 
-      orders.forEach(po => {
-        if (po.status !== 'CANCELLED') {
-          totalBilled += po.totalAmount;
-          if (po.paymentStatus === 'PAID') {
-            totalPaid += po.totalAmount;
-          } else if (po.paymentStatus === 'PARTIALLY_PAID') {
-            totalPaid += Math.round(po.totalAmount * 0.5); // 50% paid on partial
-          }
-        }
+      let grossBilled = 0;
+      let totalReturned = 0;
+      let grossPaid = 0;
+      let totalRefunded = 0;
+      let balanceDue = 0;
+
+      // 1. Vendor Bills (authoritative AP when PO converted or standalone bill exists)
+      bills.forEach(bill => {
+        const amt = round2(Number(bill.totalAmount || 0));
+        const ret = round2(Number(bill.returnedAmount || 0));
+        const paid = round2(Number(bill.paidAmount || 0));
+        const refunded = round2(Number(bill.refundedAmount || 0));
+        const bal =
+          bill.balanceAmount != null
+            ? round2(Number(bill.balanceAmount))
+            : round2(Math.max(0, amt - ret - Math.max(0, paid - refunded)));
+
+        grossBilled = round2(grossBilled + amt);
+        totalReturned = round2(totalReturned + ret);
+        grossPaid = round2(grossPaid + paid);
+        totalRefunded = round2(totalRefunded + refunded);
+        balanceDue = round2(balanceDue + bal);
       });
 
-      const balanceDue = Math.max(0, totalBilled - totalPaid);
+      // 2. Active Unbilled Purchase Orders using exact MySQL paidAmount, returnedAmount, refundedAmount, balanceAmount
+      orders.forEach(po => {
+        if (po.status === 'CANCELLED' || billedPoIds.has(po.id)) return;
+        const amt = round2(Number(po.totalAmount || 0));
+        const ret = round2(Number(po.returnedAmount || 0));
+        const paid = round2(
+          po.paidAmount != null
+            ? Number(po.paidAmount)
+            : po.paymentStatus === 'PAID'
+            ? Math.max(0, amt - ret)
+            : 0
+        );
+        const refunded = round2(Number(po.refundedAmount || 0));
+        const netPaidOnPo = Math.max(0, round2(paid - refunded));
+        const bal =
+          po.balanceAmount != null
+            ? round2(Number(po.balanceAmount))
+            : po.paymentStatus === 'PAID'
+            ? 0
+            : round2(Math.max(0, amt - ret - netPaidOnPo));
+
+        grossBilled = round2(grossBilled + amt);
+        totalReturned = round2(totalReturned + ret);
+        grossPaid = round2(grossPaid + paid);
+        totalRefunded = round2(totalRefunded + refunded);
+        balanceDue = round2(balanceDue + bal);
+      });
+
+      // Ensure totalReturned captures posted purchaseReturns even if bill/po cached column wasn't refreshed
+      const sumReturnsDocs = round2(returns.reduce((s, r) => s + Number(r.totalAmount || 0), 0));
+      if (sumReturnsDocs > totalReturned) {
+        totalReturned = sumReturnsDocs;
+      }
+      const sumBillPayDocs = round2(vPayments.reduce((s, p) => s + Number(p.amount || 0), 0));
+      if (bills.length > 0 && sumBillPayDocs > grossPaid) {
+        grossPaid = sumBillPayDocs;
+      }
+
+      const totalBilled = round2(Math.max(0, grossBilled - totalReturned));
+      const totalPaid = round2(Math.max(0, grossPaid - totalRefunded));
 
       return {
         vendor: v,
         totalBilled,
+        totalReturned,
         totalPaid,
         balanceDue,
-        poCount: orders.length,
-        orders
+        poCount: orders.length + bills.filter(b => !b.poId).length,
+        orders,
+        bills,
+        returns
       };
     });
-  }, [vendors, purchaseOrders]);
+  }, [vendors, purchaseOrders, vendorBills, vendorPayments, purchaseReturns]);
 
   const filteredLedger = useMemo(() => {
     return ledgerData.filter(item => {
-      // Date filter on order dates
+      // Date filter on order or bill dates
       if (filters.fromDate || filters.toDate) {
-        const hasMatchingOrder = item.orders.some(o => {
-          if (filters.fromDate && o.purchaseDate < filters.fromDate) return false;
-          if (filters.toDate && o.purchaseDate > filters.toDate) return false;
-          return true;
-        });
-        if (item.orders.length > 0 && !hasMatchingOrder) return false;
+        const hasMatchingOrder =
+          item.orders.some(o => {
+            if (filters.fromDate && o.purchaseDate < filters.fromDate) return false;
+            if (filters.toDate && o.purchaseDate > filters.toDate) return false;
+            return true;
+          }) ||
+          item.bills.some(b => {
+            if (filters.fromDate && b.billDate < filters.fromDate) return false;
+            if (filters.toDate && b.billDate > filters.toDate) return false;
+            return true;
+          });
+        if ((item.orders.length > 0 || item.bills.length > 0) && !hasMatchingOrder) return false;
       }
 
       // Name filter
@@ -99,10 +184,12 @@ export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
 
       // Status filter
       if (filters.status && filters.status !== 'ALL') {
-        if (filters.status === 'PENDING' && item.balanceDue <= 0) return false;
-        if (filters.status === 'PAID' && item.balanceDue > 0) return false;
+        if (filters.status === 'PENDING' && item.balanceDue <= 0.01) return false;
+        if (filters.status === 'PAID' && item.balanceDue > 0.01) return false;
         if (filters.status === 'PARTIALLY_PAID') {
-          const hasPartial = item.orders.some(o => o.paymentStatus === 'PARTIALLY_PAID');
+          const hasPartial =
+            item.orders.some(o => o.paymentStatus === 'PARTIALLY_PAID') ||
+            item.bills.some(b => b.status === 'PARTIAL');
           if (!hasPartial) return false;
         }
       }
@@ -112,10 +199,10 @@ export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
   }, [ledgerData, filters]);
 
   // Aggregate KPIs
-  const totalPayablesDue = filteredLedger.reduce((sum, l) => sum + l.balanceDue, 0);
-  const totalDisbursed = filteredLedger.reduce((sum, l) => sum + l.totalPaid, 0);
-  const totalProcurement = filteredLedger.reduce((sum, l) => sum + l.totalBilled, 0);
-  const pendingVendorsCount = filteredLedger.filter(l => l.balanceDue > 0).length;
+  const totalPayablesDue = round2(filteredLedger.reduce((sum, l) => sum + l.balanceDue, 0));
+  const totalDisbursed = round2(filteredLedger.reduce((sum, l) => sum + l.totalPaid, 0));
+  const totalProcurement = round2(filteredLedger.reduce((sum, l) => sum + l.totalBilled, 0));
+  const pendingVendorsCount = filteredLedger.filter(l => l.balanceDue > 0.01).length;
 
   const vendorSummaryChartData = useMemo(() => {
     return [
@@ -131,8 +218,9 @@ export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
       'Contact Person',
       'Phone',
       'GSTIN',
-      'Total Billed (INR)',
-      'Total Disbursed (INR)',
+      'Net Billed (INR)',
+      'Purchase Returns (INR)',
+      'Net Disbursed (INR)',
       'Net Balance Due (INR)',
       'Account Status'
     ];
@@ -143,9 +231,10 @@ export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
       l.vendor.phone,
       l.vendor.gstNumber || 'N/A',
       l.totalBilled,
+      l.totalReturned,
       l.totalPaid,
       l.balanceDue,
-      l.balanceDue <= 0 ? 'Settled' : 'Pending Payment'
+      l.balanceDue <= 0.01 ? 'Settled' : 'Pending Payment'
     ]);
     exportToCSV(`SolarPulse_Vendor_Ledger_${new Date().toISOString().slice(0, 10)}`, headers, rows);
     showToast('Vendor ledger exported to CSV', 'success');
@@ -330,79 +419,165 @@ export const VendorLedgerReport: React.FC<VendorLedgerReportProps> = ({
                           ₹{item.totalPaid.toLocaleString('en-IN')}
                         </td>
                         <td className="py-3.5 px-4 text-right font-mono font-bold whitespace-nowrap">
-                          <span className={item.balanceDue > 0 ? 'text-rose-700' : 'text-slate-700'}>
+                          <span className={item.balanceDue > 0.01 ? 'text-rose-700' : 'text-slate-700'}>
                             ₹{item.balanceDue.toLocaleString('en-IN')}
                           </span>
                         </td>
                         <td className="py-3.5 px-4 text-center">
                           <span
                             className={`inline-block px-2.5 py-1 rounded-md text-[10px] font-bold border ${
-                              item.balanceDue <= 0
+                              item.balanceDue <= 0.01
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                 : 'bg-rose-50 text-rose-700 border-rose-200'
                             }`}
                           >
-                            {item.balanceDue <= 0 ? 'Settled' : 'Pending Due'}
+                            {item.balanceDue <= 0.01 ? 'Settled' : 'Pending Due'}
                           </span>
                         </td>
                       </tr>
 
-                      {/* Expanded Orders List */}
+                      {/* Expanded Orders, Bills & Returns List */}
                       {isExpanded && (
                         <tr className="bg-slate-50/50">
                           <td colSpan={9} className="p-4 sm:p-6">
-                            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
-                              <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3">
-                                Purchase Orders & Dues: {item.vendor.name}
-                              </h4>
+                            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-4">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                                  Purchase Orders, Bills & Returns: {item.vendor.name}
+                                </h4>
+                                {item.totalReturned > 0 && (
+                                  <span className="text-[11px] font-mono font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                                    Purchase Returns (Debit Notes): ₹{item.totalReturned.toLocaleString('en-IN')}
+                                  </span>
+                                )}
+                              </div>
 
-                              {item.orders.length === 0 ? (
+                              {item.orders.length === 0 && item.bills.length === 0 && item.returns.length === 0 ? (
                                 <p className="text-xs text-slate-400 py-3 text-center">
-                                  No purchase orders logged for this supplier yet.
+                                  No purchase orders, vendor bills, or returns logged for this supplier yet.
                                 </p>
                               ) : (
-                                <table className="w-full text-left text-xs border-collapse">
-                                  <thead>
-                                    <tr className="border-b border-slate-200 text-slate-400 text-[10px] uppercase font-bold">
-                                      <th className="py-2">PO #</th>
-                                      <th className="py-2">Date</th>
-                                      <th className="py-2">Project / Purpose</th>
-                                      <th className="py-2 text-right">Order Amount</th>
-                                      <th className="py-2 text-center">Order Status</th>
-                                      <th className="py-2 text-center">Payment Status</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100">
-                                    {item.orders.map(po => (
-                                      <tr key={po.id} className="hover:bg-slate-50">
-                                        <td className="py-2 font-mono font-bold text-slate-900">{po.purchaseNumber}</td>
-                                        <td className="py-2 text-slate-600">{po.purchaseDate}</td>
-                                        <td className="py-2 text-slate-700">{po.projectTitle || 'Central Storage'}</td>
-                                        <td className="py-2 text-right font-mono font-bold text-slate-900">
-                                          ₹{po.totalAmount.toLocaleString('en-IN')}
-                                        </td>
-                                        <td className="py-2 text-center">
-                                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
-                                            {po.status}
-                                          </span>
-                                        </td>
-                                        <td className="py-2 text-center">
-                                          <span
-                                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                              po.paymentStatus === 'PAID'
-                                                ? 'bg-emerald-100 text-emerald-800'
-                                                : po.paymentStatus === 'PARTIALLY_PAID'
-                                                ? 'bg-amber-100 text-amber-800'
-                                                : 'bg-rose-100 text-rose-800'
-                                            }`}
-                                          >
-                                            {po.paymentStatus}
-                                          </span>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                <div className="space-y-4">
+                                  {item.orders.length > 0 && (
+                                    <table className="w-full text-left text-xs border-collapse">
+                                      <thead>
+                                        <tr className="border-b border-slate-200 text-slate-400 text-[10px] uppercase font-bold">
+                                          <th className="py-2">PO #</th>
+                                          <th className="py-2">Date</th>
+                                          <th className="py-2">Project / Purpose</th>
+                                          <th className="py-2 text-right">Order Amount</th>
+                                          <th className="py-2 text-right">Paid / Returned</th>
+                                          <th className="py-2 text-center">Order Status</th>
+                                          <th className="py-2 text-center">Payment Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {item.orders.map(po => (
+                                          <tr key={po.id} className="hover:bg-slate-50">
+                                            <td className="py-2 font-mono font-bold text-slate-900">{po.purchaseNumber}</td>
+                                            <td className="py-2 text-slate-600">{po.purchaseDate}</td>
+                                            <td className="py-2 text-slate-700">{po.projectTitle || 'Central Storage'}</td>
+                                            <td className="py-2 text-right font-mono font-bold text-slate-900">
+                                              ₹{po.totalAmount.toLocaleString('en-IN')}
+                                            </td>
+                                            <td className="py-2 text-right font-mono text-slate-600">
+                                              ₹{Number(po.paidAmount || 0).toLocaleString('en-IN')}
+                                              {Number(po.returnedAmount || 0) > 0
+                                                ? ` / Ret ₹${Number(po.returnedAmount || 0).toLocaleString('en-IN')}`
+                                                : ''}
+                                            </td>
+                                            <td className="py-2 text-center">
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                {po.status}
+                                              </span>
+                                            </td>
+                                            <td className="py-2 text-center">
+                                              <span
+                                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                  po.paymentStatus === 'PAID'
+                                                    ? 'bg-emerald-100 text-emerald-800'
+                                                    : po.paymentStatus === 'PARTIALLY_PAID'
+                                                    ? 'bg-amber-100 text-amber-800'
+                                                    : 'bg-rose-100 text-rose-800'
+                                                }`}
+                                              >
+                                                {po.paymentStatus}
+                                              </span>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+
+                                  {item.bills.length > 0 && (
+                                    <table className="w-full text-left text-xs border-collapse">
+                                      <thead>
+                                        <tr className="border-b border-slate-200 text-slate-400 text-[10px] uppercase font-bold">
+                                          <th className="py-2">Vendor Bill #</th>
+                                          <th className="py-2">Date</th>
+                                          <th className="py-2">PO Ref</th>
+                                          <th className="py-2 text-right">Bill Total</th>
+                                          <th className="py-2 text-right">Balance Due</th>
+                                          <th className="py-2 text-center">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {item.bills.map(b => (
+                                          <tr key={b.id} className="hover:bg-slate-50">
+                                            <td className="py-2 font-mono font-bold text-slate-900">{b.billNumber}</td>
+                                            <td className="py-2 text-slate-600">{b.billDate}</td>
+                                            <td className="py-2 text-slate-700">{b.poNumber || 'Direct Bill'}</td>
+                                            <td className="py-2 text-right font-mono font-bold text-slate-900">
+                                              ₹{Number(b.totalAmount || 0).toLocaleString('en-IN')}
+                                            </td>
+                                            <td className="py-2 text-right font-mono font-semibold text-rose-700">
+                                              ₹{Number(b.balanceAmount || 0).toLocaleString('en-IN')}
+                                            </td>
+                                            <td className="py-2 text-center">
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                                {b.status}
+                                              </span>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+
+                                  {item.returns.length > 0 && (
+                                    <table className="w-full text-left text-xs border-collapse">
+                                      <thead>
+                                        <tr className="border-b border-slate-200 text-slate-400 text-[10px] uppercase font-bold">
+                                          <th className="py-2">Purchase Return #</th>
+                                          <th className="py-2">Date</th>
+                                          <th className="py-2">Against PO / Bill</th>
+                                          <th className="py-2 text-right">Return Amount</th>
+                                          <th className="py-2 text-center">Settlement Mode</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {item.returns.map(pr => (
+                                          <tr key={pr.id} className="bg-amber-50/30">
+                                            <td className="py-2 font-mono font-bold text-amber-800">{pr.returnNumber}</td>
+                                            <td className="py-2 text-slate-600">{pr.returnDate}</td>
+                                            <td className="py-2 text-slate-700">
+                                              {[pr.poNumber, pr.vendorBillNumber].filter(Boolean).join(' · ') || '—'}
+                                            </td>
+                                            <td className="py-2 text-right font-mono font-bold text-amber-800">
+                                              ₹{Number(pr.totalAmount || 0).toLocaleString('en-IN')}
+                                            </td>
+                                            <td className="py-2 text-center">
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                                                {pr.settlementMode}
+                                              </span>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+                                </div>
                               )}
                             </div>
                           </td>

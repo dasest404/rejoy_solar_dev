@@ -2,6 +2,8 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
+import { apiClient } from '../../services/apiClient';
+import { AccountingWorkspace } from '../../types/solar';
 import { ReportCategory, REPORT_CATEGORIES, ReportFilterState } from '../../types/reports';
 import {
   BarChart3,
@@ -75,19 +77,54 @@ export const ReportsView: React.FC = () => {
     setFilters(prev => ({ ...prev, status: 'ALL' }));
   };
 
+  const [localSyncCounter, setLocalSyncCounter] = useState(0);
+  const [accountingData, setAccountingData] = useState<Pick<AccountingWorkspace, 'vendorBills' | 'vendorPayments'>>({
+    vendorBills: [],
+    vendorPayments: []
+  });
+
+  useEffect(() => {
+    const handleStorageUpdate = () => setLocalSyncCounter(c => c + 1);
+    window.addEventListener('solarpulse_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('solarpulse_storage_updated', handleStorageUpdate);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      storageService.fetchSalesReturnsAsync().catch(() => null),
+      storageService.fetchPurchaseReturnsAsync().catch(() => null),
+      storageService.fetchVendorSalesInvoicesAsync().catch(() => null),
+      apiClient.getAccountingWorkspace().catch(() => null)
+    ]).then(([, , , ws]) => {
+      if (!cancelled && ws) {
+        setAccountingData({
+          vendorBills: Array.isArray(ws.vendorBills) ? ws.vendorBills : [],
+          vendorPayments: Array.isArray(ws.vendorPayments) ? ws.vendorPayments : []
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTrigger]);
+
   // Data fetching from central storageService
-  const salesInvoices = useMemo(() => storageService.getSalesInvoices(), [refreshTrigger]);
-  const purchaseOrders = useMemo(() => storageService.getPurchaseOrders(), [refreshTrigger]);
-  const products = useMemo(() => storageService.getProducts(), [refreshTrigger]);
-  const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger]);
-  const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger]);
-  const payments = useMemo(() => storageService.getPayments(), [refreshTrigger]);
-  const expenses = useMemo(() => storageService.getExpenses(), [refreshTrigger]);
-  const payslips = useMemo(() => storageService.getPayslips(), [refreshTrigger]);
-  const attendance = useMemo(() => storageService.getAttendance(), [refreshTrigger]);
-  const employees = useMemo(() => storageService.getEmployees(), [refreshTrigger]);
-  const leads = useMemo(() => storageService.getLeads(), [refreshTrigger]);
-  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger]);
+  const salesInvoices = useMemo(() => storageService.getSalesInvoices(), [refreshTrigger, localSyncCounter]);
+  const purchaseOrders = useMemo(() => storageService.getPurchaseOrders(), [refreshTrigger, localSyncCounter]);
+  const products = useMemo(() => storageService.getProducts(), [refreshTrigger, localSyncCounter]);
+  const customers = useMemo(() => storageService.getCustomers(), [refreshTrigger, localSyncCounter]);
+  const vendors = useMemo(() => storageService.getVendors(), [refreshTrigger, localSyncCounter]);
+  const payments = useMemo(() => storageService.getPayments(), [refreshTrigger, localSyncCounter]);
+  const expenses = useMemo(() => storageService.getExpenses(), [refreshTrigger, localSyncCounter]);
+  const payslips = useMemo(() => storageService.getPayslips(), [refreshTrigger, localSyncCounter]);
+  const attendance = useMemo(() => storageService.getAttendance(), [refreshTrigger, localSyncCounter]);
+  const employees = useMemo(() => storageService.getEmployees(), [refreshTrigger, localSyncCounter]);
+  const leads = useMemo(() => storageService.getLeads(), [refreshTrigger, localSyncCounter]);
+  const projects = useMemo(() => storageService.getProjects(), [refreshTrigger, localSyncCounter]);
+  const salesReturns = useMemo(() => storageService.getSalesReturns(), [refreshTrigger, localSyncCounter]);
+  const purchaseReturns = useMemo(() => storageService.getPurchaseReturns(), [refreshTrigger, localSyncCounter]);
+  const vendorSalesInvoices = useMemo(() => storageService.getVendorSalesInvoices(), [refreshTrigger, localSyncCounter]);
 
   const currentMeta = useMemo(() => {
     return (
@@ -239,6 +276,7 @@ export const ReportsView: React.FC = () => {
             customers={customers}
             invoices={salesInvoices}
             payments={payments}
+            salesReturns={salesReturns}
             filters={filters}
             onFilterChange={handleFilterChange}
             onFilterReset={handleFilterReset}
@@ -251,6 +289,10 @@ export const ReportsView: React.FC = () => {
           <VendorLedgerReport
             vendors={vendors}
             purchaseOrders={purchaseOrders}
+            vendorBills={accountingData.vendorBills}
+            vendorPayments={accountingData.vendorPayments}
+            purchaseReturns={purchaseReturns}
+            vendorSalesInvoices={vendorSalesInvoices}
             filters={filters}
             onFilterChange={handleFilterChange}
             onFilterReset={handleFilterReset}

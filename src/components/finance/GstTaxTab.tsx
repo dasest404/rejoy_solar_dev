@@ -4,7 +4,9 @@ import {
   SalesInvoice,
   VendorSalesInvoice,
   ExpenseRecord,
-  TdsEntry
+  TdsEntry,
+  SalesReturn,
+  PurchaseReturn
 } from '../../types/solar';
 import { apiClient } from '../../services/apiClient';
 import { buildGstSummary, formatINR, formatDateIN, downloadCsv, round2 } from './accountingUtils';
@@ -15,6 +17,8 @@ interface GstTaxTabProps {
   salesInvoices: SalesInvoice[];
   vendorSalesInvoices: VendorSalesInvoice[];
   expenses: ExpenseRecord[];
+  salesReturns?: SalesReturn[];
+  purchaseReturns?: PurchaseReturn[];
   canManage: boolean;
   onRefresh: () => Promise<void>;
   showToast: (text: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
@@ -25,6 +29,8 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
   salesInvoices,
   vendorSalesInvoices,
   expenses,
+  salesReturns = [],
+  purchaseReturns = [],
   canManage,
   onRefresh,
   showToast
@@ -35,13 +41,23 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
     challanNo: '',
     bsrCode: '',
     depositDate: new Date().toISOString().slice(0, 10),
-    bankAccountId: workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || ''
+    bankAccountId: workspace.bankAccounts.find(b => b.isActive && b.isPrimary)?.id || workspace.bankAccounts.find(b => b.isActive)?.id || workspace.bankAccounts[0]?.id || ''
   });
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const gst = useMemo(
-    () => buildGstSummary(salesInvoices, vendorSalesInvoices, workspace.vendorBills, expenses),
-    [salesInvoices, vendorSalesInvoices, workspace.vendorBills, expenses]
+    () => buildGstSummary(salesInvoices, vendorSalesInvoices, workspace.vendorBills, expenses, salesReturns, purchaseReturns),
+    [salesInvoices, vendorSalesInvoices, workspace.vendorBills, expenses, salesReturns, purchaseReturns]
+  );
+
+  const activeSalesReturns = useMemo(
+    () => salesReturns.filter(r => r.status !== 'REVERSED' && r.status !== 'CANCELLED'),
+    [salesReturns]
+  );
+
+  const activePurchaseReturns = useMemo(
+    () => purchaseReturns.filter(r => r.status !== 'REVERSED' && r.status !== 'CANCELLED'),
+    [purchaseReturns]
   );
 
   const tdsTotals = useMemo(() => {
@@ -92,14 +108,19 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
       {/* KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="text-xs font-medium text-slate-500">Output GST Liability</div>
+          <div className="text-xs font-medium text-slate-500">Net Output GST Liability</div>
           <div className="text-xl font-bold font-mono tabular-nums text-slate-900 mt-1">{formatINR(gst.outputTotalTax)}</div>
-          <div className="text-xs text-slate-500 mt-0.5">Taxable Sales: {formatINR(gst.outputTaxable)}</div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            Net Taxable: {formatINR(gst.outputTaxable)}
+            {gst.salesReturnTotalTax > 0 ? ` · Credit Notes -${formatINR(gst.salesReturnTotalTax)}` : ''}
+          </div>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="text-xs font-medium text-slate-500">Eligible Input Tax Credit (ITC)</div>
+          <div className="text-xs font-medium text-slate-500">Eligible Net Input Tax Credit (ITC)</div>
           <div className="text-xl font-bold font-mono tabular-nums text-emerald-700 mt-1">{formatINR(gst.inputTotalItc)}</div>
-          <div className="text-xs text-slate-500 mt-0.5">From Vendor Bills & ITC Expenses</div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            Bills & Expenses{gst.purchaseReturnTotalTax > 0 ? ` · Debit Notes -${formatINR(gst.purchaseReturnTotalTax)}` : ''}
+          </div>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-4">
           <div className="text-xs font-medium text-slate-500">
@@ -151,8 +172,12 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
               `gst-summary-${new Date().toISOString().slice(0, 10)}`,
               ['Metric', 'Taxable Value', 'CGST', 'SGST', 'IGST', 'Total Tax'],
               [
-                ['Output GST (Sales)', gst.outputTaxable, gst.outputCgst, gst.outputSgst, gst.outputIgst, gst.outputTotalTax],
-                ['Input ITC (Purchases)', gst.inputTaxable, gst.inputCgst, gst.inputSgst, gst.inputIgst, gst.inputTotalItc],
+                ['Gross Outward Supplies (Sales)', gst.grossOutputTaxable, 0, 0, 0, gst.grossOutputTotalTax],
+                ['Less: Sales Returns (Credit Notes)', -gst.salesReturnTaxable, -gst.salesReturnCgst, -gst.salesReturnSgst, -gst.salesReturnIgst, -gst.salesReturnTotalTax],
+                ['Net Output GST (Sales)', gst.outputTaxable, gst.outputCgst, gst.outputSgst, gst.outputIgst, gst.outputTotalTax],
+                ['Gross Eligible ITC (Purchases)', gst.grossInputTaxable, 0, 0, 0, gst.grossInputTotalItc],
+                ['Less: Purchase Returns (Debit Notes)', -gst.purchaseReturnTaxable, -gst.purchaseReturnCgst, -gst.purchaseReturnSgst, -gst.purchaseReturnIgst, -gst.purchaseReturnTotalTax],
+                ['Net Input ITC (Purchases)', gst.inputTaxable, gst.inputCgst, gst.inputSgst, gst.inputIgst, gst.inputTotalItc],
                 ['Net Payable / (ITC)', 0, 0, 0, 0, gst.netPayable > 0 ? gst.netPayable : -gst.itcCarryForward]
               ]
             )
@@ -178,16 +203,60 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
+              {gst.salesReturnTotalTax > 0 && (
+                <tr className="bg-rose-50/40">
+                  <td className="py-2.5 px-4 font-medium text-rose-800">
+                    Less: Sales Returns / Credit Notes ({activeSalesReturns.length})
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-rose-700">
+                    -{formatINR(gst.salesReturnTaxable)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-rose-700">
+                    -{formatINR(gst.salesReturnCgst)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-rose-700">
+                    -{formatINR(gst.salesReturnSgst)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-rose-700">
+                    -{formatINR(gst.salesReturnIgst)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-rose-700">
+                    -{formatINR(gst.salesReturnTotalTax)}
+                  </td>
+                </tr>
+              )}
               <tr>
-                <td className="py-3 px-4 font-semibold text-slate-900">Outward Taxable Supplies (Sales & Vendor Invoices)</td>
+                <td className="py-3 px-4 font-semibold text-slate-900">Net Outward Taxable Supplies (Sales & Vendor Invoices)</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums">{formatINR(gst.outputTaxable)}</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums">{formatINR(gst.outputCgst)}</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums">{formatINR(gst.outputSgst)}</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums">{formatINR(gst.outputIgst)}</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-slate-900">{formatINR(gst.outputTotalTax)}</td>
               </tr>
+              {gst.purchaseReturnTotalTax > 0 && (
+                <tr className="bg-amber-50/40">
+                  <td className="py-2.5 px-4 font-medium text-amber-800">
+                    Less: Purchase Returns / ITC Reversals ({activePurchaseReturns.length})
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-800">
+                    -{formatINR(gst.purchaseReturnTaxable)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-800">
+                    -{formatINR(gst.purchaseReturnCgst)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-800">
+                    -{formatINR(gst.purchaseReturnSgst)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-800">
+                    -{formatINR(gst.purchaseReturnIgst)}
+                  </td>
+                  <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-amber-800">
+                    -{formatINR(gst.purchaseReturnTotalTax)}
+                  </td>
+                </tr>
+              )}
               <tr>
-                <td className="py-3 px-4 font-semibold text-emerald-800">Less: Eligible Input Tax Credit (Bills & Expenses)</td>
+                <td className="py-3 px-4 font-semibold text-emerald-800">Less: Net Eligible Input Tax Credit (Bills & Expenses)</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums">{formatINR(gst.inputTaxable)}</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums text-emerald-700">{formatINR(gst.inputCgst)}</td>
                 <td className="py-3 px-4 text-right font-mono tabular-nums text-emerald-700">{formatINR(gst.inputSgst)}</td>
@@ -259,6 +328,18 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
                     <td className="py-2 px-4 text-right font-mono tabular-nums font-bold">{formatINR(vsi.totalAmount)}</td>
                   </tr>
                 ))}
+                {activeSalesReturns.map(sr => (
+                  <tr key={sr.id} className="bg-rose-50/30 hover:bg-rose-50/50">
+                    <td className="py-2 px-4 font-mono font-bold text-rose-800">{sr.returnNumber}</td>
+                    <td className="py-2 px-4 font-mono text-slate-600">{formatDateIN(sr.returnDate)}</td>
+                    <td className="py-2 px-4 font-semibold text-slate-800">{sr.partyName}</td>
+                    <td className="py-2 px-4 font-mono text-slate-600">Against {sr.invoiceNumber}</td>
+                    <td className="py-2 px-4 font-semibold text-rose-700">Credit Note</td>
+                    <td className="py-2 px-4 text-right font-mono tabular-nums text-rose-700">-{formatINR(sr.subtotal)}</td>
+                    <td className="py-2 px-4 text-right font-mono tabular-nums text-rose-700">-{formatINR(sr.taxAmount)}</td>
+                    <td className="py-2 px-4 text-right font-mono tabular-nums font-bold text-rose-700">-{formatINR(sr.totalAmount)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -276,14 +357,26 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
               <span className="text-right">Tax Amount</span>
             </div>
             <div className="p-3 grid grid-cols-3">
-              <span>3.1(a) Outward Taxable Supplies (Other than zero-rated)</span>
+              <span>3.1(a) Net Outward Taxable Supplies (Invoices less Credit Notes)</span>
               <span className="text-right font-mono">{formatINR(gst.outputTaxable)}</span>
               <span className="text-right font-mono font-semibold">{formatINR(gst.outputTotalTax)}</span>
             </div>
             <div className="p-3 grid grid-cols-3">
-              <span>4(A)(5) All Other ITC (Vendor Material Bills & Expenses)</span>
+              <span>4(A)(5) All Other ITC (Bills & Expenses)</span>
+              <span className="text-right font-mono">{formatINR(gst.grossInputTaxable)}</span>
+              <span className="text-right font-mono font-semibold text-emerald-700">{formatINR(gst.grossInputTotalItc)}</span>
+            </div>
+            {gst.purchaseReturnTotalTax > 0 && (
+              <div className="p-3 grid grid-cols-3 bg-amber-50/40">
+                <span>4(B)(2) ITC Reversed (Purchase Returns / Debit Notes)</span>
+                <span className="text-right font-mono text-amber-800">-{formatINR(gst.purchaseReturnTaxable)}</span>
+                <span className="text-right font-mono font-semibold text-amber-800">-{formatINR(gst.purchaseReturnTotalTax)}</span>
+              </div>
+            )}
+            <div className="p-3 grid grid-cols-3">
+              <span className="font-semibold text-slate-800">4(C) Net ITC Available</span>
               <span className="text-right font-mono">{formatINR(gst.inputTaxable)}</span>
-              <span className="text-right font-mono font-semibold text-emerald-700">{formatINR(gst.inputTotalItc)}</span>
+              <span className="text-right font-mono font-bold text-emerald-700">{formatINR(gst.inputTotalItc)}</span>
             </div>
             <div className="p-3 grid grid-cols-3 bg-slate-50 font-bold">
               <span>6.1 Payment of Tax (Net Payable / Credit Balance)</span>
