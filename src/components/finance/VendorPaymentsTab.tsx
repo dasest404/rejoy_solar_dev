@@ -9,7 +9,7 @@ import {
 } from '../../types/solar';
 import { apiClient } from '../../services/apiClient';
 import { formatINR, formatDateIN, round2 } from './accountingUtils';
-import { Plus, Search, AlertCircle, Trash2, X, FileCheck2 } from 'lucide-react';
+import { Plus, Search, AlertCircle, Trash2, X, FileCheck2, Eye, Edit2 } from 'lucide-react';
 
 interface VendorPaymentsTabProps {
   workspace: AccountingWorkspace;
@@ -37,11 +37,13 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // Create Vendor Bill Modal
+  // Create / Edit Vendor Bill Modal
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
+  const [viewBill, setViewBill] = useState<VendorBill | null>(null);
   const [savingBill, setSavingBill] = useState(false);
   const [billError, setBillError] = useState<string | null>(null);
   const [billForm, setBillForm] = useState({
+    id: '',
     billNumber: '',
     vendorId: '',
     poId: '',
@@ -63,6 +65,8 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
   // Pay Vendor Bill Modal
   const [payTargetBill, setPayTargetBill] = useState<VendorBill | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [confirmPayDeleteId, setConfirmPayDeleteId] = useState<string | null>(null);
   const [payForm, setPayForm] = useState({
     paymentDate: today,
     amount: 0,
@@ -124,6 +128,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
     setBillError(null);
     if (po) {
       setBillForm({
+        id: '',
         billNumber: `BILL-${po.purchaseNumber}`,
         vendorId: po.vendorId,
         poId: po.id,
@@ -163,6 +168,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       );
     } else {
       setBillForm({
+        id: '',
         billNumber: '',
         vendorId: vendors[0]?.id || '',
         poId: '',
@@ -184,6 +190,45 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
     setIsBillModalOpen(true);
   };
 
+  const openEditBill = (b: VendorBill) => {
+    setBillError(null);
+    setBillForm({
+      id: b.id,
+      billNumber: b.billNumber,
+      vendorId: b.vendorId,
+      poId: b.poId || '',
+      projectId: b.projectId || '',
+      billDate: b.billDate || today,
+      dueDate: b.dueDate || today,
+      category: b.category || 'Material Purchase',
+      supplyType: Number(b.igstAmount || 0) > 0 ? 'INTER' : 'INTRA',
+      tdsSection: b.tdsSection || '',
+      tdsRate: Number(b.tdsRate || 0),
+      itcEligible: b.itcEligible !== false,
+      expenseAccountId: b.expenseAccountId || 'acc-5010',
+      notes: b.notes || ''
+    });
+    if (Array.isArray(b.items) && b.items.length > 0) {
+      setBillLines(b.items.map(it => ({ ...it })));
+    } else {
+      const gstRate = Number(b.subtotal || 0) > 0 ? round2((Number(b.gstAmount || 0) / Number(b.subtotal)) * 100) : 18;
+      setBillLines([
+        {
+          id: `bl-${Date.now()}`,
+          description: b.category || `Bill ${b.billNumber}`,
+          hsnCode: '',
+          quantity: 1,
+          rate: round2(Number(b.subtotal || 0)),
+          taxableAmount: round2(Number(b.subtotal || 0)),
+          gstRate,
+          gstAmount: round2(Number(b.gstAmount || 0)),
+          totalAmount: round2(Number(b.totalAmount || 0))
+        }
+      ]);
+    }
+    setIsBillModalOpen(true);
+  };
+
   const updateBillLine = (idx: number, patch: Partial<VendorBillLineItem>) => {
     setBillLines(prev =>
       prev.map((l, i) => {
@@ -197,7 +242,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
     );
   };
 
-  const handleSaveBill = async (e: React.FormEvent) => {
+  const handleSaveBill = async (e: React.FormEvent, targetStatus: 'DRAFT' | 'OPEN' = 'OPEN') => {
     e.preventDefault();
     if (savingBill) return;
     setBillError(null);
@@ -215,6 +260,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       const po = purchaseOrders.find(p => p.id === billForm.poId);
       const proj = projects.find(p => p.id === billForm.projectId);
       await apiClient.saveVendorBill({
+        id: billForm.id || undefined,
         billNumber: billForm.billNumber.trim() || undefined,
         vendorId: vendor.id,
         vendorName: vendor.name,
@@ -236,14 +282,21 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
         tdsAmount: billSummary.tdsAmount,
         totalAmount: billSummary.totalAmount,
         itcEligible: billForm.itcEligible,
-        status: 'OPEN',
+        status: targetStatus,
         expenseAccountId: billForm.expenseAccountId,
         notes: billForm.notes,
         items: billLines.filter(l => l.description.trim())
       });
       setIsBillModalOpen(false);
       await onRefresh();
-      showToast('Vendor bill recorded and posted to Accounts Payable.', 'success');
+      showToast(
+        targetStatus === 'DRAFT'
+          ? 'Vendor bill saved as draft.'
+          : billForm.id
+          ? 'Vendor bill updated and posted to Accounts Payable.'
+          : 'Vendor bill recorded and posted to Accounts Payable.',
+        'success'
+      );
     } catch (err: any) {
       const msg = err?.message || 'Failed to save vendor bill';
       setBillError(msg);
@@ -259,7 +312,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       await apiClient.deleteVendorBill(id);
       setConfirmDeleteId(null);
       await onRefresh();
-      showToast('Vendor bill deleted.', 'success');
+      showToast('Vendor bill deleted and linked AP journal removed.', 'success');
     } catch (err: any) {
       showToast(err?.message || 'Failed to delete bill', 'error');
     } finally {
@@ -267,7 +320,23 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
     }
   };
 
+  const handleDeletePayment = async (id: string) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      await apiClient.deleteVendorPayment(id);
+      setConfirmPayDeleteId(null);
+      await onRefresh();
+      showToast('Vendor payment reversed and balances restored.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to reverse vendor payment', 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const openPayModal = (bill: VendorBill) => {
+    setPayError(null);
     const defaultBank = workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '';
     setPayTargetBill(bill);
     setPayForm({
@@ -285,6 +354,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
   const handleRecordVendorPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!payTargetBill || savingPayment) return;
+    setPayError(null);
     setSavingPayment(true);
     try {
       await apiClient.recordVendorPayment({
@@ -302,7 +372,9 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       await onRefresh();
       showToast('Vendor payment recorded and posted to ledger.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to record vendor payment', 'error');
+      const msg = err?.message || 'Failed to record vendor payment';
+      setPayError(msg);
+      showToast(msg, 'error');
     } finally {
       setSavingPayment(false);
     }
@@ -467,7 +539,25 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                           </span>
                         </td>
                         <td className="py-2.5 px-4 text-right whitespace-nowrap space-x-2">
-                          {canManage && b.balanceAmount > 0.01 && (
+                          <button
+                            type="button"
+                            onClick={() => setViewBill(b)}
+                            title="View Bill"
+                            className="inline-flex items-center text-slate-600 hover:text-slate-900 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          {canManage && b.paidAmount === 0 && (
+                            <button
+                              type="button"
+                              onClick={() => openEditBill(b)}
+                              title="Edit Unpaid Bill"
+                              className="inline-flex items-center text-slate-600 hover:text-slate-900 cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canManage && b.status !== 'DRAFT' && b.balanceAmount > 0.01 && (
                             <button
                               type="button"
                               onClick={() => openPayModal(b)}
@@ -484,12 +574,13 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                                 onClick={() => handleDeleteBill(b.id)}
                                 className="text-rose-700 font-bold cursor-pointer"
                               >
-                                Confirm Del
+                                {busyId === b.id ? '...' : 'Confirm Del'}
                               </button>
                             ) : (
                               <button
                                 type="button"
                                 onClick={() => setConfirmDeleteId(b.id)}
+                                title="Delete Bill"
                                 className="text-rose-600 hover:text-rose-800 cursor-pointer"
                               >
                                 <Trash2 className="w-3.5 h-3.5 inline" />
@@ -522,37 +613,69 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                   <th className="py-2.5 px-4 text-right">Settled (₹)</th>
                   <th className="py-2.5 px-4 text-right">TDS (₹)</th>
                   <th className="py-2.5 px-4 text-right">Net Paid (₹)</th>
+                  <th className="py-2.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-500">
+                    <td colSpan={9} className="py-8 text-center text-slate-500">
                       No vendor disbursements recorded yet.
                     </td>
                   </tr>
                 ) : (
-                  filteredPayments.map(p => (
-                    <tr key={p.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{p.paymentNumber}</td>
-                      <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(p.paymentDate)}</td>
-                      <td className="py-2.5 px-4 font-semibold text-slate-800">{p.vendorName}</td>
-                      <td className="py-2.5 px-4 font-mono text-slate-600">{p.billNumber || p.billId}</td>
-                      <td className="py-2.5 px-4 text-slate-600">
-                        {p.bankAccountName || p.paymentMode}
-                        {p.referenceNo ? ` · ${p.referenceNo}` : ''}
-                      </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
-                        {formatINR(p.amount)}
-                      </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-700">
-                        {p.tdsDeducted > 0 ? formatINR(p.tdsDeducted) : '—'}
-                      </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-700">
-                        {formatINR(p.netPaid)}
-                      </td>
-                    </tr>
-                  ))
+                  filteredPayments.map(p => {
+                    const tdsDeposited = workspace.tdsEntries.some(
+                      t => t.sourceType === 'VENDOR_PAYMENT' && t.sourceId === p.id && t.status === 'DEPOSITED'
+                    );
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{p.paymentNumber}</td>
+                        <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(p.paymentDate)}</td>
+                        <td className="py-2.5 px-4 font-semibold text-slate-800">{p.vendorName}</td>
+                        <td className="py-2.5 px-4 font-mono text-slate-600">{p.billNumber || p.billId}</td>
+                        <td className="py-2.5 px-4 text-slate-600">
+                          {p.bankAccountName || p.paymentMode}
+                          {p.referenceNo ? ` · ${p.referenceNo}` : ''}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
+                          {formatINR(p.amount)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-700">
+                          {p.tdsDeducted > 0 ? formatINR(p.tdsDeducted) : '—'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-700">
+                          {formatINR(p.netPaid)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          {canManage && !tdsDeposited && (
+                            confirmPayDeleteId === p.id ? (
+                              <button
+                                type="button"
+                                disabled={busyId === p.id}
+                                onClick={() => handleDeletePayment(p.id)}
+                                className="text-rose-700 font-bold cursor-pointer"
+                              >
+                                {busyId === p.id ? '...' : 'Confirm Rev'}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmPayDeleteId(p.id)}
+                                title="Reverse / Delete Payment"
+                                className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 inline" />
+                              </button>
+                            )
+                          )}
+                          {tdsDeposited && (
+                            <span className="text-[11px] text-slate-400">TDS Deposited</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -619,7 +742,9 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
           <div className="w-full max-w-4xl bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Record Vendor Purchase Bill (Accounts Payable)</h3>
+              <h3 className="text-sm font-bold text-slate-900">
+                {billForm.id ? 'Edit Vendor Purchase Bill' : 'Record Vendor Purchase Bill (Accounts Payable)'}
+              </h3>
               <button type="button" onClick={() => setIsBillModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
@@ -731,10 +856,12 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                     <tr>
                       <th className="py-2 px-3">Item / Service Description *</th>
-                      <th className="py-2 px-3 w-20 text-right">Qty</th>
-                      <th className="py-2 px-3 w-28 text-right">Rate (₹)</th>
-                      <th className="py-2 px-3 w-20 text-right">GST %</th>
+                      <th className="py-2 px-2 w-24">HSN/SAC</th>
+                      <th className="py-2 px-2 w-20 text-right">Qty</th>
+                      <th className="py-2 px-2 w-28 text-right">Rate (₹)</th>
+                      <th className="py-2 px-2 w-20 text-right">GST %</th>
                       <th className="py-2 px-3 w-28 text-right">Line Total (₹)</th>
+                      <th className="py-2 px-2 w-8"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -748,6 +875,15 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                             onChange={e => updateBillLine(idx, { description: e.target.value })}
                             placeholder="Description"
                             className="w-full text-xs border border-slate-200 rounded px-2 py-1.5"
+                          />
+                        </td>
+                        <td className="p-2">
+                          <input
+                            type="text"
+                            value={line.hsnCode || ''}
+                            onChange={e => updateBillLine(idx, { hsnCode: e.target.value })}
+                            placeholder="HSN"
+                            className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 font-mono"
                           />
                         </td>
                         <td className="p-2">
@@ -782,6 +918,17 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                         </td>
                         <td className="p-2 text-right font-mono font-semibold text-slate-900">
                           {formatINR(line.totalAmount)}
+                        </td>
+                        <td className="p-2 text-center">
+                          {billLines.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setBillLines(prev => prev.filter((_, i) => i !== idx))}
+                              className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -829,6 +976,14 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                   Cancel
                 </button>
                 <button
+                  type="button"
+                  disabled={savingBill}
+                  onClick={e => handleSaveBill(e, 'DRAFT')}
+                  className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer disabled:opacity-50"
+                >
+                  Save Draft
+                </button>
+                <button
                   type="submit"
                   disabled={savingBill}
                   className="px-5 py-2 text-xs font-semibold text-white bg-amber-500 hover:bg-amber-600 rounded-lg cursor-pointer disabled:opacity-50"
@@ -852,6 +1007,12 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
               </button>
             </div>
             <form onSubmit={handleRecordVendorPayment} className="p-5 space-y-3">
+              {payError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{payError}</span>
+                </div>
+              )}
               <div className="text-xs text-slate-600">
                 Vendor: <strong className="text-slate-900">{payTargetBill.vendorName}</strong> · Balance Due:{' '}
                 <strong className="font-mono text-slate-900">{formatINR(payTargetBill.balanceAmount)}</strong>
@@ -953,6 +1114,127 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* VIEW VENDOR BILL MODAL */}
+      {viewBill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+          <div className="w-full max-w-2xl bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[88vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+              <h3 className="text-sm font-bold text-slate-900 font-mono">{viewBill.billNumber}</h3>
+              <button type="button" onClick={() => setViewBill(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 overflow-y-auto text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <div>
+                  <span className="text-slate-500 block">Vendor</span>
+                  <strong className="text-slate-900">{viewBill.vendorName}</strong>
+                  {viewBill.vendorGst && <div className="font-mono text-[11px] text-slate-500">{viewBill.vendorGst}</div>}
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Bill / Due Date</span>
+                  <span className="font-mono text-slate-900">{formatDateIN(viewBill.billDate)}</span>
+                  <div className="font-mono text-[11px] text-slate-500">Due {formatDateIN(viewBill.dueDate)}</div>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">PO / Project</span>
+                  <span className="text-slate-800">{viewBill.poNumber || 'Direct Bill'}</span>
+                  <div className="text-[11px] text-slate-500">{viewBill.projectTitle || viewBill.category}</div>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Status & JV</span>
+                  <strong className="text-slate-900">{viewBill.status}</strong>
+                  {viewBill.journalEntryId && (
+                    <div className="font-mono text-[11px] text-slate-500 truncate">{viewBill.journalEntryId}</div>
+                  )}
+                </div>
+              </div>
+
+              {viewBill.items && viewBill.items.length > 0 && (
+                <table className="w-full text-left border border-slate-200 rounded-lg overflow-hidden">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                    <tr>
+                      <th className="py-2 px-3">Description</th>
+                      <th className="py-2 px-3">HSN</th>
+                      <th className="py-2 px-3 text-right">Qty</th>
+                      <th className="py-2 px-3 text-right">Rate</th>
+                      <th className="py-2 px-3 text-right">GST</th>
+                      <th className="py-2 px-3 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {viewBill.items.map(it => (
+                      <tr key={it.id}>
+                        <td className="py-2 px-3 font-medium text-slate-800">{it.description}</td>
+                        <td className="py-2 px-3 font-mono text-slate-500">{it.hsnCode || '—'}</td>
+                        <td className="py-2 px-3 text-right font-mono">{it.quantity}</td>
+                        <td className="py-2 px-3 text-right font-mono">{formatINR(it.rate)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{it.gstRate}%</td>
+                        <td className="py-2 px-3 text-right font-mono font-semibold">{formatINR(it.totalAmount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200 font-mono">
+                <div>
+                  <span className="text-slate-500 block font-sans">Taxable Subtotal</span>
+                  <strong>{formatINR(viewBill.subtotal)}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-500 block font-sans">GST ({viewBill.itcEligible ? 'ITC' : 'Non-ITC'})</span>
+                  <strong>{formatINR(viewBill.gstAmount)}</strong>
+                  <div className="text-[10px] text-slate-500">
+                    {viewBill.igstAmount > 0
+                      ? `IGST ${formatINR(viewBill.igstAmount)}`
+                      : `CGST ${formatINR(viewBill.cgstAmount)} / SGST ${formatINR(viewBill.sgstAmount)}`}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-slate-500 block font-sans">Total / Paid</span>
+                  <strong>{formatINR(viewBill.totalAmount)}</strong>
+                  <div className="text-[11px] text-emerald-700">Paid {formatINR(viewBill.paidAmount)}</div>
+                </div>
+                <div>
+                  <span className="text-slate-500 block font-sans">Balance Due</span>
+                  <strong className="text-rose-700">{formatINR(viewBill.balanceAmount)}</strong>
+                </div>
+              </div>
+
+              {viewBill.notes && (
+                <div className="bg-slate-50 p-2.5 rounded border border-slate-200 text-slate-700">
+                  <span className="text-slate-500 font-semibold block mb-0.5">Notes</span>
+                  {viewBill.notes}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                {canManage && viewBill.paidAmount === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewBill;
+                      setViewBill(null);
+                      openEditBill(target);
+                    }}
+                    className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg font-semibold cursor-pointer"
+                  >
+                    Edit Bill
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewBill(null)}
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

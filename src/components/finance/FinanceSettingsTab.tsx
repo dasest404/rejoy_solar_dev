@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AccountingWorkspace, AccountingSettings } from '../../types/solar';
 import { apiClient } from '../../services/apiClient';
 import { formatDateIN } from './accountingUtils';
@@ -20,6 +20,10 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
   const [subTab, setSubTab] = useState<'CONFIG' | 'AUDIT'>('CONFIG');
   const [form, setForm] = useState<AccountingSettings>({ ...workspace.settings });
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setForm({ ...workspace.settings });
+  }, [workspace.settings]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -9,7 +9,7 @@ import {
 import { apiClient } from '../../services/apiClient';
 import { generateTallyExpenseXML } from '../../services/tally';
 import { formatINR, formatDateIN, round2 } from './accountingUtils';
-import { Plus, Search, CheckCircle2, XCircle, Wallet, FileCode, X } from 'lucide-react';
+import { Plus, Search, CheckCircle2, XCircle, Wallet, FileCode, X, Eye, Edit2, Trash2, AlertCircle } from 'lucide-react';
 
 interface ExpensesFinanceTabProps {
   workspace: AccountingWorkspace;
@@ -39,6 +39,10 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
   const [filterType, setFilterType] = useState<'ALL' | 'DIRECT_EXPENSE' | 'REIMBURSEMENT' | 'PENDING_APPROVAL'>('ALL');
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [viewExpense, setViewExpense] = useState<ExpenseRecord | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [payModalExpense, setPayModalExpense] = useState<ExpenseRecord | null>(null);
@@ -51,6 +55,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
   const today = new Date().toISOString().slice(0, 10);
 
   const [form, setForm] = useState({
+    id: '',
     expenseDate: today,
     expenseType: 'DIRECT_EXPENSE' as 'DIRECT_EXPENSE' | 'REIMBURSEMENT',
     category: 'Site Travel & Logistics',
@@ -100,14 +105,58 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
       );
   }, [expenses, filterType, search]);
 
+  const openCreateModal = () => {
+    setFormError(null);
+    setForm({
+      id: '',
+      expenseDate: today,
+      expenseType: 'DIRECT_EXPENSE',
+      category: 'Site Travel & Logistics',
+      vendorName: '',
+      employeeId: '',
+      projectId: '',
+      amount: 0,
+      gstAmount: 0,
+      itcEligible: false,
+      paymentMode: 'Bank NEFT/RTGS',
+      referenceNo: '',
+      expenseAccountId: 'acc-5020',
+      notes: ''
+    });
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (exp: ExpenseRecord) => {
+    setFormError(null);
+    setForm({
+      id: exp.id,
+      expenseDate: (exp.expenseDate || exp.date || today).slice(0, 10),
+      expenseType: (exp.expenseType === 'REIMBURSEMENT' ? 'REIMBURSEMENT' : 'DIRECT_EXPENSE'),
+      category: exp.category || 'Site Travel & Logistics',
+      vendorName: exp.vendorName || '',
+      employeeId: exp.employeeId || '',
+      projectId: exp.projectId || '',
+      amount: round2(Number(exp.amount || 0)),
+      gstAmount: round2(Number(exp.gstAmount || 0)),
+      itcEligible: Boolean(exp.itcEligible),
+      paymentMode: exp.paymentMode || 'Bank NEFT/RTGS',
+      referenceNo: exp.referenceNo || '',
+      expenseAccountId: exp.expenseAccountId || 'acc-5020',
+      notes: exp.notes || ''
+    });
+    setIsModalOpen(true);
+  };
+
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
+    setFormError(null);
     setSaving(true);
     try {
       const emp = employees.find(em => em.id === form.employeeId);
       const proj = projects.find(p => p.id === form.projectId);
       await apiClient.saveAccountingExpense({
+        id: form.id || undefined,
         expenseDate: form.expenseDate,
         expenseType: form.expenseType,
         category: form.category,
@@ -126,11 +175,28 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
       });
       setIsModalOpen(false);
       await onRefresh();
-      showToast('Expense entry submitted to finance workflow.', 'success');
+      showToast(form.id ? 'Expense updated in finance workflow.' : 'Expense entry submitted to finance workflow.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to save expense', 'error');
+      const msg = err?.message || 'Failed to save expense';
+      setFormError(msg);
+      showToast(msg, 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteExpense = async (id: string) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      await apiClient.deleteAccountingExpense(id);
+      setConfirmDeleteId(null);
+      await onRefresh();
+      showToast('Expense entry deleted.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to delete expense', 'error');
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -152,6 +218,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
   const handlePayExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!payModalExpense || busyId) return;
+    setPayError(null);
     setBusyId(payModalExpense.id);
     try {
       await apiClient.payAccountingExpense(payModalExpense.id, {
@@ -162,7 +229,9 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
       await onRefresh();
       showToast('Expense disbursed & posted to general ledger.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to pay expense', 'error');
+      const msg = err?.message || 'Failed to pay expense';
+      setPayError(msg);
+      showToast(msg, 'error');
     } finally {
       setBusyId(null);
     }
@@ -231,7 +300,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
           {canEdit && (
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={openCreateModal}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" /> Record Expense / Claim
@@ -301,6 +370,24 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                         </span>
                       </td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewExpense(exp)}
+                          title="View Details"
+                          className="inline-flex items-center text-slate-600 hover:text-slate-900 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        {canEdit && st !== 'PAID' && (
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(exp)}
+                            title={st === 'REJECTED' ? 'Edit & Resubmit' : 'Edit Expense'}
+                            className="inline-flex items-center text-slate-600 hover:text-slate-900 cursor-pointer"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         {canApprove && st === 'PENDING_APPROVAL' && (
                           <>
                             <button
@@ -324,7 +411,10 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                         {canApprove && st === 'APPROVED' && (
                           <button
                             type="button"
-                            onClick={() => setPayModalExpense(exp)}
+                            onClick={() => {
+                              setPayError(null);
+                              setPayModalExpense(exp);
+                            }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold cursor-pointer"
                           >
                             <Wallet className="w-3 h-3" /> Pay
@@ -337,6 +427,27 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                         >
                           <FileCode className="w-3.5 h-3.5" /> XML
                         </button>
+                        {canApprove && st !== 'PAID' && (
+                          confirmDeleteId === exp.id ? (
+                            <button
+                              type="button"
+                              disabled={busyId === exp.id}
+                              onClick={() => handleDeleteExpense(exp.id)}
+                              className="text-rose-700 font-bold cursor-pointer"
+                            >
+                              {busyId === exp.id ? '...' : 'Confirm Del'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(exp.id)}
+                              title="Delete Expense"
+                              className="inline-flex items-center text-rose-600 hover:text-rose-800 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
+                        )}
                       </td>
                     </tr>
                   );
@@ -393,6 +504,12 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
               </button>
             </div>
             <form onSubmit={handlePayExpense} className="p-5 space-y-3">
+              {payError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{payError}</span>
+                </div>
+              )}
               <div className="text-xs text-slate-600">
                 Payee: <strong className="text-slate-900">{payModalExpense.employeeName || payModalExpense.vendorName}</strong> ·{' '}
                 Amount: <strong className="font-mono text-slate-900">{formatINR(payModalExpense.amount)}</strong>
@@ -438,12 +555,20 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
           <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Record Expense or Employee Reimbursement</h3>
+              <h3 className="text-sm font-bold text-slate-900">
+                {form.id ? 'Edit Expense / Reimbursement Claim' : 'Record Expense or Employee Reimbursement'}
+              </h3>
               <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
             </div>
             <form onSubmit={handleSaveExpense} className="p-5 space-y-3">
+              {formError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Entry Type</label>
@@ -603,10 +728,106 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                   disabled={saving}
                   className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
                 >
-                  {saving ? 'Submitting...' : 'Submit Expense'}
+                  {saving ? 'Submitting...' : form.id ? 'Save Changes' : 'Submit Expense'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* View Expense Detail Modal */}
+      {viewExpense && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+              <h3 className="text-sm font-bold text-slate-900 font-mono">{viewExpense.expenseNumber}</h3>
+              <button type="button" onClick={() => setViewExpense(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-2.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Type & Date:</span>
+                <span className="font-medium text-slate-800">
+                  {viewExpense.expenseType === 'REIMBURSEMENT' ? 'Reimbursement' : 'Direct Expense'} · {formatDateIN(viewExpense.expenseDate || viewExpense.date)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Payee / Employee:</span>
+                <strong className="text-slate-900">{viewExpense.employeeName || viewExpense.vendorName}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Category:</span>
+                <span className="text-slate-800">{viewExpense.category}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Total Amount:</span>
+                <strong className="font-mono text-slate-900 text-sm">{formatINR(viewExpense.amount)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">GST / ITC:</span>
+                <span className="font-mono text-slate-800">
+                  {formatINR(viewExpense.gstAmount || 0)} ({viewExpense.itcEligible ? 'ITC Eligible' : 'Non-ITC'})
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Workflow Status:</span>
+                <strong className="text-slate-900">{viewExpense.status || 'APPROVED'}</strong>
+              </div>
+              {viewExpense.approvedBy && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Reviewed By:</span>
+                  <span className="text-slate-800">{viewExpense.approvedBy}</span>
+                </div>
+              )}
+              {viewExpense.paidBy && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Disbursed By:</span>
+                  <span className="text-slate-800">{viewExpense.paidBy}</span>
+                </div>
+              )}
+              {viewExpense.journalEntryId && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Journal Ref:</span>
+                  <span className="font-mono text-slate-700">{viewExpense.journalEntryId}</span>
+                </div>
+              )}
+              {viewExpense.rejectionReason && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded text-rose-800">
+                  <span className="font-semibold block mb-0.5">Rejection Reason</span>
+                  {viewExpense.rejectionReason}
+                </div>
+              )}
+              {viewExpense.notes && (
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-slate-700">
+                  <span className="font-semibold text-slate-500 block mb-0.5">Notes</span>
+                  {viewExpense.notes}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                {canEdit && (viewExpense.status || 'APPROVED') !== 'PAID' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewExpense;
+                      setViewExpense(null);
+                      openEditModal(target);
+                    }}
+                    className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg font-semibold cursor-pointer"
+                  >
+                    Edit Expense
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewExpense(null)}
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

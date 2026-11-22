@@ -8,7 +8,7 @@ import {
   formatDateIN,
   round2
 } from './accountingUtils';
-import { Plus, TrendingDown, Trash2, X } from 'lucide-react';
+import { Plus, TrendingDown, Trash2, X, Eye, Edit2, AlertCircle } from 'lucide-react';
 
 interface AssetsTabProps {
   workspace: AccountingWorkspace;
@@ -27,8 +27,13 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
   const [subTab, setSubTab] = useState<'REGISTER' | 'DEP_LOGS'>('REGISTER');
 
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [viewAsset, setViewAsset] = useState<FixedAsset | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [assetForm, setAssetForm] = useState({
+    id: '',
     assetCode: '',
     name: '',
     category: 'Tools & Testing Equipment',
@@ -41,6 +46,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
     depreciationRate: 20,
     location: 'Main Warehouse',
     custodian: '',
+    notes: '',
     bankAccountId: workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '',
     postPurchaseJournal: true
   });
@@ -82,12 +88,60 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
     [disposeTarget, disposeForm.proceeds]
   );
 
+  const openCreateAsset = () => {
+    setModalError(null);
+    setAssetForm({
+      id: '',
+      assetCode: '',
+      name: '',
+      category: 'Tools & Testing Equipment',
+      purchaseDate: today,
+      vendorName: '',
+      purchaseCost: 0,
+      salvageValue: 0,
+      usefulLifeYears: 5,
+      depreciationMethod: 'SLM',
+      depreciationRate: 20,
+      location: 'Main Warehouse',
+      custodian: '',
+      notes: '',
+      bankAccountId: workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '',
+      postPurchaseJournal: true
+    });
+    setIsAddOpen(true);
+  };
+
+  const openEditAsset = (a: FixedAsset) => {
+    setModalError(null);
+    setAssetForm({
+      id: a.id,
+      assetCode: a.assetCode,
+      name: a.name,
+      category: a.category,
+      purchaseDate: a.purchaseDate,
+      vendorName: a.vendorName || '',
+      purchaseCost: a.purchaseCost,
+      salvageValue: a.salvageValue,
+      usefulLifeYears: a.usefulLifeYears,
+      depreciationMethod: a.depreciationMethod,
+      depreciationRate: a.depreciationRate,
+      location: a.location || '',
+      custodian: a.custodian || '',
+      notes: a.notes || '',
+      bankAccountId: workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '',
+      postPurchaseJournal: false
+    });
+    setIsAddOpen(true);
+  };
+
   const handleCreateAsset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
+    setModalError(null);
     setSaving(true);
     try {
       await apiClient.saveFixedAsset({
+        id: assetForm.id || undefined,
         assetCode: assetForm.assetCode.trim() || undefined,
         name: assetForm.name.trim(),
         category: assetForm.category,
@@ -100,22 +154,41 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
         depreciationRate: Number(assetForm.depreciationRate || 0),
         location: assetForm.location.trim(),
         custodian: assetForm.custodian.trim(),
-        bankAccountId: assetForm.postPurchaseJournal ? assetForm.bankAccountId : undefined,
-        postPurchaseJournal: assetForm.postPurchaseJournal
+        notes: assetForm.notes.trim() || undefined,
+        bankAccountId: !assetForm.id && assetForm.postPurchaseJournal ? assetForm.bankAccountId : undefined,
+        postPurchaseJournal: !assetForm.id && assetForm.postPurchaseJournal
       });
       setIsAddOpen(false);
       await onRefresh();
-      showToast('Fixed asset capitalized.', 'success');
+      showToast(assetForm.id ? 'Asset details updated.' : 'Fixed asset capitalized.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to save asset', 'error');
+      const msg = err?.message || 'Failed to save asset';
+      setModalError(msg);
+      showToast(msg, 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteAsset = async (id: string) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      await apiClient.deleteFixedAsset(id);
+      setConfirmDeleteId(null);
+      await onRefresh();
+      showToast('Fixed asset deleted and purchase voucher reversed.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to delete asset', 'error');
+    } finally {
+      setBusyId(null);
     }
   };
 
   const handleRunDep = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!depTarget || saving) return;
+    setModalError(null);
     setSaving(true);
     try {
       await apiClient.runAssetDepreciation(depTarget.id, depForm);
@@ -123,7 +196,9 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
       await onRefresh();
       showToast('Depreciation posted to ledger.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Depreciation run failed', 'error');
+      const msg = err?.message || 'Depreciation run failed';
+      setModalError(msg);
+      showToast(msg, 'error');
     } finally {
       setSaving(false);
     }
@@ -132,6 +207,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
   const handleDispose = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!disposeTarget || saving) return;
+    setModalError(null);
     setSaving(true);
     try {
       await apiClient.disposeAsset(disposeTarget.id, {
@@ -143,7 +219,9 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
       await onRefresh();
       showToast('Asset disposed & gain/loss posted to ledger.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Disposal failed', 'error');
+      const msg = err?.message || 'Disposal failed';
+      setModalError(msg);
+      showToast(msg, 'error');
     } finally {
       setSaving(false);
     }
@@ -190,7 +268,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
         {canManage && (
           <button
             type="button"
-            onClick={() => setIsAddOpen(true)}
+            onClick={openCreateAsset}
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" /> Capitalize Asset
@@ -243,11 +321,30 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                         </span>
                       </td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewAsset(a)}
+                          title="View Asset Details"
+                          className="inline-flex items-center text-slate-600 hover:text-slate-900 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        {canManage && (
+                          <button
+                            type="button"
+                            onClick={() => openEditAsset(a)}
+                            title="Edit Asset Metadata"
+                            className="inline-flex items-center text-slate-600 hover:text-slate-900 cursor-pointer"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         {canManage && a.status === 'ACTIVE' && (
                           <>
                             <button
                               type="button"
                               onClick={() => {
+                                setModalError(null);
                                 setDepTarget(a);
                                 setDepForm({ periodLabel: `${today.slice(0, 7)} Depreciation`, runDate: today, months: 1 });
                               }}
@@ -258,13 +355,40 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                             <button
                               type="button"
                               onClick={() => {
+                                setModalError(null);
                                 setDisposeTarget(a);
-                                setDisposeForm({ ...disposeForm, proceeds: a.bookValue });
+                                setDisposeForm({
+                                  disposalDate: today,
+                                  proceeds: a.bookValue,
+                                  bankAccountId: workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '',
+                                  notes: ''
+                                });
                               }}
                               className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
                             >
-                              <Trash2 className="w-3.5 h-3.5" /> Dispose
+                              Dispose
                             </button>
+                            {a.accumulatedDepreciation === 0 && (
+                              confirmDeleteId === a.id ? (
+                                <button
+                                  type="button"
+                                  disabled={busyId === a.id}
+                                  onClick={() => handleDeleteAsset(a.id)}
+                                  className="text-rose-700 font-bold cursor-pointer"
+                                >
+                                  {busyId === a.id ? '...' : 'Confirm Del'}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(a.id)}
+                                  title="Delete Undepreciated Asset"
+                                  className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 inline" />
+                                </button>
+                              )
+                            )}
                           </>
                         )}
                       </td>
@@ -320,17 +444,25 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
         </div>
       )}
 
-      {/* ADD ASSET MODAL */}
+      {/* ADD / EDIT ASSET MODAL */}
       {isAddOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Capitalize Fixed Asset</h3>
+              <h3 className="text-sm font-bold text-slate-900">
+                {assetForm.id ? `Edit Fixed Asset · ${assetForm.assetCode}` : 'Capitalize Fixed Asset'}
+              </h3>
               <button type="button" onClick={() => setIsAddOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleCreateAsset} className="p-5 space-y-3">
+            <form onSubmit={handleCreateAsset} className="p-5 space-y-3 overflow-y-auto">
+              {modalError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Asset Name *</label>
@@ -360,97 +492,141 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Cost (₹) *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Vendor Name</label>
                   <input
-                    type="number"
-                    min="1"
-                    step="0.01"
-                    required
-                    value={assetForm.purchaseCost}
-                    onChange={e => setAssetForm({ ...assetForm, purchaseCost: Number(e.target.value) })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono font-bold"
+                    type="text"
+                    value={assetForm.vendorName}
+                    onChange={e => setAssetForm({ ...assetForm, vendorName: e.target.value })}
+                    placeholder="Supplier"
+                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Salvage Value (₹)</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Location</label>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={assetForm.salvageValue}
-                    onChange={e => setAssetForm({ ...assetForm, salvageValue: Number(e.target.value) })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono"
+                    type="text"
+                    value={assetForm.location}
+                    onChange={e => setAssetForm({ ...assetForm, location: e.target.value })}
+                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Date *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Custodian</label>
                   <input
-                    type="date"
-                    required
-                    value={assetForm.purchaseDate}
-                    onChange={e => setAssetForm({ ...assetForm, purchaseDate: e.target.value })}
+                    type="text"
+                    value={assetForm.custodian}
+                    onChange={e => setAssetForm({ ...assetForm, custodian: e.target.value })}
+                    placeholder="Assigned person"
                     className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Dep. Method</label>
-                  <select
-                    value={assetForm.depreciationMethod}
-                    onChange={e => setAssetForm({ ...assetForm, depreciationMethod: e.target.value as 'SLM' | 'WDV' })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
-                  >
-                    <option value="SLM">SLM (Straight Line)</option>
-                    <option value="WDV">WDV (Written Down)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Useful Life (Yrs)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={assetForm.usefulLifeYears}
-                    onChange={e => setAssetForm({ ...assetForm, usefulLifeYears: Number(e.target.value) })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">WDV Rate (%)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={assetForm.depreciationRate}
-                    onChange={e => setAssetForm({ ...assetForm, depreciationRate: Number(e.target.value) })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono"
-                  />
-                </div>
-              </div>
-              <label className="inline-flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={assetForm.postPurchaseJournal}
-                  onChange={e => setAssetForm({ ...assetForm, postPurchaseJournal: e.target.checked })}
-                />
-                Post Purchase Journal Voucher (Debit Fixed Assets / Credit Cash or Bank)
-              </label>
-              {assetForm.postPurchaseJournal && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Paid From Cash / Bank</label>
-                  <select
-                    value={assetForm.bankAccountId}
-                    onChange={e => setAssetForm({ ...assetForm, bankAccountId: e.target.value })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
-                  >
-                    {workspace.bankAccounts.filter(b => b.isActive).map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.accountName} ({formatINR(b.currentBalance)})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {!assetForm.id && (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Cost (₹) *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="0.01"
+                        required
+                        value={assetForm.purchaseCost}
+                        onChange={e => setAssetForm({ ...assetForm, purchaseCost: Number(e.target.value) })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Salvage Value (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={assetForm.salvageValue}
+                        onChange={e => setAssetForm({ ...assetForm, salvageValue: Number(e.target.value) })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Date *</label>
+                      <input
+                        type="date"
+                        required
+                        value={assetForm.purchaseDate}
+                        onChange={e => setAssetForm({ ...assetForm, purchaseDate: e.target.value })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Dep. Method</label>
+                      <select
+                        value={assetForm.depreciationMethod}
+                        onChange={e => setAssetForm({ ...assetForm, depreciationMethod: e.target.value as 'SLM' | 'WDV' })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
+                      >
+                        <option value="SLM">SLM (Straight Line)</option>
+                        <option value="WDV">WDV (Written Down)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Useful Life (Yrs)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={assetForm.usefulLifeYears}
+                        onChange={e => setAssetForm({ ...assetForm, usefulLifeYears: Number(e.target.value) })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">WDV Rate (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={assetForm.depreciationRate}
+                        onChange={e => setAssetForm({ ...assetForm, depreciationRate: Number(e.target.value) })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-mono"
+                      />
+                    </div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={assetForm.postPurchaseJournal}
+                      onChange={e => setAssetForm({ ...assetForm, postPurchaseJournal: e.target.checked })}
+                    />
+                    Post Purchase Journal Voucher (Debit Fixed Assets / Credit Cash or Bank)
+                  </label>
+                  {assetForm.postPurchaseJournal && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Paid From Cash / Bank</label>
+                      <select
+                        value={assetForm.bankAccountId}
+                        onChange={e => setAssetForm({ ...assetForm, bankAccountId: e.target.value })}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
+                      >
+                        {workspace.bankAccounts.filter(b => b.isActive).map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.accountName} ({formatINR(b.currentBalance)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
               )}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Notes</label>
+                <input
+                  type="text"
+                  value={assetForm.notes}
+                  onChange={e => setAssetForm({ ...assetForm, notes: e.target.value })}
+                  className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
+                />
+              </div>
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
@@ -464,7 +640,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                   disabled={saving}
                   className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
                 >
-                  {saving ? 'Saving...' : 'Capitalize Asset'}
+                  {saving ? 'Saving...' : assetForm.id ? 'Save Asset Changes' : 'Capitalize Asset'}
                 </button>
               </div>
             </form>
@@ -483,6 +659,12 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
               </button>
             </div>
             <form onSubmit={handleRunDep} className="p-5 space-y-3 text-xs">
+              {modalError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Period Label *</label>
                 <input
@@ -564,6 +746,12 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
               </button>
             </div>
             <form onSubmit={handleDispose} className="p-5 space-y-3 text-xs">
+              {modalError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Disposal Date *</label>
@@ -628,6 +816,97 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* VIEW ASSET DETAIL MODAL */}
+      {viewAsset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+              <h3 className="text-sm font-bold text-slate-900 font-mono">{viewAsset.assetCode}</h3>
+              <button type="button" onClick={() => setViewAsset(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-2.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Asset Name:</span>
+                <strong className="text-slate-900">{viewAsset.name}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Category:</span>
+                <span className="text-slate-800">{viewAsset.category}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Vendor / Location / Custodian:</span>
+                <span className="text-slate-800">
+                  {[viewAsset.vendorName, viewAsset.location, viewAsset.custodian].filter(Boolean).join(' · ') || '—'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Purchase Date:</span>
+                <span className="font-mono text-slate-800">{formatDateIN(viewAsset.purchaseDate)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Gross Cost / Salvage:</span>
+                <span className="font-mono font-semibold text-slate-900">
+                  {formatINR(viewAsset.purchaseCost)} / {formatINR(viewAsset.salvageValue)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Accumulated Depreciation:</span>
+                <span className="font-mono text-amber-700 font-semibold">{formatINR(viewAsset.accumulatedDepreciation)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Net Book Value:</span>
+                <strong className="font-mono text-emerald-700 text-sm">{formatINR(viewAsset.bookValue)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Status:</span>
+                <strong className="text-slate-900">{viewAsset.status}</strong>
+              </div>
+              {viewAsset.purchaseJournalId && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Purchase JV Ref:</span>
+                  <span className="font-mono text-slate-700">{viewAsset.purchaseJournalId}</span>
+                </div>
+              )}
+              {viewAsset.disposalDate && (
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded space-y-1 font-mono">
+                  <div className="font-semibold text-slate-700">Disposed {formatDateIN(viewAsset.disposalDate)}</div>
+                  <div>Proceeds: {formatINR(viewAsset.disposalProceeds || 0)} · Gain/Loss: {formatINR(viewAsset.disposalGainLoss || 0)}</div>
+                </div>
+              )}
+              {viewAsset.notes && (
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-slate-700">
+                  <span className="font-semibold text-slate-500 block mb-0.5">Notes</span>
+                  {viewAsset.notes}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewAsset;
+                      setViewAsset(null);
+                      openEditAsset(target);
+                    }}
+                    className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg font-semibold cursor-pointer"
+                  >
+                    Edit Metadata
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewAsset(null)}
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

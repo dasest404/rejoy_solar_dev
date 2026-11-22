@@ -238,6 +238,27 @@ function ensureRequiredTables($pdo) {
             'approved_at' => 'DATETIME DEFAULT NULL',
             'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
         ],
+        'solar_payments' => [
+            'invoice_id' => "VARCHAR(64) DEFAULT ''",
+            'invoice_number' => "VARCHAR(64) DEFAULT ''",
+            'bank_account_id' => "VARCHAR(64) DEFAULT ''",
+            'journal_entry_id' => "VARCHAR(64) DEFAULT ''"
+        ],
+        'solar_expenses' => [
+            'expense_type' => "VARCHAR(32) DEFAULT 'DIRECT_EXPENSE'",
+            'status' => "VARCHAR(32) DEFAULT 'PAID'",
+            'employee_id' => "VARCHAR(64) DEFAULT ''",
+            'employee_name' => "VARCHAR(255) DEFAULT ''",
+            'gst_amount' => "DECIMAL(14,2) DEFAULT 0.00",
+            'itc_eligible' => "TINYINT(1) DEFAULT 0",
+            'bank_account_id' => "VARCHAR(64) DEFAULT ''",
+            'expense_account_id' => "VARCHAR(64) DEFAULT ''",
+            'journal_entry_id' => "VARCHAR(64) DEFAULT ''",
+            'approved_at' => "VARCHAR(64) DEFAULT NULL",
+            'rejection_reason' => "TEXT",
+            'paid_at' => "VARCHAR(64) DEFAULT NULL",
+            'paid_by' => "VARCHAR(255) DEFAULT ''"
+        ],
         'solar_sales_invoices' => [
             'invoice_type' => "VARCHAR(64) DEFAULT 'TAX_INVOICE'",
             'customer_gst' => "VARCHAR(64) DEFAULT ''",
@@ -246,6 +267,13 @@ function ensureRequiredTables($pdo) {
             'payment_terms' => "VARCHAR(128) DEFAULT '15 Days Net'",
             'deduct_stock' => 'TINYINT(1) DEFAULT 1',
             'stock_deducted' => 'TINYINT(1) DEFAULT 0',
+            'cgst_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'sgst_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'igst_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
+            'einvoice_irn' => "VARCHAR(128) DEFAULT ''",
+            'einvoice_ack_no' => "VARCHAR(64) DEFAULT ''",
+            'einvoice_ack_date' => "VARCHAR(64) DEFAULT ''",
+            'einvoice_status' => "VARCHAR(32) DEFAULT 'NOT_GENERATED'",
             'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
         ],
         'solar_warehouses' => [
@@ -1556,30 +1584,41 @@ function saveEmployeeToDb($pdo, $item, $actor = null) {
 
 // Helper: Payments
 function savePaymentToDb($pdo, $item) {
-    if (empty($item['id'])) $item['id'] = 'pay-' . round(microtime(true) * 1000);
-    $receiptNo = $item['receiptNumber'] ?? $item['receipt_number'] ?? ('REC-' . date('Y') . '-' . rand(100, 999));
-    $projectId = $item['projectId'] ?? $item['project_id'] ?? '';
-    $customerId = $item['customerId'] ?? $item['customer_id'] ?? '';
-    $customerName = $item['customerName'] ?? $item['customer_name'] ?? 'Customer';
-    $milestone = $item['milestone'] ?? 'Advance';
-    $amount = floatval($item['amount'] ?? 0);
-    $status = $item['status'] ?? 'PENDING';
-    $dueDate = !empty($item['dueDate'] ?? $item['due_date']) ? substr($item['dueDate'] ?? $item['due_date'], 0, 10) : null;
-    $paidDate = !empty($item['paidDate'] ?? $item['paid_date']) ? substr($item['paidDate'] ?? $item['paid_date'], 0, 10) : null;
-    $mode = $item['paymentMode'] ?? $item['payment_mode'] ?? 'Bank NEFT/RTGS';
-    $txRef = $item['transactionReference'] ?? $item['transaction_reference'] ?? '';
-    $notes = $item['notes'] ?? '';
-    $tallyStatus = $item['tallySyncStatus'] ?? $item['tally_sync_status'] ?? 'NOT SYNCED';
-    $tallyRef = $item['tallyReference'] ?? $item['tally_reference'] ?? '';
+    $id = !empty($item['id']) ? $item['id'] : ('pay-' . round(microtime(true) * 1000));
+    $ex = fetchExistingRowPhp($pdo, 'solar_payments', $id);
+    $receiptNo = $item['receiptNumber'] ?? $item['receipt_number'] ?? ($ex['receipt_number'] ?? ('REC-' . date('Y') . '-' . rand(100, 999)));
+    $projectId = $item['projectId'] ?? $item['project_id'] ?? ($ex['project_id'] ?? '');
+    $customerId = $item['customerId'] ?? $item['customer_id'] ?? ($ex['customer_id'] ?? '');
+    $customerName = $item['customerName'] ?? $item['customer_name'] ?? ($ex['customer_name'] ?? 'Customer');
+    $milestone = $item['milestone'] ?? ($ex['milestone'] ?? 'Advance');
+    $amount = floatval($item['amount'] ?? ($ex['amount'] ?? 0));
+    $status = $item['status'] ?? ($ex['status'] ?? 'PENDING');
+    $rawDue = $item['dueDate'] ?? $item['due_date'] ?? ($ex['due_date'] ?? null);
+    $dueDate = !empty($rawDue) ? substr((string)$rawDue, 0, 10) : null;
+    $rawPaid = $item['paidDate'] ?? $item['paymentDate'] ?? $item['paid_date'] ?? ($ex['paid_date'] ?? null);
+    $paidDate = !empty($rawPaid) ? substr((string)$rawPaid, 0, 10) : null;
+    $mode = $item['paymentMode'] ?? $item['paymentMethod'] ?? $item['payment_mode'] ?? ($ex['payment_mode'] ?? 'Bank NEFT/RTGS');
+    $txRef = $item['transactionReference'] ?? $item['transactionRef'] ?? $item['referenceNumber'] ?? $item['transaction_reference'] ?? ($ex['transaction_reference'] ?? '');
+    $notes = $item['notes'] ?? ($ex['notes'] ?? '');
+    $invoiceId = $item['invoiceId'] ?? $item['invoice_id'] ?? ($ex['invoice_id'] ?? '');
+    $invoiceNumber = $item['invoiceNumber'] ?? $item['invoice_number'] ?? ($ex['invoice_number'] ?? '');
+    $bankAccountId = $item['bankAccountId'] ?? $item['bank_account_id'] ?? ($ex['bank_account_id'] ?? '');
+    $journalEntryId = $item['journalEntryId'] ?? $item['journal_entry_id'] ?? ($ex['journal_entry_id'] ?? '');
+    $tallyStatus = $item['tallySyncStatus'] ?? $item['tally_sync_status'] ?? ($ex['tally_sync_status'] ?? 'NOT SYNCED');
+    $tallyRef = $item['tallyReference'] ?? $item['tally_reference'] ?? ($ex['tally_reference'] ?? '');
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_payments` (
             `id`, `receipt_number`, `project_id`, `customer_id`, `customer_name`,
             `milestone`, `amount`, `status`, `due_date`, `paid_date`,
-            `payment_mode`, `transaction_reference`, `notes`, `tally_sync_status`, `tally_reference`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `payment_mode`, `transaction_reference`, `notes`,
+            `invoice_id`, `invoice_number`, `bank_account_id`, `journal_entry_id`,
+            `tally_sync_status`, `tally_reference`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
+            `customer_id` = VALUES(`customer_id`),
             `customer_name` = VALUES(`customer_name`),
+            `project_id` = VALUES(`project_id`),
             `milestone` = VALUES(`milestone`),
             `amount` = VALUES(`amount`),
             `status` = VALUES(`status`),
@@ -1588,41 +1627,84 @@ function savePaymentToDb($pdo, $item) {
             `payment_mode` = VALUES(`payment_mode`),
             `transaction_reference` = VALUES(`transaction_reference`),
             `notes` = VALUES(`notes`),
+            `invoice_id` = VALUES(`invoice_id`),
+            `invoice_number` = VALUES(`invoice_number`),
+            `bank_account_id` = VALUES(`bank_account_id`),
+            `journal_entry_id` = VALUES(`journal_entry_id`),
             `tally_sync_status` = VALUES(`tally_sync_status`),
             `tally_reference` = VALUES(`tally_reference`)
     ");
     $stmt->execute([
-        $item['id'], $receiptNo, $projectId, $customerId, $customerName,
+        $id, $receiptNo, $projectId, $customerId, $customerName,
         $milestone, $amount, $status, $dueDate, $paidDate,
-        $mode, $txRef, $notes, $tallyStatus, $tallyRef
+        $mode, $txRef, $notes,
+        $invoiceId, $invoiceNumber, $bankAccountId, $journalEntryId,
+        $tallyStatus, $tallyRef
     ]);
-    return $item;
+    return array_merge($item, [
+        'id' => $id,
+        'receiptNumber' => $receiptNo,
+        'projectId' => $projectId,
+        'customerId' => $customerId,
+        'customerName' => $customerName,
+        'milestone' => $milestone,
+        'amount' => $amount,
+        'status' => $status,
+        'dueDate' => $dueDate ?? '',
+        'paidDate' => $paidDate ?? '',
+        'paymentMode' => $mode,
+        'transactionReference' => $txRef,
+        'notes' => $notes,
+        'invoiceId' => $invoiceId,
+        'invoiceNumber' => $invoiceNumber,
+        'bankAccountId' => $bankAccountId,
+        'journalEntryId' => $journalEntryId,
+        'tallySyncStatus' => $tallyStatus,
+        'tallyReference' => $tallyRef
+    ]);
 }
 
 // Helper: Expenses
 function saveExpenseToDb($pdo, $item) {
-    if (empty($item['id'])) $item['id'] = 'exp-' . round(microtime(true) * 1000);
-    $expNo = $item['expenseNumber'] ?? $item['expense_number'] ?? ('EXP-' . date('Y') . '-' . rand(100, 999));
-    $projectId = $item['projectId'] ?? $item['project_id'] ?? '';
-    $projectCode = $item['projectCode'] ?? $item['project_code'] ?? '';
-    $vendorName = $item['vendorName'] ?? $item['vendor_name'] ?? 'Vendor';
-    $category = $item['category'] ?? 'Miscellaneous';
-    $amount = floatval($item['amount'] ?? 0);
-    $rawExpDate = $item['expenseDate'] ?? ($item['date'] ?? ($item['expense_date'] ?? ''));
+    $id = !empty($item['id']) ? $item['id'] : ('exp-' . round(microtime(true) * 1000));
+    $ex = fetchExistingRowPhp($pdo, 'solar_expenses', $id);
+    $expNo = $item['expenseNumber'] ?? $item['expense_number'] ?? ($ex['expense_number'] ?? ('EXP-' . date('Y') . '-' . rand(100, 999)));
+    $projectId = $item['projectId'] ?? $item['project_id'] ?? ($ex['project_id'] ?? '');
+    $projectCode = $item['projectCode'] ?? $item['project_code'] ?? ($ex['project_code'] ?? '');
+    $vendorName = $item['vendorName'] ?? $item['vendor'] ?? $item['vendor_name'] ?? ($ex['vendor_name'] ?? 'Vendor');
+    $category = $item['category'] ?? ($ex['category'] ?? 'Miscellaneous');
+    $amount = floatval($item['amount'] ?? ($ex['amount'] ?? 0));
+    $rawExpDate = $item['expenseDate'] ?? $item['date'] ?? $item['expense_date'] ?? ($ex['expense_date'] ?? '');
     $expDate = !empty($rawExpDate) ? substr((string)$rawExpDate, 0, 10) : date('Y-m-d');
-    $mode = $item['paymentMode'] ?? $item['payment_mode'] ?? 'Bank Payment';
-    $refNo = $item['referenceNo'] ?? $item['reference_no'] ?? '';
-    $notes = $item['notes'] ?? '';
-    $receiptUrl = $item['receiptUrl'] ?? $item['receipt_url'] ?? '';
-    $approvedBy = $item['approvedBy'] ?? $item['approved_by'] ?? '';
-    $tallyStatus = $item['tallySyncStatus'] ?? $item['tally_sync_status'] ?? 'NOT SYNCED';
+    $mode = $item['paymentMode'] ?? $item['paymentMethod'] ?? $item['payment_mode'] ?? ($ex['payment_mode'] ?? 'Bank Payment');
+    $refNo = $item['referenceNo'] ?? $item['referenceNumber'] ?? $item['reference_no'] ?? ($ex['reference_no'] ?? '');
+    $notes = $item['notes'] ?? ($ex['notes'] ?? '');
+    $receiptUrl = $item['receiptUrl'] ?? $item['receipt_url'] ?? ($ex['receipt_url'] ?? '');
+    $approvedBy = $item['approvedBy'] ?? $item['approved_by'] ?? ($ex['approved_by'] ?? '');
+    $expenseType = $item['expenseType'] ?? $item['expense_type'] ?? ($ex['expense_type'] ?? 'DIRECT_EXPENSE');
+    $status = $item['status'] ?? ($ex['status'] ?? 'PAID');
+    $employeeId = $item['employeeId'] ?? $item['employee_id'] ?? ($ex['employee_id'] ?? '');
+    $employeeName = $item['employeeName'] ?? $item['employee_name'] ?? ($ex['employee_name'] ?? '');
+    $gstAmount = floatval($item['gstAmount'] ?? $item['gst_amount'] ?? ($ex['gst_amount'] ?? 0));
+    $itcEligible = (isset($item['itcEligible']) ? (bool)$item['itcEligible'] : !empty($ex['itc_eligible'])) ? 1 : 0;
+    $bankAccountId = $item['bankAccountId'] ?? $item['bank_account_id'] ?? ($ex['bank_account_id'] ?? '');
+    $expenseAccountId = $item['expenseAccountId'] ?? $item['expense_account_id'] ?? ($ex['expense_account_id'] ?? '');
+    $journalEntryId = $item['journalEntryId'] ?? $item['journal_entry_id'] ?? ($ex['journal_entry_id'] ?? '');
+    $approvedAt = $item['approvedAt'] ?? $item['approved_at'] ?? ($ex['approved_at'] ?? null);
+    $rejectionReason = $item['rejectionReason'] ?? $item['rejection_reason'] ?? ($ex['rejection_reason'] ?? '');
+    $paidAt = $item['paidAt'] ?? $item['paid_at'] ?? ($ex['paid_at'] ?? null);
+    $paidBy = $item['paidBy'] ?? $item['paid_by'] ?? ($ex['paid_by'] ?? '');
+    $tallyStatus = $item['tallySyncStatus'] ?? $item['tally_sync_status'] ?? ($ex['tally_sync_status'] ?? 'NOT SYNCED');
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_expenses` (
             `id`, `expense_number`, `project_id`, `project_code`, `vendor_name`,
             `category`, `amount`, `expense_date`, `payment_mode`, `reference_no`,
-            `notes`, `receipt_url`, `approved_by`, `tally_sync_status`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `notes`, `receipt_url`, `approved_by`,
+            `expense_type`, `status`, `employee_id`, `employee_name`, `gst_amount`, `itc_eligible`,
+            `bank_account_id`, `expense_account_id`, `journal_entry_id`, `approved_at`, `rejection_reason`, `paid_at`, `paid_by`,
+            `tally_sync_status`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             `project_id` = VALUES(`project_id`),
             `project_code` = VALUES(`project_code`),
@@ -1635,16 +1717,59 @@ function saveExpenseToDb($pdo, $item) {
             `notes` = VALUES(`notes`),
             `receipt_url` = VALUES(`receipt_url`),
             `approved_by` = VALUES(`approved_by`),
+            `expense_type` = VALUES(`expense_type`),
+            `status` = VALUES(`status`),
+            `employee_id` = VALUES(`employee_id`),
+            `employee_name` = VALUES(`employee_name`),
+            `gst_amount` = VALUES(`gst_amount`),
+            `itc_eligible` = VALUES(`itc_eligible`),
+            `bank_account_id` = VALUES(`bank_account_id`),
+            `expense_account_id` = VALUES(`expense_account_id`),
+            `journal_entry_id` = VALUES(`journal_entry_id`),
+            `approved_at` = VALUES(`approved_at`),
+            `rejection_reason` = VALUES(`rejection_reason`),
+            `paid_at` = VALUES(`paid_at`),
+            `paid_by` = VALUES(`paid_by`),
             `tally_sync_status` = VALUES(`tally_sync_status`)
     ");
     $stmt->execute([
-        $item['id'], $expNo, $projectId, $projectCode, $vendorName,
+        $id, $expNo, $projectId, $projectCode, $vendorName,
         $category, $amount, $expDate, $mode, $refNo,
-        $notes, $receiptUrl, $approvedBy, $tallyStatus
+        $notes, $receiptUrl, $approvedBy,
+        $expenseType, $status, $employeeId, $employeeName, $gstAmount, $itcEligible,
+        $bankAccountId, $expenseAccountId, $journalEntryId, $approvedAt, $rejectionReason, $paidAt, $paidBy,
+        $tallyStatus
     ]);
-    $item['expenseDate'] = $expDate;
-    $item['date'] = $expDate;
-    return $item;
+    return array_merge($item, [
+        'id' => $id,
+        'expenseNumber' => $expNo,
+        'projectId' => $projectId,
+        'projectCode' => $projectCode,
+        'vendorName' => $vendorName,
+        'category' => $category,
+        'amount' => $amount,
+        'expenseDate' => $expDate,
+        'date' => $expDate,
+        'paymentMode' => $mode,
+        'referenceNo' => $refNo,
+        'notes' => $notes,
+        'receiptUrl' => $receiptUrl,
+        'approvedBy' => $approvedBy,
+        'expenseType' => $expenseType,
+        'status' => $status,
+        'employeeId' => $employeeId,
+        'employeeName' => $employeeName,
+        'gstAmount' => $gstAmount,
+        'itcEligible' => (bool)$itcEligible,
+        'bankAccountId' => $bankAccountId,
+        'expenseAccountId' => $expenseAccountId,
+        'journalEntryId' => $journalEntryId,
+        'approvedAt' => $approvedAt ?? '',
+        'rejectionReason' => $rejectionReason,
+        'paidAt' => $paidAt ?? '',
+        'paidBy' => $paidBy,
+        'tallySyncStatus' => $tallyStatus
+    ]);
 }
 
 function fetchExistingRowPhp($pdo, $table, $id) {
@@ -2093,6 +2218,14 @@ function saveSalesInvoiceToDb($pdo, $item) {
     $warehouseId = $item['warehouseId'] ?? $item['warehouse_id'] ?? ($ex['warehouse_id'] ?? '');
     $deductStock = (isset($item['deductStock']) ? (bool)$item['deductStock'] : (bool)($ex['deduct_stock'] ?? 1)) ? 1 : 0;
     $stockDeducted = (isset($item['stockDeducted']) ? (bool)$item['stockDeducted'] : (bool)($ex['stock_deducted'] ?? 0)) ? 1 : 0;
+    $igstDefault = floatval($ex['igst_amount'] ?? 0) > 0 ? 0.0 : ($gstAmount / 2.0);
+    $cgstAmount = floatval($item['cgstAmount'] ?? $item['cgst_amount'] ?? ($ex['cgst_amount'] ?? $igstDefault));
+    $sgstAmount = floatval($item['sgstAmount'] ?? $item['sgst_amount'] ?? ($ex['sgst_amount'] ?? $igstDefault));
+    $igstAmount = floatval($item['igstAmount'] ?? $item['igst_amount'] ?? ($ex['igst_amount'] ?? 0));
+    $einvoiceIrn = $item['einvoiceIrn'] ?? $item['einvoice_irn'] ?? ($ex['einvoice_irn'] ?? '');
+    $einvoiceAckNo = $item['einvoiceAckNo'] ?? $item['einvoice_ack_no'] ?? ($ex['einvoice_ack_no'] ?? '');
+    $einvoiceAckDate = $item['einvoiceAckDate'] ?? $item['einvoice_ack_date'] ?? ($ex['einvoice_ack_date'] ?? '');
+    $einvoiceStatus = $item['einvoiceStatus'] ?? $item['einvoice_status'] ?? ($ex['einvoice_status'] ?? 'NOT_GENERATED');
     $notes = $item['notes'] ?? ($ex['notes'] ?? '');
 
     $stmt = $pdo->prepare("
@@ -2100,9 +2233,11 @@ function saveSalesInvoiceToDb($pdo, $item) {
             `id`, `invoice_number`, `invoice_type`, `project_id`, `project_title`,
             `customer_id`, `customer_name`, `customer_gst`, `customer_address`,
             `invoice_date`, `due_date`, `payment_terms`, `items_json`, `subtotal`, `gst_amount`,
+            `cgst_amount`, `sgst_amount`, `igst_amount`,
+            `einvoice_irn`, `einvoice_ack_no`, `einvoice_ack_date`, `einvoice_status`,
             `total_amount`, `payment_status`, `paid_amount`, `balance_amount`,
             `eway_bill_number`, `eway_bill_details_json`, `warehouse_id`, `deduct_stock`, `stock_deducted`, `notes`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             `invoice_type` = VALUES(`invoice_type`),
             `project_id` = VALUES(`project_id`),
@@ -2117,6 +2252,13 @@ function saveSalesInvoiceToDb($pdo, $item) {
             `items_json` = VALUES(`items_json`),
             `subtotal` = VALUES(`subtotal`),
             `gst_amount` = VALUES(`gst_amount`),
+            `cgst_amount` = VALUES(`cgst_amount`),
+            `sgst_amount` = VALUES(`sgst_amount`),
+            `igst_amount` = VALUES(`igst_amount`),
+            `einvoice_irn` = VALUES(`einvoice_irn`),
+            `einvoice_ack_no` = VALUES(`einvoice_ack_no`),
+            `einvoice_ack_date` = VALUES(`einvoice_ack_date`),
+            `einvoice_status` = VALUES(`einvoice_status`),
             `total_amount` = VALUES(`total_amount`),
             `payment_status` = VALUES(`payment_status`),
             `paid_amount` = VALUES(`paid_amount`),
@@ -2132,6 +2274,8 @@ function saveSalesInvoiceToDb($pdo, $item) {
         $id, $invNumber, $invType, $projectId, $projectTitle,
         $customerId, $customerName, $customerGst, $customerAddr,
         $invDate, $dueDate, $paymentTerms, $itemsJson, $subtotal, $gstAmount,
+        $cgstAmount, $sgstAmount, $igstAmount,
+        $einvoiceIrn, $einvoiceAckNo, $einvoiceAckDate, $einvoiceStatus,
         $totalAmount, $status, $paidAmount, $balanceAmount,
         $ewayBill, $ewayDetailsJson, $warehouseId, $deductStock, $stockDeducted, $notes
     ]);
@@ -2153,6 +2297,13 @@ function saveSalesInvoiceToDb($pdo, $item) {
         'subtotal' => $subtotal,
         'taxAmount' => $gstAmount,
         'gstAmount' => $gstAmount,
+        'cgstAmount' => $cgstAmount,
+        'sgstAmount' => $sgstAmount,
+        'igstAmount' => $igstAmount,
+        'einvoiceIrn' => $einvoiceIrn,
+        'einvoiceAckNo' => $einvoiceAckNo,
+        'einvoiceAckDate' => $einvoiceAckDate,
+        'einvoiceStatus' => $einvoiceStatus,
         'totalAmount' => $totalAmount,
         'grandTotal' => $totalAmount,
         'status' => $status,
@@ -8223,6 +8374,13 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'balanceDue' => $bal,
                 'ewayBillNumber' => $r['eway_bill_number'] ?? '',
                 'ewayBillDetails' => json_decode($r['eway_bill_details_json'] ?? 'null', true),
+                'cgstAmount' => floatval($r['cgst_amount'] ?? 0),
+                'sgstAmount' => floatval($r['sgst_amount'] ?? 0),
+                'igstAmount' => floatval($r['igst_amount'] ?? 0),
+                'einvoiceIrn' => $r['einvoice_irn'] ?? '',
+                'einvoiceAckNo' => $r['einvoice_ack_no'] ?? '',
+                'einvoiceAckDate' => $r['einvoice_ack_date'] ?? '',
+                'einvoiceStatus' => $r['einvoice_status'] ?? 'NOT_GENERATED',
                 'warehouseId' => $r['warehouse_id'] ?? '',
                 'deductStock' => isset($r['deduct_stock']) ? (bool)$r['deduct_stock'] : true,
                 'stockDeducted' => (bool)($r['stock_deducted'] ?? 0),

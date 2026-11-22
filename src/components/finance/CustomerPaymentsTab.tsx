@@ -11,7 +11,7 @@ import {
 import { apiClient } from '../../services/apiClient';
 import { generateTallyReceiptXML, attemptTallySync } from '../../services/tally';
 import { formatINR, formatDateIN, round2 } from './accountingUtils';
-import { Plus, Search, AlertCircle, CheckCircle2, FileCode, RefreshCw, X } from 'lucide-react';
+import { Plus, Search, AlertCircle, CheckCircle2, FileCode, RefreshCw, X, Eye, Edit2, Trash2 } from 'lucide-react';
 
 interface CustomerPaymentsTabProps {
   workspace: AccountingWorkspace;
@@ -45,6 +45,10 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
   const [subTab, setSubTab] = useState<'RECEIPTS' | 'OPEN_INVOICES' | 'OVERDUE'>('RECEIPTS');
   const [search, setSearch] = useState('');
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [editingReceiptId, setEditingReceiptId] = useState<string | null>(null);
+  const [viewReceipt, setViewReceipt] = useState<PaymentRecord | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -119,6 +123,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
 
   const openModalForInvoice = (inv?: SalesInvoice, balance?: number) => {
     setErrorMsg(null);
+    setEditingReceiptId(null);
     const defaultBank = workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '';
     if (inv) {
       setForm({
@@ -152,8 +157,52 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
     setIsReceiptModalOpen(true);
   };
 
+  const openEditReceipt = (p: PaymentRecord) => {
+    setErrorMsg(null);
+    setEditingReceiptId(p.id);
+    const defaultBank = workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '';
+    setForm({
+      invoiceId: p.invoiceId || '',
+      customerId: p.customerId || '',
+      customerName: p.customerName,
+      projectId: p.projectId || '',
+      milestone: p.milestone || 'Customer Receipt',
+      amount: round2(Number(p.amount || 0)),
+      paidDate: (p.paidDate || p.dueDate || today).slice(0, 10),
+      paymentMode: p.paymentMode || 'Bank NEFT/RTGS',
+      transactionReference: p.transactionReference || '',
+      bankAccountId: p.bankAccountId || defaultBank,
+      notes: p.notes || ''
+    });
+    setIsReceiptModalOpen(true);
+  };
+
+  const handleDeleteReceipt = async (id: string) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      await apiClient.deleteCustomerReceipt(id);
+      setConfirmDeleteId(null);
+      await onRefresh();
+      showToast('Customer receipt deleted and ledger entry reversed.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to delete customer receipt', 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const selectableInvoices = useMemo(() => {
+    const list = [...openInvoices];
+    if (editingReceiptId && form.invoiceId && !list.some(r => r.inv.id === form.invoiceId)) {
+      const existing = invoiceRows.find(r => r.inv.id === form.invoiceId);
+      if (existing) list.unshift(existing);
+    }
+    return list;
+  }, [openInvoices, invoiceRows, editingReceiptId, form.invoiceId]);
+
   const handleInvoiceSelect = (invoiceId: string) => {
-    const match = openInvoices.find(r => r.inv.id === invoiceId);
+    const match = selectableInvoices.find(r => r.inv.id === invoiceId);
     if (!match) {
       setForm(prev => ({ ...prev, invoiceId: '' }));
       return;
@@ -165,7 +214,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
       customerName: match.inv.customerName,
       projectId: match.inv.projectId || prev.projectId,
       milestone: `Against ${match.inv.invoiceNumber}`,
-      amount: match.balance
+      amount: editingReceiptId ? prev.amount : match.balance
     }));
   };
 
@@ -179,7 +228,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
     }
     setSaving(true);
     try {
-      await apiClient.recordCustomerReceipt({
+      const payload = {
         customerName: form.customerName.trim(),
         customerId: form.customerId || undefined,
         projectId: form.projectId || undefined,
@@ -193,10 +242,21 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
         transactionReference: form.transactionReference.trim() || undefined,
         bankAccountId: form.bankAccountId || undefined,
         notes: form.notes.trim() || undefined
-      });
+      };
+      if (editingReceiptId) {
+        await apiClient.updateCustomerReceipt(editingReceiptId, payload);
+      } else {
+        await apiClient.recordCustomerReceipt(payload);
+      }
       setIsReceiptModalOpen(false);
+      setEditingReceiptId(null);
       await onRefresh();
-      showToast('Customer receipt recorded and posted to general ledger.', 'success');
+      showToast(
+        editingReceiptId
+          ? 'Customer receipt updated and ledger adjusted.'
+          : 'Customer receipt recorded and posted to general ledger.',
+        'success'
+      );
     } catch (err: any) {
       const msg = err?.message || 'Failed to record receipt';
       setErrorMsg(msg);
@@ -347,6 +407,24 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                       <td className="py-2.5 px-4 text-right space-x-2 whitespace-nowrap">
                         <button
                           type="button"
+                          onClick={() => setViewReceipt(p)}
+                          title="View Receipt Details"
+                          className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => openEditReceipt(p)}
+                            title="Edit Receipt"
+                            className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
                           onClick={() => onOpenXml(generateTallyReceiptXML(p, settings))}
                           className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
                         >
@@ -369,6 +447,27 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                             <RefreshCw className={`w-3 h-3 ${syncingId === p.id ? 'animate-spin' : ''}`} />
                             {syncingId === p.id ? 'Syncing' : 'Tally'}
                           </button>
+                        )}
+                        {canEdit && (
+                          confirmDeleteId === p.id ? (
+                            <button
+                              type="button"
+                              disabled={busyId === p.id}
+                              onClick={() => handleDeleteReceipt(p.id)}
+                              className="text-rose-700 font-bold cursor-pointer"
+                            >
+                              {busyId === p.id ? '...' : 'Confirm Del'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(p.id)}
+                              title="Delete Receipt"
+                              className="inline-flex items-center text-rose-600 hover:text-rose-800 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
                         )}
                       </td>
                     </tr>
@@ -453,8 +552,17 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
           <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Record Customer Receipt & Auto-Post Ledger</h3>
-              <button type="button" onClick={() => setIsReceiptModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <h3 className="text-sm font-bold text-slate-900">
+                {editingReceiptId ? 'Edit Customer Receipt & Adjust Ledger' : 'Record Customer Receipt & Auto-Post Ledger'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsReceiptModalOpen(false);
+                  setEditingReceiptId(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -474,7 +582,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                   className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                 >
                   <option value="">— Direct / On-Account Receipt —</option>
-                  {openInvoices.map(({ inv, balance }) => (
+                  {selectableInvoices.map(({ inv, balance }) => (
                     <option key={inv.id} value={inv.id}>
                       {inv.invoiceNumber} — {inv.customerName} (Due: {formatINR(balance)})
                     </option>
@@ -599,7 +707,10 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsReceiptModalOpen(false)}
+                  onClick={() => {
+                    setIsReceiptModalOpen(false);
+                    setEditingReceiptId(null);
+                  }}
                   className="px-4 py-2 text-xs font-semibold text-slate-600 cursor-pointer"
                 >
                   Cancel
@@ -609,10 +720,94 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                   disabled={saving}
                   className="px-5 py-2 text-xs font-semibold text-white bg-amber-500 hover:bg-amber-600 rounded-lg cursor-pointer disabled:opacity-50"
                 >
-                  {saving ? 'Posting...' : 'Record Receipt'}
+                  {saving ? 'Posting...' : editingReceiptId ? 'Save Receipt Changes' : 'Record Receipt'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* View Receipt Detail Modal */}
+      {viewReceipt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+              <h3 className="text-sm font-bold text-slate-900 font-mono">{viewReceipt.receiptNumber}</h3>
+              <button type="button" onClick={() => setViewReceipt(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-2.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Customer:</span>
+                <strong className="text-slate-900">{viewReceipt.customerName}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Receipt Date:</span>
+                <span className="font-mono text-slate-800">{formatDateIN(viewReceipt.paidDate || viewReceipt.dueDate)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Amount Collected:</span>
+                <strong className="font-mono text-emerald-700 text-sm">{formatINR(viewReceipt.amount)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Status:</span>
+                <span className="font-semibold text-slate-900">{viewReceipt.status}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Invoice / Milestone:</span>
+                <span className="text-slate-800">
+                  {viewReceipt.invoiceNumber ? `${viewReceipt.invoiceNumber} · ` : ''}{viewReceipt.milestone}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Bank / Cash Register:</span>
+                <span className="text-slate-800">
+                  {workspace.bankAccounts.find(b => b.id === viewReceipt.bankAccountId)?.accountName || 'Default Bank/Cash'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Mode & Reference:</span>
+                <span className="font-mono text-slate-800">
+                  {viewReceipt.paymentMode || 'NEFT'}{viewReceipt.transactionReference ? ` · ${viewReceipt.transactionReference}` : ''}
+                </span>
+              </div>
+              {viewReceipt.journalEntryId && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Journal Voucher Ref:</span>
+                  <span className="font-mono text-slate-700">{viewReceipt.journalEntryId}</span>
+                </div>
+              )}
+              {viewReceipt.notes && (
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-slate-500 block mb-1">Notes</span>
+                  <p className="text-slate-800 bg-slate-50 p-2 rounded">{viewReceipt.notes}</p>
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewReceipt;
+                      setViewReceipt(null);
+                      openEditReceipt(target);
+                    }}
+                    className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg font-semibold cursor-pointer"
+                  >
+                    Edit Receipt
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewReceipt(null)}
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

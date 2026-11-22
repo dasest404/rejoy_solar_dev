@@ -275,6 +275,27 @@ class MySqlDatabaseManager {
           approved_at: "DATETIME DEFAULT NULL",
           updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
         },
+        solar_payments: {
+          invoice_id: "VARCHAR(64) DEFAULT ''",
+          invoice_number: "VARCHAR(64) DEFAULT ''",
+          bank_account_id: "VARCHAR(64) DEFAULT ''",
+          journal_entry_id: "VARCHAR(64) DEFAULT ''"
+        },
+        solar_expenses: {
+          expense_type: "VARCHAR(32) DEFAULT 'DIRECT_EXPENSE'",
+          status: "VARCHAR(32) DEFAULT 'PAID'",
+          employee_id: "VARCHAR(64) DEFAULT ''",
+          employee_name: "VARCHAR(255) DEFAULT ''",
+          gst_amount: "DECIMAL(14,2) DEFAULT 0.00",
+          itc_eligible: "TINYINT(1) DEFAULT 0",
+          bank_account_id: "VARCHAR(64) DEFAULT ''",
+          expense_account_id: "VARCHAR(64) DEFAULT ''",
+          journal_entry_id: "VARCHAR(64) DEFAULT ''",
+          approved_at: "VARCHAR(64) DEFAULT NULL",
+          rejection_reason: "TEXT",
+          paid_at: "VARCHAR(64) DEFAULT NULL",
+          paid_by: "VARCHAR(255) DEFAULT ''"
+        },
         solar_sales_invoices: {
           invoice_type: "VARCHAR(64) DEFAULT 'TAX_INVOICE'",
           customer_gst: "VARCHAR(64) DEFAULT ''",
@@ -283,6 +304,13 @@ class MySqlDatabaseManager {
           payment_terms: "VARCHAR(128) DEFAULT '15 Days Net'",
           deduct_stock: "TINYINT(1) DEFAULT 1",
           stock_deducted: "TINYINT(1) DEFAULT 0",
+          cgst_amount: "DECIMAL(14,2) DEFAULT 0.00",
+          sgst_amount: "DECIMAL(14,2) DEFAULT 0.00",
+          igst_amount: "DECIMAL(14,2) DEFAULT 0.00",
+          einvoice_irn: "VARCHAR(128) DEFAULT ''",
+          einvoice_ack_no: "VARCHAR(64) DEFAULT ''",
+          einvoice_ack_date: "VARCHAR(64) DEFAULT ''",
+          einvoice_status: "VARCHAR(32) DEFAULT 'NOT_GENERATED'",
           updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
         },
         solar_warehouses: {
@@ -4463,44 +4491,83 @@ class MySqlDatabaseManager {
 
   public async savePayment(item: any): Promise<any> {
     this.assertDbConnected();
+    const id = item.id || `pay-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_payments', id);
+    const receiptNumber = item.receiptNumber ?? item.receiptNo ?? item.receipt_number ?? existing?.receipt_number ?? id;
+    const projectId = item.projectId ?? item.project_id ?? existing?.project_id ?? '';
+    const customerId = item.customerId ?? item.customer_id ?? existing?.customer_id ?? '';
+    const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? 'Solar Customer';
+    const milestone = item.milestone ?? existing?.milestone ?? 'Project Milestone';
+    const amount = Number(item.amount ?? existing?.amount) || 0;
+    const status = item.status ?? existing?.status ?? 'PENDING';
+    const dueDate = (item.dueDate ?? item.due_date ?? existing?.due_date) ? this.toSqlDate(item.dueDate ?? item.due_date ?? existing?.due_date) : null;
+    const rawPaid = item.paidDate ?? item.paymentDate ?? item.paid_date ?? existing?.paid_date;
+    const paidDate = rawPaid ? this.toSqlDate(rawPaid) : null;
+    const paymentMode = item.paymentMode ?? item.paymentMethod ?? item.payment_mode ?? existing?.payment_mode ?? 'Bank NEFT/RTGS';
+    const txRef = item.transactionReference ?? item.transactionRef ?? item.referenceNumber ?? item.transaction_reference ?? existing?.transaction_reference ?? '';
+    const notes = item.notes ?? existing?.notes ?? '';
+    const invoiceId = item.invoiceId ?? item.invoice_id ?? existing?.invoice_id ?? '';
+    const invoiceNumber = item.invoiceNumber ?? item.invoice_number ?? existing?.invoice_number ?? '';
+    const bankAccountId = item.bankAccountId ?? item.bank_account_id ?? existing?.bank_account_id ?? '';
+    const journalEntryId = item.journalEntryId ?? item.journal_entry_id ?? existing?.journal_entry_id ?? '';
+    const tallySyncStatus = item.tallySyncStatus ?? item.tally_sync_status ?? existing?.tally_sync_status ?? 'NOT SYNCED';
+    const tallyReference = item.tallyReference ?? item.tally_reference ?? existing?.tally_reference ?? '';
+
     const sql = `
       INSERT INTO \`solar_payments\` (
         \`id\`, \`receipt_number\`, \`project_id\`, \`customer_id\`, \`customer_name\`,
         \`milestone\`, \`amount\`, \`status\`, \`due_date\`, \`paid_date\`,
-        \`payment_mode\`, \`transaction_reference\`, \`notes\`, \`tally_sync_status\`, \`tally_reference\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`payment_mode\`, \`transaction_reference\`, \`notes\`,
+        \`invoice_id\`, \`invoice_number\`, \`bank_account_id\`, \`journal_entry_id\`,
+        \`tally_sync_status\`, \`tally_reference\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        \`customer_name\` = VALUES(\`customer_name\`), \`milestone\` = VALUES(\`milestone\`),
+        \`customer_id\` = VALUES(\`customer_id\`), \`customer_name\` = VALUES(\`customer_name\`),
+        \`project_id\` = VALUES(\`project_id\`), \`milestone\` = VALUES(\`milestone\`),
         \`amount\` = VALUES(\`amount\`), \`status\` = VALUES(\`status\`),
         \`due_date\` = VALUES(\`due_date\`), \`paid_date\` = VALUES(\`paid_date\`),
         \`payment_mode\` = VALUES(\`payment_mode\`), \`transaction_reference\` = VALUES(\`transaction_reference\`),
-        \`notes\` = VALUES(\`notes\`), \`tally_sync_status\` = VALUES(\`tally_sync_status\`),
+        \`notes\` = VALUES(\`notes\`), \`invoice_id\` = VALUES(\`invoice_id\`),
+        \`invoice_number\` = VALUES(\`invoice_number\`), \`bank_account_id\` = VALUES(\`bank_account_id\`),
+        \`journal_entry_id\` = VALUES(\`journal_entry_id\`), \`tally_sync_status\` = VALUES(\`tally_sync_status\`),
         \`tally_reference\` = VALUES(\`tally_reference\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
-      item.receiptNumber || item.receiptNo || item.id,
-      item.projectId || '',
-      item.customerId || '',
-      item.customerName || 'Solar Customer',
-      item.milestone || 'Project Milestone',
-      Number(item.amount) || 0,
-      item.status || 'PENDING',
-      item.dueDate ? String(item.dueDate).split('T')[0] : null,
-      (item.paidDate || item.paymentDate) ? String(item.paidDate || item.paymentDate).split('T')[0] : null,
-      item.paymentMode || item.paymentMethod || 'Bank NEFT/RTGS',
-      item.transactionReference || item.transactionRef || item.referenceNumber || '',
-      item.notes || '',
-      item.tallySyncStatus || 'NOT SYNCED',
-      item.tallyReference || ''
+      id, receiptNumber, projectId, customerId, customerName,
+      milestone, amount, status, dueDate, paidDate,
+      paymentMode, txRef, notes,
+      invoiceId, invoiceNumber, bankAccountId, journalEntryId,
+      tallySyncStatus, tallyReference
     ]);
 
+    const normalized = {
+      ...item,
+      id,
+      receiptNumber,
+      projectId,
+      customerId,
+      customerName,
+      milestone,
+      amount,
+      status,
+      dueDate: dueDate || '',
+      paidDate: paidDate || '',
+      paymentMode,
+      transactionReference: txRef,
+      notes,
+      invoiceId,
+      invoiceNumber,
+      bankAccountId,
+      journalEntryId,
+      tallySyncStatus,
+      tallyReference
+    };
     const items = this.getFallbackItems('payments');
-    const idx = items.findIndex(p => p.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(p => p.id === id);
+    if (idx >= 0) items[idx] = { ...items[idx], ...normalized };
+    else items.unshift(normalized);
     this.setFallbackItems('payments', items);
-    return item;
+    return normalized;
   }
 
   public async deletePayment(id: string): Promise<boolean> {
@@ -4566,51 +4633,102 @@ class MySqlDatabaseManager {
 
   public async saveExpense(item: any): Promise<any> {
     this.assertDbConnected();
-    const rawDate = item.expenseDate || item.date || item.expense_date;
-    let expDate = '';
-    if (rawDate instanceof Date) {
-      expDate = `${rawDate.getFullYear()}-${String(rawDate.getMonth() + 1).padStart(2, '0')}-${String(rawDate.getDate()).padStart(2, '0')}`;
-    } else if (rawDate) {
-      const s = String(rawDate).trim();
-      expDate = s.includes('T') ? s.split('T')[0] : (s.length >= 10 ? s.slice(0, 10) : s);
-    } else {
-      expDate = new Date().toISOString().split('T')[0];
-    }
+    const id = item.id || `exp-${Date.now()}`;
+    const existing = await this.getExistingRow('solar_expenses', id);
+    const expDate = this.toSqlDate(item.expenseDate ?? item.date ?? item.expense_date ?? existing?.expense_date) || new Date().toISOString().split('T')[0];
+
+    const expenseNumber = item.expenseNumber ?? item.expenseNo ?? item.expense_number ?? existing?.expense_number ?? id;
+    const projectId = item.projectId ?? item.project_id ?? existing?.project_id ?? '';
+    const projectCode = item.projectCode ?? item.project_code ?? existing?.project_code ?? '';
+    const vendorName = item.vendorName ?? item.vendor ?? item.vendor_name ?? existing?.vendor_name ?? 'General Vendor';
+    const category = item.category ?? item.expenseCategory ?? existing?.category ?? 'General';
+    const amount = Number(item.amount ?? existing?.amount) || 0;
+    const paymentMode = item.paymentMode ?? item.paymentMethod ?? item.payment_mode ?? existing?.payment_mode ?? 'Bank Payment';
+    const referenceNo = item.referenceNo ?? item.referenceNumber ?? item.reference_no ?? existing?.reference_no ?? '';
+    const notes = item.notes ?? existing?.notes ?? '';
+    const receiptUrl = item.receiptUrl ?? item.receipt_url ?? existing?.receipt_url ?? '';
+    const approvedBy = item.approvedBy ?? item.approved_by ?? existing?.approved_by ?? '';
+    const expenseType = item.expenseType ?? item.expense_type ?? existing?.expense_type ?? 'DIRECT_EXPENSE';
+    const status = item.status ?? existing?.status ?? 'PAID';
+    const employeeId = item.employeeId ?? item.employee_id ?? existing?.employee_id ?? '';
+    const employeeName = item.employeeName ?? item.employee_name ?? existing?.employee_name ?? '';
+    const gstAmount = Number(item.gstAmount ?? item.gst_amount ?? existing?.gst_amount) || 0;
+    const itcEligible = (item.itcEligible !== undefined ? item.itcEligible : (existing?.itc_eligible !== undefined ? Boolean(existing.itc_eligible) : false)) ? 1 : 0;
+    const bankAccountId = item.bankAccountId ?? item.bank_account_id ?? existing?.bank_account_id ?? '';
+    const expenseAccountId = item.expenseAccountId ?? item.expense_account_id ?? existing?.expense_account_id ?? '';
+    const journalEntryId = item.journalEntryId ?? item.journal_entry_id ?? existing?.journal_entry_id ?? '';
+    const approvedAt = item.approvedAt ?? item.approved_at ?? existing?.approved_at ?? null;
+    const rejectionReason = item.rejectionReason ?? item.rejection_reason ?? existing?.rejection_reason ?? '';
+    const paidAt = item.paidAt ?? item.paid_at ?? existing?.paid_at ?? null;
+    const paidBy = item.paidBy ?? item.paid_by ?? existing?.paid_by ?? '';
+    const tallySyncStatus = item.tallySyncStatus ?? item.tally_sync_status ?? existing?.tally_sync_status ?? 'NOT SYNCED';
 
     const sql = `
       INSERT INTO \`solar_expenses\` (
         \`id\`, \`expense_number\`, \`project_id\`, \`project_code\`, \`vendor_name\`,
         \`category\`, \`amount\`, \`expense_date\`, \`payment_mode\`, \`reference_no\`,
-        \`notes\`, \`receipt_url\`, \`approved_by\`, \`tally_sync_status\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`notes\`, \`receipt_url\`, \`approved_by\`,
+        \`expense_type\`, \`status\`, \`employee_id\`, \`employee_name\`, \`gst_amount\`, \`itc_eligible\`,
+        \`bank_account_id\`, \`expense_account_id\`, \`journal_entry_id\`, \`approved_at\`, \`rejection_reason\`, \`paid_at\`, \`paid_by\`,
+        \`tally_sync_status\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`project_id\` = VALUES(\`project_id\`), \`project_code\` = VALUES(\`project_code\`),
         \`vendor_name\` = VALUES(\`vendor_name\`), \`category\` = VALUES(\`category\`),
         \`amount\` = VALUES(\`amount\`), \`expense_date\` = VALUES(\`expense_date\`),
         \`payment_mode\` = VALUES(\`payment_mode\`), \`reference_no\` = VALUES(\`reference_no\`),
         \`notes\` = VALUES(\`notes\`), \`receipt_url\` = VALUES(\`receipt_url\`),
-        \`approved_by\` = VALUES(\`approved_by\`), \`tally_sync_status\` = VALUES(\`tally_sync_status\`)
+        \`approved_by\` = VALUES(\`approved_by\`), \`expense_type\` = VALUES(\`expense_type\`),
+        \`status\` = VALUES(\`status\`), \`employee_id\` = VALUES(\`employee_id\`),
+        \`employee_name\` = VALUES(\`employee_name\`), \`gst_amount\` = VALUES(\`gst_amount\`),
+        \`itc_eligible\` = VALUES(\`itc_eligible\`), \`bank_account_id\` = VALUES(\`bank_account_id\`),
+        \`expense_account_id\` = VALUES(\`expense_account_id\`), \`journal_entry_id\` = VALUES(\`journal_entry_id\`),
+        \`approved_at\` = VALUES(\`approved_at\`), \`rejection_reason\` = VALUES(\`rejection_reason\`),
+        \`paid_at\` = VALUES(\`paid_at\`), \`paid_by\` = VALUES(\`paid_by\`),
+        \`tally_sync_status\` = VALUES(\`tally_sync_status\`)
     `;
     await this.pool!.query(sql, [
-      item.id,
-      item.expenseNumber || item.expenseNo || item.id,
-      item.projectId || '',
-      item.projectCode || '',
-      item.vendorName || item.vendor || 'General Vendor',
-      item.category || item.expenseCategory || 'General',
-      Number(item.amount) || 0,
-      expDate,
-      item.paymentMode || item.paymentMethod || 'Bank Payment',
-      item.referenceNo || item.referenceNumber || '',
-      item.notes || '',
-      item.receiptUrl || '',
-      item.approvedBy || '',
-      item.tallySyncStatus || 'NOT SYNCED'
+      id, expenseNumber, projectId, projectCode, vendorName,
+      category, amount, expDate, paymentMode, referenceNo,
+      notes, receiptUrl, approvedBy,
+      expenseType, status, employeeId, employeeName, gstAmount, itcEligible,
+      bankAccountId, expenseAccountId, journalEntryId, approvedAt, rejectionReason, paidAt, paidBy,
+      tallySyncStatus
     ]);
 
-    const normalized = { ...item, expenseDate: expDate, date: expDate };
+    const normalized = {
+      ...item,
+      id,
+      expenseNumber,
+      projectId,
+      projectCode,
+      vendorName,
+      category,
+      amount,
+      expenseDate: expDate,
+      date: expDate,
+      paymentMode,
+      referenceNo,
+      notes,
+      receiptUrl,
+      approvedBy,
+      expenseType,
+      status,
+      employeeId,
+      employeeName,
+      gstAmount,
+      itcEligible: Boolean(itcEligible),
+      bankAccountId,
+      expenseAccountId,
+      journalEntryId,
+      approvedAt: approvedAt || '',
+      rejectionReason,
+      paidAt: paidAt || '',
+      paidBy,
+      tallySyncStatus
+    };
     const items = this.getFallbackItems('expenses');
-    const idx = items.findIndex(e => e.id === normalized.id);
+    const idx = items.findIndex(e => e.id === id);
     if (idx >= 0) items[idx] = { ...items[idx], ...normalized };
     else items.unshift(normalized);
     this.setFallbackItems('expenses', items);
@@ -5330,6 +5448,13 @@ class MySqlDatabaseManager {
     const warehouseId = item.warehouseId ?? item.warehouse_id ?? existing?.warehouse_id ?? '';
     const deductStock = (item.deductStock !== undefined ? item.deductStock : (existing?.deduct_stock !== undefined ? Boolean(existing.deduct_stock) : true)) ? 1 : 0;
     const stockDeducted = (item.stockDeducted !== undefined ? item.stockDeducted : Boolean(existing?.stock_deducted)) ? 1 : 0;
+    const cgstAmount = Number(item.cgstAmount ?? item.cgst_amount ?? existing?.cgst_amount ?? (Number(item.igstAmount ?? existing?.igst_amount ?? 0) > 0 ? 0 : gstAmount / 2)) || 0;
+    const sgstAmount = Number(item.sgstAmount ?? item.sgst_amount ?? existing?.sgst_amount ?? (Number(item.igstAmount ?? existing?.igst_amount ?? 0) > 0 ? 0 : gstAmount / 2)) || 0;
+    const igstAmount = Number(item.igstAmount ?? item.igst_amount ?? existing?.igst_amount) || 0;
+    const einvoiceIrn = item.einvoiceIrn ?? item.einvoice_irn ?? existing?.einvoice_irn ?? '';
+    const einvoiceAckNo = item.einvoiceAckNo ?? item.einvoice_ack_no ?? existing?.einvoice_ack_no ?? '';
+    const einvoiceAckDate = item.einvoiceAckDate ?? item.einvoice_ack_date ?? existing?.einvoice_ack_date ?? '';
+    const einvoiceStatus = item.einvoiceStatus ?? item.einvoice_status ?? existing?.einvoice_status ?? 'NOT_GENERATED';
     const notes = item.notes ?? existing?.notes ?? '';
 
     const sql = `
@@ -5337,9 +5462,11 @@ class MySqlDatabaseManager {
         \`id\`, \`invoice_number\`, \`invoice_type\`, \`project_id\`, \`project_title\`,
         \`customer_id\`, \`customer_name\`, \`customer_gst\`, \`customer_address\`,
         \`invoice_date\`, \`due_date\`, \`payment_terms\`, \`items_json\`, \`subtotal\`, \`gst_amount\`,
+        \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`,
+        \`einvoice_irn\`, \`einvoice_ack_no\`, \`einvoice_ack_date\`, \`einvoice_status\`,
         \`total_amount\`, \`payment_status\`, \`paid_amount\`, \`balance_amount\`,
         \`eway_bill_number\`, \`eway_bill_details_json\`, \`warehouse_id\`, \`deduct_stock\`, \`stock_deducted\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`invoice_type\` = VALUES(\`invoice_type\`), \`project_id\` = VALUES(\`project_id\`),
         \`project_title\` = VALUES(\`project_title\`), \`customer_id\` = VALUES(\`customer_id\`),
@@ -5347,17 +5474,22 @@ class MySqlDatabaseManager {
         \`customer_address\` = VALUES(\`customer_address\`), \`invoice_date\` = VALUES(\`invoice_date\`),
         \`due_date\` = VALUES(\`due_date\`), \`payment_terms\` = VALUES(\`payment_terms\`),
         \`items_json\` = VALUES(\`items_json\`), \`subtotal\` = VALUES(\`subtotal\`),
-        \`gst_amount\` = VALUES(\`gst_amount\`), \`total_amount\` = VALUES(\`total_amount\`),
-        \`payment_status\` = VALUES(\`payment_status\`), \`paid_amount\` = VALUES(\`paid_amount\`),
-        \`balance_amount\` = VALUES(\`balance_amount\`), \`eway_bill_number\` = VALUES(\`eway_bill_number\`),
-        \`eway_bill_details_json\` = VALUES(\`eway_bill_details_json\`), \`warehouse_id\` = VALUES(\`warehouse_id\`),
-        \`deduct_stock\` = VALUES(\`deduct_stock\`), \`stock_deducted\` = VALUES(\`stock_deducted\`),
-        \`notes\` = VALUES(\`notes\`)
+        \`gst_amount\` = VALUES(\`gst_amount\`), \`cgst_amount\` = VALUES(\`cgst_amount\`),
+        \`sgst_amount\` = VALUES(\`sgst_amount\`), \`igst_amount\` = VALUES(\`igst_amount\`),
+        \`einvoice_irn\` = VALUES(\`einvoice_irn\`), \`einvoice_ack_no\` = VALUES(\`einvoice_ack_no\`),
+        \`einvoice_ack_date\` = VALUES(\`einvoice_ack_date\`), \`einvoice_status\` = VALUES(\`einvoice_status\`),
+        \`total_amount\` = VALUES(\`total_amount\`), \`payment_status\` = VALUES(\`payment_status\`),
+        \`paid_amount\` = VALUES(\`paid_amount\`), \`balance_amount\` = VALUES(\`balance_amount\`),
+        \`eway_bill_number\` = VALUES(\`eway_bill_number\`), \`eway_bill_details_json\` = VALUES(\`eway_bill_details_json\`),
+        \`warehouse_id\` = VALUES(\`warehouse_id\`), \`deduct_stock\` = VALUES(\`deduct_stock\`),
+        \`stock_deducted\` = VALUES(\`stock_deducted\`), \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
       id, invoiceNumber, invoiceType, projectId, projectTitle,
       customerId, customerName, customerGst, customerAddress,
       invoiceDate, dueDate, paymentTerms, itemsJson, subtotal, gstAmount,
+      cgstAmount, sgstAmount, igstAmount,
+      einvoiceIrn, einvoiceAckNo, einvoiceAckDate, einvoiceStatus,
       totalAmount, status, paidAmount, balanceAmount,
       ewayBillNumber, ewayBillDetailsJson, warehouseId, deductStock, stockDeducted, notes
     ]);
@@ -5380,6 +5512,13 @@ class MySqlDatabaseManager {
       subtotal,
       taxAmount: gstAmount,
       gstAmount,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      einvoiceIrn,
+      einvoiceAckNo,
+      einvoiceAckDate,
+      einvoiceStatus,
       totalAmount,
       grandTotal: totalAmount,
       status,

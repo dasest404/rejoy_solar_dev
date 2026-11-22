@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AccountingWorkspace, BankAccount } from '../../types/solar';
 import { apiClient } from '../../services/apiClient';
 import { buildAccountLedger, formatINR, formatDateIN, round2 } from './accountingUtils';
-import { Plus, ArrowLeftRight, CheckCircle2, X, Landmark, Wallet } from 'lucide-react';
+import { Plus, ArrowLeftRight, CheckCircle2, X, Landmark, Wallet, Trash2, AlertCircle } from 'lucide-react';
 
 interface CashBankTabProps {
   workspace: AccountingWorkspace;
@@ -23,6 +23,9 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
   // Add/Edit Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [savingAcc, setSavingAcc] = useState(false);
+  const [accError, setAccError] = useState<string | null>(null);
+  const [confirmDeleteBankId, setConfirmDeleteBankId] = useState<string | null>(null);
+  const [busyBankId, setBusyBankId] = useState<string | null>(null);
   const [accForm, setAccForm] = useState({
     id: '',
     accountName: '',
@@ -33,12 +36,16 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
     branch: '',
     coaAccountId: 'acc-1020',
     openingBalance: 0,
-    isPrimary: false
+    isPrimary: false,
+    isActive: true
   });
 
   // Contra Transfer Modal
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [savingTransfer, setSavingTransfer] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [confirmDeleteTransferId, setConfirmDeleteTransferId] = useState<string | null>(null);
+  const [busyTransferId, setBusyTransferId] = useState<string | null>(null);
   const [transferForm, setTransferForm] = useState({
     transferDate: today,
     fromAccountId: workspace.bankAccounts[0]?.id || '',
@@ -58,11 +65,14 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
   const [reconBankId, setReconBankId] = useState<string>(
     () => workspace.bankAccounts.find(b => b.accountType === 'BANK')?.id || workspace.bankAccounts[0]?.id || ''
   );
+  const [activeReconId, setActiveReconId] = useState<string | null>(null);
   const [statementDate, setStatementDate] = useState(today);
   const [statementBalance, setStatementBalance] = useState<number>(0);
   const [clearedIds, setClearedIds] = useState<string[]>([]);
   const [reconNotes, setReconNotes] = useState('');
   const [savingRecon, setSavingRecon] = useState(false);
+  const [confirmDeleteReconId, setConfirmDeleteReconId] = useState<string | null>(null);
+  const [busyReconId, setBusyReconId] = useState<string | null>(null);
 
   const totalCash = useMemo(
     () => round2(workspace.bankAccounts.filter(b => b.isActive && b.accountType === 'CASH').reduce((s, b) => s + b.currentBalance, 0)),
@@ -111,6 +121,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
   const reconDifference = round2(Number(statementBalance || 0) - clearedLedgerBalance);
 
   const openNewBankModal = () => {
+    setAccError(null);
     setAccForm({
       id: '',
       accountName: '',
@@ -121,12 +132,14 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
       branch: '',
       coaAccountId: 'acc-1020',
       openingBalance: 0,
-      isPrimary: false
+      isPrimary: false,
+      isActive: true
     });
     setIsAccountModalOpen(true);
   };
 
   const openEditBankModal = (b: BankAccount) => {
+    setAccError(null);
     setAccForm({
       id: b.id,
       accountName: b.accountName,
@@ -137,7 +150,8 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
       branch: b.branch || '',
       coaAccountId: b.coaAccountId,
       openingBalance: b.openingBalance,
-      isPrimary: b.isPrimary
+      isPrimary: b.isPrimary,
+      isActive: b.isActive !== false
     });
     setIsAccountModalOpen(true);
   };
@@ -145,6 +159,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
   const handleSaveBankAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingAcc) return;
+    setAccError(null);
     setSavingAcc(true);
     try {
       await apiClient.saveBankAccount({
@@ -158,23 +173,43 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
         coaAccountId: accForm.coaAccountId,
         openingBalance: Number(accForm.openingBalance || 0),
         isPrimary: accForm.isPrimary,
-        isActive: true
+        isActive: accForm.isActive
       });
       setIsAccountModalOpen(false);
       await onRefresh();
       showToast('Cash/Bank register saved.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to save bank account', 'error');
+      const msg = err?.message || 'Failed to save bank account';
+      setAccError(msg);
+      showToast(msg, 'error');
     } finally {
       setSavingAcc(false);
+    }
+  };
+
+  const handleDeleteBankAccount = async (id: string) => {
+    if (busyBankId) return;
+    setBusyBankId(id);
+    try {
+      await apiClient.deleteBankAccount(id);
+      setConfirmDeleteBankId(null);
+      await onRefresh();
+      showToast('Bank/Cash register deleted.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to delete register', 'error');
+    } finally {
+      setBusyBankId(null);
     }
   };
 
   const handleRecordTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingTransfer) return;
+    setTransferError(null);
     if (transferForm.fromAccountId === transferForm.toAccountId) {
-      showToast('Source and destination accounts must be different.', 'error');
+      const msg = 'Source and destination accounts must be different.';
+      setTransferError(msg);
+      showToast(msg, 'error');
       return;
     }
     setSavingTransfer(true);
@@ -192,9 +227,26 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
       await onRefresh();
       showToast('Contra fund transfer posted.', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Transfer failed', 'error');
+      const msg = err?.message || 'Transfer failed';
+      setTransferError(msg);
+      showToast(msg, 'error');
     } finally {
       setSavingTransfer(false);
+    }
+  };
+
+  const handleDeleteTransfer = async (id: string) => {
+    if (busyTransferId) return;
+    setBusyTransferId(id);
+    try {
+      await apiClient.deleteBankTransfer(id);
+      setConfirmDeleteTransferId(null);
+      await onRefresh();
+      showToast('Contra transfer reversed and balances restored.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to reverse transfer', 'error');
+    } finally {
+      setBusyTransferId(null);
     }
   };
 
@@ -203,6 +255,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
     setSavingRecon(true);
     try {
       await apiClient.saveBankReconciliation({
+        id: activeReconId || undefined,
         bankAccountId: reconBank.id,
         statementDate,
         statementBalance: round2(Number(statementBalance)),
@@ -210,12 +263,29 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
         status,
         notes: reconNotes
       });
+      if (status === 'RECONCILED') setActiveReconId(null);
       await onRefresh();
       showToast(`Bank reconciliation ${status === 'RECONCILED' ? 'completed' : 'saved as draft'}.`, 'success');
     } catch (err: any) {
       showToast(err?.message || 'Failed to save reconciliation', 'error');
     } finally {
       setSavingRecon(false);
+    }
+  };
+
+  const handleDeleteReconciliation = async (id: string) => {
+    if (busyReconId) return;
+    setBusyReconId(id);
+    try {
+      await apiClient.deleteBankReconciliation(id);
+      if (activeReconId === id) setActiveReconId(null);
+      setConfirmDeleteReconId(null);
+      await onRefresh();
+      showToast('Reconciliation draft deleted.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to delete reconciliation draft', 'error');
+    } finally {
+      setBusyReconId(null);
     }
   };
 
@@ -282,6 +352,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
             <button
               type="button"
               onClick={() => {
+                setTransferError(null);
                 setTransferForm(f => ({
                   ...f,
                   fromAccountId: workspace.bankAccounts[0]?.id || '',
@@ -313,18 +384,41 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="text-xs font-semibold text-slate-500">
-                      {b.accountType} {b.isPrimary ? '· PRIMARY' : ''}
+                      {b.accountType} {b.isPrimary ? '· PRIMARY' : ''} {!b.isActive ? '· INACTIVE' : ''}
                     </div>
                     <h4 className="text-sm font-bold text-slate-900 mt-0.5">{b.accountName}</h4>
                   </div>
                   {canManage && (
-                    <button
-                      type="button"
-                      onClick={() => openEditBankModal(b)}
-                      className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-                    >
-                      Edit
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEditBankModal(b)}
+                        className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                      >
+                        Edit
+                      </button>
+                      {!b.isPrimary && (
+                        confirmDeleteBankId === b.id ? (
+                          <button
+                            type="button"
+                            disabled={busyBankId === b.id}
+                            onClick={() => handleDeleteBankAccount(b.id)}
+                            className="text-xs font-bold text-rose-700 cursor-pointer"
+                          >
+                            {busyBankId === b.id ? '...' : 'Confirm Del'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteBankId(b.id)}
+                            title="Delete Account"
+                            className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )
+                      )}
+                    </div>
                   )}
                 </div>
                 {b.accountType === 'BANK' && (
@@ -436,12 +530,13 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   <th className="py-2.5 px-4">To Account</th>
                   <th className="py-2.5 px-4">Mode / Ref</th>
                   <th className="py-2.5 px-4 text-right">Amount (₹)</th>
+                  <th className="py-2.5 px-4 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {workspace.bankTransfers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-slate-500">
+                    <td colSpan={7} className="py-8 text-center text-slate-500">
                       No contra fund transfers recorded yet.
                     </td>
                   </tr>
@@ -458,6 +553,29 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                       </td>
                       <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
                         {formatINR(t.amount)}
+                      </td>
+                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                        {canManage && (
+                          confirmDeleteTransferId === t.id ? (
+                            <button
+                              type="button"
+                              disabled={busyTransferId === t.id}
+                              onClick={() => handleDeleteTransfer(t.id)}
+                              className="text-rose-700 font-bold cursor-pointer"
+                            >
+                              {busyTransferId === t.id ? '...' : 'Confirm Rev'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteTransferId(t.id)}
+                              title="Reverse / Delete Transfer"
+                              className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 inline" />
+                            </button>
+                          )
+                        )}
                       </td>
                     </tr>
                   ))
@@ -479,6 +597,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   value={reconBankId}
                   onChange={e => {
                     setReconBankId(e.target.value);
+                    setActiveReconId(null);
                     setClearedIds([]);
                   }}
                   className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
@@ -626,6 +745,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                     <th className="py-2 px-4 text-right">Statement Balance</th>
                     <th className="py-2 px-4 text-right">Difference</th>
                     <th className="py-2 px-4">Status</th>
+                    <th className="py-2 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -636,7 +756,49 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                       <td className="py-2 px-4 text-right font-mono">{formatINR(rec.bookBalance)}</td>
                       <td className="py-2 px-4 text-right font-mono">{formatINR(rec.statementBalance)}</td>
                       <td className="py-2 px-4 text-right font-mono">{formatINR(rec.difference)}</td>
-                      <td className="py-2 px-4 font-semibold text-emerald-700">{rec.status}</td>
+                      <td className={`py-2 px-4 font-semibold ${rec.status === 'RECONCILED' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {rec.status}
+                      </td>
+                      <td className="py-2 px-4 text-right whitespace-nowrap space-x-2">
+                        {canManage && rec.status !== 'RECONCILED' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveReconId(rec.id);
+                                setReconBankId(rec.bankAccountId);
+                                setStatementDate(rec.statementDate);
+                                setStatementBalance(rec.statementBalance);
+                                setClearedIds(rec.clearedTxnIds || []);
+                                setReconNotes(rec.notes || '');
+                                showToast('Loaded reconciliation draft into workspace.', 'info');
+                              }}
+                              className="text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                            >
+                              Resume
+                            </button>
+                            {confirmDeleteReconId === rec.id ? (
+                              <button
+                                type="button"
+                                disabled={busyReconId === rec.id}
+                                onClick={() => handleDeleteReconciliation(rec.id)}
+                                className="text-rose-700 font-bold cursor-pointer"
+                              >
+                                {busyReconId === rec.id ? '...' : 'Confirm Del'}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteReconId(rec.id)}
+                                title="Delete Draft"
+                                className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 inline" />
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -657,6 +819,12 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
               </button>
             </div>
             <form onSubmit={handleSaveBankAccount} className="p-5 space-y-3">
+              {accError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{accError}</span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Register Type *</label>
@@ -741,14 +909,26 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   </div>
                 </>
               )}
-              <label className="inline-flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={accForm.isPrimary}
-                  onChange={e => setAccForm({ ...accForm, isPrimary: e.target.checked })}
-                />
-                Set as Primary Account
-              </label>
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="inline-flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={accForm.isPrimary}
+                    onChange={e => setAccForm({ ...accForm, isPrimary: e.target.checked })}
+                  />
+                  Set as Primary Account
+                </label>
+                {accForm.id && (
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={accForm.isActive}
+                      onChange={e => setAccForm({ ...accForm, isActive: e.target.checked })}
+                    />
+                    Active Register
+                  </label>
+                )}
+              </div>
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
@@ -781,6 +961,12 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
               </button>
             </div>
             <form onSubmit={handleRecordTransfer} className="p-5 space-y-3">
+              {transferError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{transferError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">From Account *</label>
                 <select

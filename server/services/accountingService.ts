@@ -16,6 +16,9 @@ const toSqlDate = (val: any): string | null => {
 
 const todaySql = (): string => new Date().toISOString().slice(0, 10);
 
+const randHex = (bytes = 3): string => crypto.randomBytes(bytes).toString('hex').toUpperCase();
+const randDigits = (digits = 4): number => crypto.randomInt(Math.pow(10, digits - 1), Math.pow(10, digits));
+
 const DEFAULT_COA = [
   { id: 'acc-1010', code: '1010', name: 'Cash in Hand (Petty Cash)', account_type: 'ASSET', sub_type: 'Cash', is_system: 1, description: 'Physical office & site petty cash register' },
   { id: 'acc-1020', code: '1020', name: 'Primary Current Bank Account', account_type: 'ASSET', sub_type: 'Bank', is_system: 1, description: 'Primary operating corporate bank account' },
@@ -423,6 +426,7 @@ class AccountingService {
     await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'einvoice_ack_no', "VARCHAR(64) DEFAULT ''");
     await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'einvoice_ack_date', "VARCHAR(64) DEFAULT ''");
     await this.addColumnIfMissing(pool, 'solar_sales_invoices', 'einvoice_status', "VARCHAR(32) DEFAULT 'NOT_GENERATED'");
+    await this.addColumnIfMissing(pool, 'solar_acc_fixed_assets', 'payment_bank_account_id', "VARCHAR(64) DEFAULT ''");
 
     // Seed default Chart of Accounts if empty
     const [accCountRows]: any = await pool.query('SELECT COUNT(*) AS cnt FROM `solar_acc_accounts`');
@@ -610,10 +614,10 @@ class AccountingService {
       accMap.set(r.id, { code: r.code, name: r.name });
     }
 
-    const id = `je-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const id = `je-${Date.now()}-${randHex(3)}`;
     const entryNumber =
       params.entryNumber ||
-      `${prefix}${entryDate.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      `${prefix}${entryDate.replace(/-/g, '')}-${randDigits(4)}-${randHex(1)}`;
 
     await conn.query(
       `INSERT INTO \`solar_acc_journal_entries\`
@@ -1271,12 +1275,49 @@ class AccountingService {
       const paidDate = toSqlDate(data.paidDate || data.receiptDate) || todaySql();
       const dueDate = toSqlDate(data.dueDate) || paidDate;
       const status = data.status === 'PENDING' ? 'PENDING' : 'PAID';
+
+      const id = data.id || `pay-${Date.now()}-${randHex(3)}`;
+      const [existingRows]: any = await conn.query('SELECT * FROM `solar_payments` WHERE `id` = ? LIMIT 1', [id]);
+      const existing = existingRows?.[0];
+
+      // Reverse prior financial impact if editing an existing receipt
+      if (existing) {
+        if (existing.status === 'PAID') {
+          const oldDate = toSqlDate(existing.paid_date || existing.due_date) || todaySql();
+          await this.assertNotLockedDate(conn, oldDate);
+          const oldAmount = round2(Number(existing.amount || 0));
+          if (existing.bank_account_id) {
+            await conn.query(
+              'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+              [oldAmount, existing.bank_account_id]
+            );
+          }
+          if (existing.invoice_id) {
+            const [oldInvRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1', [existing.invoice_id]);
+            const oldInv = oldInvRows?.[0];
+            if (oldInv) {
+              const revPaid = round2(Math.max(0, Number(oldInv.paid_amount || 0) - oldAmount));
+              const total = round2(Number(oldInv.total_amount || 0));
+              const revBal = round2(Math.max(0, total - revPaid));
+              const revStatus = revBal <= 0.01 ? 'PAID' : (revPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+              await conn.query(
+                'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+                [revPaid, revBal, revStatus, oldInv.id]
+              );
+            }
+          }
+          if (existing.journal_entry_id) {
+            await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [existing.journal_entry_id]);
+            await this.recalculateAccountBalances(conn);
+          }
+        }
+      }
+
       if (status === 'PAID') {
         await this.assertNotLockedDate(conn, paidDate);
       }
 
-      const id = data.id || `pay-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const receiptNumber = data.receiptNumber || `RCPT-${paidDate.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`;
+      const receiptNumber = data.receiptNumber || existing?.receipt_number || `RCPT-${paidDate.slice(0, 4)}-${randDigits(4)}`;
 
       let bankCoaId = settings.default_bank_account_id || 'acc-1020';
       if (data.bankAccountId) {
@@ -1363,7 +1404,12 @@ class AccountingService {
          (\`id\`, \`receipt_number\`, \`project_id\`, \`customer_id\`, \`customer_name\`, \`milestone\`, \`amount\`, \`status\`, \`due_date\`, \`paid_date\`, \`payment_mode\`, \`transaction_reference\`, \`notes\`, \`invoice_id\`, \`invoice_number\`, \`bank_account_id\`, \`journal_entry_id\`, \`tally_sync_status\`)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NOT SYNCED')
          ON DUPLICATE KEY UPDATE
-           \`status\` = VALUES(\`status\`), \`paid_date\` = VALUES(\`paid_date\`), \`bank_account_id\` = VALUES(\`bank_account_id\`), \`journal_entry_id\` = VALUES(\`journal_entry_id\`)`,
+           \`project_id\` = VALUES(\`project_id\`), \`customer_id\` = VALUES(\`customer_id\`), \`customer_name\` = VALUES(\`customer_name\`),
+           \`milestone\` = VALUES(\`milestone\`), \`amount\` = VALUES(\`amount\`), \`status\` = VALUES(\`status\`),
+           \`due_date\` = VALUES(\`due_date\`), \`paid_date\` = VALUES(\`paid_date\`), \`payment_mode\` = VALUES(\`payment_mode\`),
+           \`transaction_reference\` = VALUES(\`transaction_reference\`), \`notes\` = VALUES(\`notes\`),
+           \`invoice_id\` = VALUES(\`invoice_id\`), \`invoice_number\` = VALUES(\`invoice_number\`),
+           \`bank_account_id\` = VALUES(\`bank_account_id\`), \`journal_entry_id\` = VALUES(\`journal_entry_id\`)`,
         [
           id,
           receiptNumber,
@@ -1389,14 +1435,73 @@ class AccountingService {
         conn,
         actor,
         'CUSTOMER_PAYMENTS',
-        'RECORD_RECEIPT',
+        existing ? 'UPDATE_RECEIPT' : 'RECORD_RECEIPT',
         id,
         receiptNumber,
-        `Recorded receipt ${receiptNumber} from ${customerName} for ₹${amount.toFixed(2)}`
+        `${existing ? 'Updated' : 'Recorded'} receipt ${receiptNumber} from ${customerName} for ₹${amount.toFixed(2)}`
       );
 
       await conn.commit();
       return { id, receiptNumber, amount, status, journalEntryId };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async deleteCustomerReceipt(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_payments` WHERE `id` = ? LIMIT 1', [id]);
+      const receipt = rows?.[0];
+      if (!receipt) throw new Error('Customer receipt not found.');
+
+      if (receipt.status === 'PAID') {
+        const payDate = toSqlDate(receipt.paid_date || receipt.due_date) || todaySql();
+        await this.assertNotLockedDate(conn, payDate);
+
+        const amt = round2(Number(receipt.amount || 0));
+        if (receipt.bank_account_id) {
+          await conn.query(
+            'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+            [amt, receipt.bank_account_id]
+          );
+        }
+        if (receipt.invoice_id) {
+          const [invRows]: any = await conn.query('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1', [receipt.invoice_id]);
+          const inv = invRows?.[0];
+          if (inv) {
+            const newPaid = round2(Math.max(0, Number(inv.paid_amount || 0) - amt));
+            const total = round2(Number(inv.total_amount || 0));
+            const newBal = round2(Math.max(0, total - newPaid));
+            const newStatus = newBal <= 0.01 ? 'PAID' : (newPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+            await conn.query(
+              'UPDATE `solar_sales_invoices` SET `paid_amount` = ?, `balance_amount` = ?, `payment_status` = ? WHERE `id` = ?',
+              [newPaid, newBal, newStatus, inv.id]
+            );
+          }
+        }
+        if (receipt.journal_entry_id) {
+          await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [receipt.journal_entry_id]);
+          await this.recalculateAccountBalances(conn);
+        }
+      }
+
+      await conn.query('DELETE FROM `solar_payments` WHERE `id` = ?', [id]);
+      await this.logAudit(
+        conn,
+        actor,
+        'CUSTOMER_PAYMENTS',
+        'DELETE_RECEIPT',
+        id,
+        receipt.receipt_number || id,
+        `Deleted customer receipt ${receipt.receipt_number || id} (${receipt.customer_name}) for ₹${Number(receipt.amount || 0).toFixed(2)}`
+      );
+      await conn.commit();
     } catch (err) {
       await conn.rollback();
       throw err;
@@ -1411,10 +1516,9 @@ class AccountingService {
     try {
       await conn.beginTransaction();
       const settings = await this.getSettingsRow(conn);
-      const id = data.id || `vbill-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const id = data.id || `vbill-${Date.now()}-${randHex(3)}`;
       const billDate = toSqlDate(data.billDate) || todaySql();
       const dueDate = toSqlDate(data.dueDate) || billDate;
-      const billNumber = String(data.billNumber || `${settings.bill_prefix || 'BILL-'}${billDate.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`).trim();
 
       const items = Array.isArray(data.items) ? data.items : [];
       let subtotal = round2(data.subtotal || 0);
@@ -1438,9 +1542,26 @@ class AccountingService {
 
       const [existingRows]: any = await conn.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1', [id]);
       const existing = existingRows?.[0];
-      let journalEntryId = existing?.journal_entry_id || '';
+      const billNumber = String(data.billNumber || existing?.bill_number || `${settings.bill_prefix || 'BILL-'}${billDate.slice(0, 4)}-${randDigits(4)}`).trim();
 
-      if (status !== 'DRAFT' && !journalEntryId) {
+      if (existing) {
+        if (Number(existing.paid_amount || 0) > 0) {
+          throw new Error('Vendor bills with recorded payments cannot be edited. Reverse the vendor payment first.');
+        }
+        const [vpCnt]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?', [id]);
+        if (Number(vpCnt?.[0]?.cnt || 0) > 0) {
+          throw new Error('Vendor bills with payment history cannot be edited.');
+        }
+        if (existing.journal_entry_id) {
+          const oldBillDate = toSqlDate(existing.bill_date) || todaySql();
+          await this.assertNotLockedDate(conn, oldBillDate);
+          await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [existing.journal_entry_id]);
+          await this.recalculateAccountBalances(conn);
+        }
+      }
+
+      let journalEntryId = '';
+      if (status !== 'DRAFT') {
         await this.assertNotLockedDate(conn, billDate);
         const jLines: any[] = [];
         if (itcEligible && totalGst > 0) {
@@ -1506,15 +1627,16 @@ class AccountingService {
         );
       }
 
-      const paidAmount = round2(existing?.paid_amount || 0);
-      const balanceAmount = round2(Math.max(0, totalAmount - paidAmount));
+      const paidAmount = 0;
+      const balanceAmount = round2(totalAmount);
 
       await conn.query(
         `INSERT INTO \`solar_acc_vendor_bills\`
          (\`id\`, \`bill_number\`, \`vendor_id\`, \`vendor_name\`, \`vendor_gst\`, \`po_id\`, \`po_number\`, \`project_id\`, \`project_title\`, \`bill_date\`, \`due_date\`, \`category\`, \`subtotal\`, \`cgst_amount\`, \`sgst_amount\`, \`igst_amount\`, \`gst_amount\`, \`tds_section\`, \`tds_rate\`, \`tds_amount\`, \`total_amount\`, \`paid_amount\`, \`balance_amount\`, \`itc_eligible\`, \`status\`, \`expense_account_id\`, \`journal_entry_id\`, \`notes\`, \`items_json\`, \`created_by\`)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           \`vendor_id\` = VALUES(\`vendor_id\`), \`vendor_name\` = VALUES(\`vendor_name\`), \`vendor_gst\` = VALUES(\`vendor_gst\`),
+           \`bill_number\` = VALUES(\`bill_number\`), \`vendor_id\` = VALUES(\`vendor_id\`), \`vendor_name\` = VALUES(\`vendor_name\`), \`vendor_gst\` = VALUES(\`vendor_gst\`),
+           \`po_id\` = VALUES(\`po_id\`), \`po_number\` = VALUES(\`po_number\`), \`project_id\` = VALUES(\`project_id\`), \`project_title\` = VALUES(\`project_title\`),
            \`bill_date\` = VALUES(\`bill_date\`), \`due_date\` = VALUES(\`due_date\`), \`category\` = VALUES(\`category\`),
            \`subtotal\` = VALUES(\`subtotal\`), \`cgst_amount\` = VALUES(\`cgst_amount\`), \`sgst_amount\` = VALUES(\`sgst_amount\`), \`igst_amount\` = VALUES(\`igst_amount\`), \`gst_amount\` = VALUES(\`gst_amount\`),
            \`tds_section\` = VALUES(\`tds_section\`), \`tds_rate\` = VALUES(\`tds_rate\`), \`tds_amount\` = VALUES(\`tds_amount\`),
@@ -1532,7 +1654,7 @@ class AccountingService {
         ]
       );
 
-      await this.logAudit(conn, actor, 'VENDOR_PAYMENTS', 'SAVE_VENDOR_BILL', id, billNumber, `Saved Vendor Bill ${billNumber} (${data.vendorName}) for ₹${totalAmount.toFixed(2)}`);
+      await this.logAudit(conn, actor, 'VENDOR_PAYMENTS', existing ? 'UPDATE_VENDOR_BILL' : 'SAVE_VENDOR_BILL', id, billNumber, `${existing ? 'Updated' : 'Saved'} Vendor Bill ${billNumber} (${data.vendorName}) for ₹${totalAmount.toFixed(2)}`);
       await conn.commit();
       return { id, billNumber, totalAmount, balanceAmount, status, journalEntryId };
     } catch (err) {
@@ -1545,14 +1667,34 @@ class AccountingService {
 
   public async deleteVendorBill(pool: mysql.Pool, id: string, actor: any): Promise<void> {
     await this.ensureAccountingSchema(pool);
-    const [rows]: any = await pool.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1', [id]);
-    const bill = rows?.[0];
-    if (!bill) throw new Error('Vendor bill not found.');
-    if (bill.status !== 'DRAFT' || Number(bill.paid_amount) > 0) {
-      throw new Error('Only unpaid DRAFT vendor bills can be deleted.');
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1', [id]);
+      const bill = rows?.[0];
+      if (!bill) throw new Error('Vendor bill not found.');
+      if (Number(bill.paid_amount || 0) > 0) {
+        throw new Error('Cannot delete a vendor bill with payments recorded. Reverse vendor payments first.');
+      }
+      const [vpCnt]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?', [id]);
+      if (Number(vpCnt?.[0]?.cnt || 0) > 0) {
+        throw new Error('Cannot delete a vendor bill referenced by vendor payments.');
+      }
+      if (bill.journal_entry_id) {
+        const billDate = toSqlDate(bill.bill_date) || todaySql();
+        await this.assertNotLockedDate(conn, billDate);
+        await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [bill.journal_entry_id]);
+        await this.recalculateAccountBalances(conn);
+      }
+      await conn.query('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?', [id]);
+      await this.logAudit(conn, actor, 'VENDOR_PAYMENTS', 'DELETE_VENDOR_BILL', id, bill.bill_number, `Deleted unpaid vendor bill ${bill.bill_number}`);
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
     }
-    await pool.query('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?', [id]);
-    await this.logAudit(pool, actor, 'VENDOR_PAYMENTS', 'DELETE_VENDOR_BILL', id, bill.bill_number, `Deleted draft vendor bill ${bill.bill_number}`);
   }
 
   public async recordVendorPayment(pool: mysql.Pool, data: any, actor: any): Promise<any> {
@@ -1583,8 +1725,8 @@ class AccountingService {
       if (!bank) throw new Error('Please select a valid Cash/Bank account.');
 
       const bankCoaId = bank.coa_account_id || (bank.account_type === 'CASH' ? settings.default_cash_account_id : settings.default_bank_account_id);
-      const payId = `vpay-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const paymentNumber = data.paymentNumber || `VPAY-${payDate.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`;
+      const payId = `vpay-${Date.now()}-${randHex(3)}`;
+      const paymentNumber = data.paymentNumber || `VPAY-${payDate.slice(0, 4)}-${randDigits(4)}`;
 
       const jLines: any[] = [
         {
@@ -1677,7 +1819,7 @@ class AccountingService {
            (\`id\`, \`section\`, \`party_type\`, \`party_id\`, \`party_name\`, \`pan_number\`, \`source_type\`, \`source_id\`, \`source_number\`, \`deduction_date\`, \`gross_amount\`, \`tds_rate\`, \`tds_amount\`, \`status\`)
            VALUES (?, ?, 'VENDOR', ?, ?, ?, 'VENDOR_PAYMENT', ?, ?, ?, ?, ?, ?, 'DEDUCTED')`,
           [
-            `tds-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            `tds-${Date.now()}-${randHex(3)}`,
             data.tdsSection || bill.tds_section || '194C',
             bill.vendor_id,
             bill.vendor_name,
@@ -1711,9 +1853,82 @@ class AccountingService {
     }
   }
 
+  public async deleteVendorPayment(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [vpRows]: any = await conn.query('SELECT * FROM `solar_acc_vendor_payments` WHERE `id` = ? LIMIT 1', [id]);
+      const vp = vpRows?.[0];
+      if (!vp) throw new Error('Vendor payment not found.');
+
+      const payDate = toSqlDate(vp.payment_date) || todaySql();
+      await this.assertNotLockedDate(conn, payDate);
+
+      const [tdsRows]: any = await conn.query(
+        "SELECT * FROM `solar_acc_tds_entries` WHERE `source_type` = 'VENDOR_PAYMENT' AND `source_id` = ?",
+        [id]
+      );
+      for (const t of tdsRows || []) {
+        if (t.status === 'DEPOSITED') {
+          throw new Error('Cannot reverse vendor payment because deducted TDS has already been deposited via challan.');
+        }
+      }
+      await conn.query(
+        "DELETE FROM `solar_acc_tds_entries` WHERE `source_type` = 'VENDOR_PAYMENT' AND `source_id` = ?",
+        [id]
+      );
+
+      if (vp.bank_account_id) {
+        await conn.query(
+          'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+          [round2(Number(vp.net_paid || 0)), vp.bank_account_id]
+        );
+      }
+
+      const [billRows]: any = await conn.query('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1', [vp.bill_id]);
+      const bill = billRows?.[0];
+      if (bill) {
+        const newPaid = round2(Math.max(0, Number(bill.paid_amount || 0) - Number(vp.amount || 0)));
+        const newBal = round2(Math.max(0, Number(bill.total_amount || 0) - newPaid));
+        const newStatus = newBal <= 0.01 ? 'PAID' : (newPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+        await conn.query(
+          'UPDATE `solar_acc_vendor_bills` SET `paid_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
+          [newPaid, newBal, newStatus, bill.id]
+        );
+        if (bill.po_id) {
+          const poPayStatus = newStatus === 'PAID' ? 'PAID' : (newStatus === 'PARTIAL' ? 'PARTIALLY_PAID' : 'UNPAID');
+          await conn.query('UPDATE `solar_purchase_orders` SET `payment_status` = ? WHERE `id` = ?', [poPayStatus, bill.po_id]);
+        }
+      }
+
+      if (vp.journal_entry_id) {
+        await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [vp.journal_entry_id]);
+        await this.recalculateAccountBalances(conn);
+      }
+
+      await conn.query('DELETE FROM `solar_acc_vendor_payments` WHERE `id` = ?', [id]);
+      await this.logAudit(
+        conn,
+        actor,
+        'VENDOR_PAYMENTS',
+        'DELETE_VENDOR_PAYMENT',
+        id,
+        vp.payment_number,
+        `Reversed vendor payment ${vp.payment_number} (${vp.vendor_name}) for ₹${Number(vp.amount || 0).toFixed(2)}`
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
   public async saveBankAccount(pool: mysql.Pool, data: any, actor: any): Promise<any> {
     await this.ensureAccountingSchema(pool);
-    const id = data.id || `bank-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = data.id || `bank-${Date.now()}-${randHex(3)}`;
     const accountName = String(data.accountName || '').trim();
     if (!accountName) throw new Error('Account name is required.');
 
@@ -1721,11 +1936,14 @@ class AccountingService {
     const accountType = data.accountType === 'CASH' ? 'CASH' : 'BANK';
     let coaAccountId = data.coaAccountId || (accountType === 'CASH' ? 'acc-1010' : 'acc-1020');
 
-    const [existing]: any = await pool.query('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1', [id]);
-    const currentBalance = existing?.[0] ? Number(existing[0].current_balance) : opening;
+    const [existingRows]: any = await pool.query('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1', [id]);
+    const existing = existingRows?.[0];
+    const currentBalance = existing
+      ? round2(Number(existing.current_balance || 0) + (opening - round2(Number(existing.opening_balance || 0))))
+      : opening;
 
-    if (!existing?.[0] && data.createCoaLedger) {
-      const code = `10${Math.floor(30 + Math.random() * 69)}`;
+    if (!existing && data.createCoaLedger) {
+      const code = `10${randDigits(2)}`;
       const coaId = `acc-${code}-${Date.now()}`;
       await this.saveAccount(pool, {
         id: coaId,
@@ -1752,15 +1970,42 @@ class AccountingService {
          \`account_name\` = VALUES(\`account_name\`), \`account_type\` = VALUES(\`account_type\`),
          \`bank_name\` = VALUES(\`bank_name\`), \`account_number\` = VALUES(\`account_number\`),
          \`ifsc_code\` = VALUES(\`ifsc_code\`), \`branch\` = VALUES(\`branch\`),
-         \`coa_account_id\` = VALUES(\`coa_account_id\`), \`is_primary\` = VALUES(\`is_primary\`), \`is_active\` = VALUES(\`is_active\`)`,
+         \`coa_account_id\` = VALUES(\`coa_account_id\`), \`opening_balance\` = VALUES(\`opening_balance\`),
+         \`current_balance\` = VALUES(\`current_balance\`), \`is_primary\` = VALUES(\`is_primary\`), \`is_active\` = VALUES(\`is_active\`)`,
       [
         id, accountName, accountType, data.bankName || '', data.accountNumber || '',
         data.ifscCode || '', data.branch || '', coaAccountId, opening, currentBalance,
         data.isPrimary ? 1 : 0, data.isActive === false ? 0 : 1
       ]
     );
-    await this.logAudit(pool, actor, 'CASH_BANK', existing?.[0] ? 'UPDATE_BANK_ACCOUNT' : 'CREATE_BANK_ACCOUNT', id, accountName, `Saved ${accountType} account: ${accountName}`);
+    await this.logAudit(pool, actor, 'CASH_BANK', existing ? 'UPDATE_BANK_ACCOUNT' : 'CREATE_BANK_ACCOUNT', id, accountName, `Saved ${accountType} account: ${accountName}`);
     return { id, accountName, currentBalance };
+  }
+
+  public async deleteBankAccount(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const [rows]: any = await pool.query('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1', [id]);
+    const bank = rows?.[0];
+    if (!bank) throw new Error('Cash/Bank register not found.');
+    if (bank.is_primary) throw new Error('Cannot delete the primary Cash/Bank account. Assign another primary account or deactivate it instead.');
+
+    const checks: Array<[string, string, any[]]> = [
+      ['solar_payments', 'bank_account_id = ?', [id]],
+      ['solar_acc_vendor_payments', 'bank_account_id = ?', [id]],
+      ['solar_acc_bank_transfers', 'from_account_id = ? OR to_account_id = ?', [id, id]],
+      ['solar_acc_bank_reconciliations', 'bank_account_id = ?', [id]],
+      ['solar_expenses', 'bank_account_id = ?', [id]],
+      ['solar_acc_fixed_assets', 'payment_bank_account_id = ?', [id]]
+    ];
+    for (const [tbl, cond, params] of checks) {
+      const [cntRows]: any = await pool.query(`SELECT COUNT(*) AS cnt FROM \`${tbl}\` WHERE ${cond}`, params);
+      if (Number(cntRows?.[0]?.cnt || 0) > 0) {
+        throw new Error('Cannot delete a Cash/Bank register with linked transactions or reconciliations. Deactivate it instead.');
+      }
+    }
+
+    await pool.query('DELETE FROM `solar_acc_bank_accounts` WHERE `id` = ?', [id]);
+    await this.logAudit(pool, actor, 'CASH_BANK', 'DELETE_BANK_ACCOUNT', id, bank.account_name, `Deleted ${bank.account_type} account: ${bank.account_name}`);
   }
 
   public async recordBankTransfer(pool: mysql.Pool, data: any, actor: any): Promise<any> {
@@ -1783,8 +2028,8 @@ class AccountingService {
       const toAcc = toRows?.[0];
       if (!fromAcc || !toAcc) throw new Error('Invalid source or destination cash/bank account.');
 
-      const id = `xfer-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const transferNumber = `TRF-${transferDate.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`;
+      const id = `xfer-${Date.now()}-${randHex(3)}`;
+      const transferNumber = `TRF-${transferDate.slice(0, 4)}-${randDigits(4)}`;
 
       const fromCoa = fromAcc.coa_account_id || (fromAcc.account_type === 'CASH' ? 'acc-1010' : 'acc-1020');
       const toCoa = toAcc.coa_account_id || (toAcc.account_type === 'CASH' ? 'acc-1010' : 'acc-1020');
@@ -1848,9 +2093,47 @@ class AccountingService {
     }
   }
 
+  public async deleteBankTransfer(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_acc_bank_transfers` WHERE `id` = ? LIMIT 1', [id]);
+      const tr = rows?.[0];
+      if (!tr) throw new Error('Bank transfer not found.');
+
+      const trDate = toSqlDate(tr.transfer_date) || todaySql();
+      await this.assertNotLockedDate(conn, trDate);
+
+      const amt = round2(Number(tr.amount || 0));
+      await conn.query(
+        'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+        [amt, tr.from_account_id]
+      );
+      await conn.query(
+        'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?',
+        [amt, tr.to_account_id]
+      );
+
+      if (tr.journal_entry_id) {
+        await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [tr.journal_entry_id]);
+        await this.recalculateAccountBalances(conn);
+      }
+
+      await conn.query('DELETE FROM `solar_acc_bank_transfers` WHERE `id` = ?', [id]);
+      await this.logAudit(conn, actor, 'CASH_BANK', 'DELETE_BANK_TRANSFER', id, tr.transfer_number, `Reversed contra transfer ${tr.transfer_number} (₹${amt.toFixed(2)})`);
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
   public async saveBankReconciliation(pool: mysql.Pool, data: any, actor: any): Promise<any> {
     await this.ensureAccountingSchema(pool);
-    const id = data.id || `brec-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = data.id || `brec-${Date.now()}-${randHex(3)}`;
     const statementDate = toSqlDate(data.statementDate) || todaySql();
     const bookBalance = round2(data.bookBalance || 0);
     const statementBalance = round2(data.statementBalance || 0);
@@ -1863,7 +2146,7 @@ class AccountingService {
        (\`id\`, \`bank_account_id\`, \`statement_date\`, \`book_balance\`, \`statement_balance\`, \`cleared_txn_ids_json\`, \`difference\`, \`status\`, \`notes\`, \`reconciled_by\`, \`reconciled_at\`)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
-         \`statement_date\` = VALUES(\`statement_date\`), \`book_balance\` = VALUES(\`book_balance\`),
+         \`bank_account_id\` = VALUES(\`bank_account_id\`), \`statement_date\` = VALUES(\`statement_date\`), \`book_balance\` = VALUES(\`book_balance\`),
          \`statement_balance\` = VALUES(\`statement_balance\`), \`cleared_txn_ids_json\` = VALUES(\`cleared_txn_ids_json\`),
          \`difference\` = VALUES(\`difference\`), \`status\` = VALUES(\`status\`),
          \`notes\` = VALUES(\`notes\`), \`reconciled_by\` = VALUES(\`reconciled_by\`), \`reconciled_at\` = VALUES(\`reconciled_at\`)`,
@@ -1885,6 +2168,18 @@ class AccountingService {
     return { id, difference, status };
   }
 
+  public async deleteBankReconciliation(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const [rows]: any = await pool.query('SELECT * FROM `solar_acc_bank_reconciliations` WHERE `id` = ? LIMIT 1', [id]);
+    const rec = rows?.[0];
+    if (!rec) throw new Error('Bank reconciliation record not found.');
+    if (rec.status === 'RECONCILED') {
+      throw new Error('Completed bank reconciliations cannot be deleted.');
+    }
+    await pool.query('DELETE FROM `solar_acc_bank_reconciliations` WHERE `id` = ?', [id]);
+    await this.logAudit(pool, actor, 'CASH_BANK', 'DELETE_BANK_RECONCILIATION', id, toSqlDate(rec.statement_date) || id, `Deleted draft bank reconciliation ${id}`);
+  }
+
   public async saveExpenseWithWorkflow(pool: mysql.Pool, data: any, actor: any): Promise<any> {
     await this.ensureAccountingSchema(pool);
     const amount = round2(data.amount || 0);
@@ -1894,16 +2189,23 @@ class AccountingService {
     try {
       await conn.beginTransaction();
       const settings = await this.getSettingsRow(conn);
-      const id = data.id || `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const id = data.id || `exp-${Date.now()}-${randHex(3)}`;
       const expDate = toSqlDate(data.expenseDate || data.date) || todaySql();
-      const expNo = data.expenseNumber || `EXP-${expDate.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`;
+
+      const [existingRows]: any = await conn.query('SELECT * FROM `solar_expenses` WHERE `id` = ? LIMIT 1', [id]);
+      const existing = existingRows?.[0];
+      if (existing && (existing.status === 'PAID' || existing.journal_entry_id)) {
+        throw new Error('Disbursed expenses posted to the General Ledger cannot be edited.');
+      }
+
+      const expNo = data.expenseNumber || existing?.expense_number || `EXP-${expDate.slice(0, 4)}-${randDigits(4)}`;
       const gstAmount = round2(data.gstAmount || 0);
       const itcEligible = Boolean(data.itcEligible && gstAmount > 0);
       const expenseType = data.expenseType === 'REIMBURSEMENT' ? 'REIMBURSEMENT' : 'DIRECT_EXPENSE';
 
-      let status = data.status || 'PENDING_APPROVAL';
       const needsApproval = Boolean(settings.require_expense_approval) && amount >= Number(settings.approval_threshold || 0);
-      if (!data.status) {
+      let status = data.status && data.status !== 'PAID' ? data.status : '';
+      if (!status || (existing && existing.status === 'REJECTED')) {
         status = (expenseType === 'REIMBURSEMENT' || needsApproval) ? 'PENDING_APPROVAL' : 'APPROVED';
       }
 
@@ -1911,14 +2213,16 @@ class AccountingService {
 
       await conn.query(
         `INSERT INTO \`solar_expenses\`
-         (\`id\`, \`expense_number\`, \`project_id\`, \`project_code\`, \`vendor_name\`, \`category\`, \`amount\`, \`expense_date\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`receipt_url\`, \`approved_by\`, \`expense_type\`, \`status\`, \`employee_id\`, \`employee_name\`, \`gst_amount\`, \`itc_eligible\`, \`bank_account_id\`, \`expense_account_id\`, \`tally_sync_status\`)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NOT SYNCED')
+         (\`id\`, \`expense_number\`, \`project_id\`, \`project_code\`, \`vendor_name\`, \`category\`, \`amount\`, \`expense_date\`, \`payment_mode\`, \`reference_no\`, \`notes\`, \`receipt_url\`, \`approved_by\`, \`expense_type\`, \`status\`, \`employee_id\`, \`employee_name\`, \`gst_amount\`, \`itc_eligible\`, \`bank_account_id\`, \`expense_account_id\`, \`rejection_reason\`, \`tally_sync_status\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'NOT SYNCED')
          ON DUPLICATE KEY UPDATE
-           \`project_id\` = VALUES(\`project_id\`), \`vendor_name\` = VALUES(\`vendor_name\`), \`category\` = VALUES(\`category\`),
+           \`project_id\` = VALUES(\`project_id\`), \`project_code\` = VALUES(\`project_code\`), \`vendor_name\` = VALUES(\`vendor_name\`), \`category\` = VALUES(\`category\`),
            \`amount\` = VALUES(\`amount\`), \`expense_date\` = VALUES(\`expense_date\`), \`payment_mode\` = VALUES(\`payment_mode\`),
-           \`reference_no\` = VALUES(\`reference_no\`), \`notes\` = VALUES(\`notes\`), \`expense_type\` = VALUES(\`expense_type\`),
+           \`reference_no\` = VALUES(\`reference_no\`), \`notes\` = VALUES(\`notes\`), \`receipt_url\` = VALUES(\`receipt_url\`),
+           \`approved_by\` = VALUES(\`approved_by\`), \`expense_type\` = VALUES(\`expense_type\`), \`status\` = VALUES(\`status\`),
            \`employee_id\` = VALUES(\`employee_id\`), \`employee_name\` = VALUES(\`employee_name\`),
-           \`gst_amount\` = VALUES(\`gst_amount\`), \`itc_eligible\` = VALUES(\`itc_eligible\`), \`expense_account_id\` = VALUES(\`expense_account_id\`)`,
+           \`gst_amount\` = VALUES(\`gst_amount\`), \`itc_eligible\` = VALUES(\`itc_eligible\`), \`expense_account_id\` = VALUES(\`expense_account_id\`),
+           \`rejection_reason\` = ''`,
         [
           id, expNo, data.projectId || '', data.projectCode || '', data.vendorName || data.employeeName || 'General Expense',
           data.category || 'Travel & Food', amount, expDate, data.paymentMode || 'Bank Payment',
@@ -1929,7 +2233,7 @@ class AccountingService {
         ]
       );
 
-      await this.logAudit(conn, actor, 'EXPENSES', 'SAVE_EXPENSE', id, expNo, `Submitted ${expenseType} ${expNo} for ₹${amount.toFixed(2)} (${status})`);
+      await this.logAudit(conn, actor, 'EXPENSES', existing ? 'UPDATE_EXPENSE' : 'SAVE_EXPENSE', id, expNo, `${existing ? 'Updated' : 'Submitted'} ${expenseType} ${expNo} for ₹${amount.toFixed(2)} (${status})`);
       await conn.commit();
       return { id, expenseNumber: expNo, status };
     } catch (err) {
@@ -1938,6 +2242,20 @@ class AccountingService {
     } finally {
       conn.release();
     }
+  }
+
+  public async deleteExpense(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const [rows]: any = await pool.query('SELECT * FROM `solar_expenses` WHERE `id` = ? LIMIT 1', [id]);
+    const exp = rows?.[0];
+    if (!exp) throw new Error('Expense record not found.');
+    if (exp.status === 'PAID' || exp.journal_entry_id) {
+      throw new Error('Paid expenses posted to the General Ledger cannot be deleted.');
+    }
+    const expDate = toSqlDate(exp.expense_date) || todaySql();
+    await this.assertNotLockedDate(pool, expDate);
+    await pool.query('DELETE FROM `solar_expenses` WHERE `id` = ?', [id]);
+    await this.logAudit(pool, actor, 'EXPENSES', 'DELETE_EXPENSE', id, exp.expense_number || id, `Deleted unpaid expense ${exp.expense_number || id}`);
   }
 
   public async approveOrRejectExpense(pool: mysql.Pool, id: string, decision: 'APPROVED' | 'REJECTED', reason: string, actor: any): Promise<any> {
@@ -2164,7 +2482,7 @@ class AccountingService {
     try {
       await conn.beginTransaction();
       const settings = await this.getSettingsRow(conn);
-      const id = data.id || `asset-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const id = data.id || `asset-${Date.now()}-${randHex(3)}`;
       const purchaseCost = round2(data.purchaseCost || 0);
       const salvageValue = round2(data.salvageValue || 0);
       const life = Math.max(1, Number(data.usefulLifeYears) || 5);
@@ -2174,13 +2492,14 @@ class AccountingService {
       const method = data.depreciationMethod === 'WDV' ? 'WDV' : 'SLM';
       const depRate = round2(data.depreciationRate || (method === 'SLM' ? (100 / life) : Math.min(60, (200 / life))));
       const purchaseDate = toSqlDate(data.purchaseDate) || todaySql();
-      const assetCode = data.assetCode || `AST-${purchaseDate.slice(0, 4)}-${Math.floor(100 + Math.random() * 899)}`;
-      const assetAccountId = data.assetAccountId || 'acc-1500';
-      const depExpenseAccountId = data.depExpenseAccountId || settings.default_dep_expense_account_id || 'acc-5060';
 
       const [existingRows]: any = await conn.query('SELECT * FROM `solar_acc_fixed_assets` WHERE `id` = ? LIMIT 1', [id]);
       const existing = existingRows?.[0];
+      const assetCode = data.assetCode || existing?.asset_code || `AST-${purchaseDate.slice(0, 4)}-${randDigits(3)}`;
+      const assetAccountId = data.assetAccountId || existing?.asset_account_id || 'acc-1500';
+      const depExpenseAccountId = data.depExpenseAccountId || existing?.dep_expense_account_id || settings.default_dep_expense_account_id || 'acc-5060';
       let purchaseJournalId = existing?.purchase_journal_id || null;
+      let paymentBankAccountId = existing?.payment_bank_account_id || '';
 
       if (!existing && data.postPurchaseJournal && data.paymentBankAccountId) {
         await this.assertNotLockedDate(conn, purchaseDate);
@@ -2188,6 +2507,7 @@ class AccountingService {
         const bank = bankRows?.[0];
         if (!bank) throw new Error('Selected payment bank account not found.');
         const bankCoa = bank.coa_account_id || settings.default_bank_account_id || 'acc-1020';
+        paymentBankAccountId = bank.id;
 
         purchaseJournalId = await this.insertAndPostJournalTx(
           conn,
@@ -2213,21 +2533,61 @@ class AccountingService {
 
       await conn.query(
         `INSERT INTO \`solar_acc_fixed_assets\`
-         (\`id\`, \`asset_code\`, \`name\`, \`category\`, \`purchase_date\`, \`vendor_name\`, \`purchase_cost\`, \`salvage_value\`, \`useful_life_years\`, \`depreciation_method\`, \`depreciation_rate\`, \`accumulated_depreciation\`, \`book_value\`, \`asset_account_id\`, \`dep_expense_account_id\`, \`location\`, \`custodian\`, \`status\`, \`purchase_journal_id\`, \`notes\`)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+         (\`id\`, \`asset_code\`, \`name\`, \`category\`, \`purchase_date\`, \`vendor_name\`, \`purchase_cost\`, \`salvage_value\`, \`useful_life_years\`, \`depreciation_method\`, \`depreciation_rate\`, \`accumulated_depreciation\`, \`book_value\`, \`asset_account_id\`, \`dep_expense_account_id\`, \`location\`, \`custodian\`, \`status\`, \`purchase_journal_id\`, \`payment_bank_account_id\`, \`notes\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            \`name\` = VALUES(\`name\`), \`category\` = VALUES(\`category\`), \`vendor_name\` = VALUES(\`vendor_name\`),
            \`location\` = VALUES(\`location\`), \`custodian\` = VALUES(\`custodian\`), \`notes\` = VALUES(\`notes\`)`,
         [
           id, assetCode, data.name, data.category || 'Solar Equipment & Tools', purchaseDate,
           data.vendorName || '', purchaseCost, salvageValue, life, method, depRate, accDep, bookValue,
-          assetAccountId, depExpenseAccountId, data.location || '', data.custodian || '', purchaseJournalId, data.notes || ''
+          assetAccountId, depExpenseAccountId, data.location || '', data.custodian || '', purchaseJournalId, paymentBankAccountId, data.notes || ''
         ]
       );
 
       await this.logAudit(conn, actor, 'ASSETS', existing ? 'UPDATE_ASSET' : 'CREATE_ASSET', id, assetCode, `Saved fixed asset ${assetCode} - ${data.name} (₹${purchaseCost.toFixed(2)})`);
       await conn.commit();
       return { id, assetCode, bookValue };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async deleteFixedAsset(pool: mysql.Pool, id: string, actor: any): Promise<void> {
+    await this.ensureAccountingSchema(pool);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_acc_fixed_assets` WHERE `id` = ? LIMIT 1', [id]);
+      const asset = rows?.[0];
+      if (!asset) throw new Error('Fixed asset not found.');
+      if (asset.status === 'DISPOSED') {
+        throw new Error('Disposed assets cannot be deleted.');
+      }
+      const [depCntRows]: any = await conn.query('SELECT COUNT(*) AS cnt FROM `solar_acc_asset_depreciation` WHERE `asset_id` = ?', [id]);
+      if (Number(depCntRows?.[0]?.cnt || 0) > 0 || Number(asset.accumulated_depreciation || 0) > 0) {
+        throw new Error('Fixed assets with depreciation history cannot be deleted.');
+      }
+      const pDate = toSqlDate(asset.purchase_date) || todaySql();
+      await this.assertNotLockedDate(conn, pDate);
+
+      if (asset.purchase_journal_id) {
+        if (asset.payment_bank_account_id) {
+          await conn.query(
+            'UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?',
+            [round2(Number(asset.purchase_cost || 0)), asset.payment_bank_account_id]
+          );
+        }
+        await conn.query('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?', [asset.purchase_journal_id]);
+        await this.recalculateAccountBalances(conn);
+      }
+
+      await conn.query('DELETE FROM `solar_acc_fixed_assets` WHERE `id` = ?', [id]);
+      await this.logAudit(conn, actor, 'ASSETS', 'DELETE_ASSET', id, asset.asset_code, `Deleted fixed asset ${asset.asset_code} - ${asset.name}`);
+      await conn.commit();
     } catch (err) {
       await conn.rollback();
       throw err;

@@ -8,6 +8,16 @@ function accRound2($val) {
     return round(floatval($val), 2);
 }
 
+function accRandHex($bytes = 3) {
+    return bin2hex(random_bytes($bytes));
+}
+
+function accRandDigits($digits = 4) {
+    $min = (int)pow(10, $digits - 1);
+    $max = (int)pow(10, $digits) - 1;
+    return (string)random_int($min, $max);
+}
+
 function accTodaySql() {
     return date('Y-m-d');
 }
@@ -274,6 +284,7 @@ function ensureAccountingTablesPhp($pdo) {
         `disposal_gain_loss` DECIMAL(14,2) DEFAULT 0.00,
         `disposal_journal_id` VARCHAR(64) DEFAULT NULL,
         `purchase_journal_id` VARCHAR(64) DEFAULT NULL,
+        `payment_bank_account_id` VARCHAR(64) DEFAULT '',
         `notes` TEXT,
         `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -338,6 +349,8 @@ function ensureAccountingTablesPhp($pdo) {
         INDEX `idx_acc_audit_module` (`module`),
         INDEX `idx_acc_audit_created` (`created_at`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    accAddColumnIfMissing($pdo, 'solar_acc_fixed_assets', 'payment_bank_account_id', "VARCHAR(64) DEFAULT ''");
 
     accAddColumnIfMissing($pdo, 'solar_payments', 'invoice_id', "VARCHAR(64) DEFAULT ''");
     accAddColumnIfMissing($pdo, 'solar_payments', 'invoice_number', "VARCHAR(64) DEFAULT ''");
@@ -518,8 +531,8 @@ function accInsertJournalTxPhp($pdo, $params, $actor) {
     $accMap = [];
     foreach ($accRows as $ar) $accMap[$ar['id']] = $ar;
 
-    $id = 'je-' . round(microtime(true) * 1000) . '-' . rand(100, 9999);
-    $entryNo = !empty($params['entryNumber']) ? $params['entryNumber'] : ($prefix . str_replace('-', '', $entryDate) . '-' . rand(1000, 9999));
+    $id = 'je-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+    $entryNo = !empty($params['entryNumber']) ? $params['entryNumber'] : ($prefix . str_replace('-', '', $entryDate) . '-' . accRandDigits(4) . '-' . accRandHex(1));
 
     $stmt = $pdo->prepare("INSERT INTO `solar_acc_journal_entries` (`id`,`entry_number`,`entry_date`,`reference_type`,`reference_id`,`reference_number`,`narration`,`total_debit`,`total_credit`,`status`,`posted_by`,`posted_at`,`created_by`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
     $stmt->execute([
@@ -759,29 +772,47 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
         if ($cleanPath === '/accounting/expenses' && $method === 'POST') {
             $amt = accRound2($body['amount'] ?? 0);
             if ($amt <= 0) throw new Exception('Expense amount must be positive.');
-            $settings = accGetSettingsRowPhp($pdo);
-            $id = !empty($body['id']) ? $body['id'] : ('exp-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
-            $expDate = accToSqlDate($body['expenseDate'] ?? ($body['date'] ?? '')) ?: accTodaySql();
-            $expNo = !empty($body['expenseNumber']) ? $body['expenseNumber'] : ('EXP-' . substr($expDate, 0, 4) . '-' . rand(1000, 9999));
-            $gst = accRound2($body['gstAmount'] ?? 0);
-            $itc = (!empty($body['itcEligible']) && $gst > 0) ? 1 : 0;
-            $type = (($body['expenseType'] ?? '') === 'REIMBURSEMENT') ? 'REIMBURSEMENT' : 'DIRECT_EXPENSE';
-            $needsApproval = !empty($settings['require_expense_approval']) && $amt >= floatval($settings['approval_threshold'] ?? 0);
-            $status = !empty($body['status']) ? $body['status'] : (($type === 'REIMBURSEMENT' || $needsApproval) ? 'PENDING_APPROVAL' : 'APPROVED');
-            $expAcc = $body['expenseAccountId'] ?? ($type === 'REIMBURSEMENT' ? 'acc-5040' : 'acc-5050');
+            $pdo->beginTransaction();
+            try {
+                $settings = accGetSettingsRowPhp($pdo);
+                $id = !empty($body['id']) ? $body['id'] : ('exp-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
+                $expDate = accToSqlDate($body['expenseDate'] ?? ($body['date'] ?? '')) ?: accTodaySql();
 
-            $stmt = $pdo->prepare("INSERT INTO `solar_expenses` (`id`,`expense_number`,`project_id`,`project_code`,`vendor_name`,`category`,`amount`,`expense_date`,`payment_mode`,`reference_no`,`notes`,`receipt_url`,`approved_by`,`expense_type`,`status`,`employee_id`,`employee_name`,`gst_amount`,`itc_eligible`,`bank_account_id`,`expense_account_id`,`tally_sync_status`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT SYNCED') ON DUPLICATE KEY UPDATE `project_id`=VALUES(`project_id`),`vendor_name`=VALUES(`vendor_name`),`category`=VALUES(`category`),`amount`=VALUES(`amount`),`expense_date`=VALUES(`expense_date`),`payment_mode`=VALUES(`payment_mode`),`reference_no`=VALUES(`reference_no`),`notes`=VALUES(`notes`),`expense_type`=VALUES(`expense_type`),`employee_id`=VALUES(`employee_id`),`employee_name`=VALUES(`employee_name`),`gst_amount`=VALUES(`gst_amount`),`itc_eligible`=VALUES(`itc_eligible`),`expense_account_id`=VALUES(`expense_account_id`)");
-            $stmt->execute([
-                $id, $expNo, $body['projectId'] ?? '', $body['projectCode'] ?? '', $body['vendorName'] ?? ($body['employeeName'] ?? 'General Expense'),
-                $body['category'] ?? 'Travel & Food', $amt, $expDate, $body['paymentMode'] ?? 'Bank Payment',
-                $body['referenceNo'] ?? '', $body['notes'] ?? '', $body['receiptUrl'] ?? '',
-                $status === 'APPROVED' ? ($actor['name'] ?? 'Auto-Approved') : '',
-                $type, $status, $body['employeeId'] ?? '', $body['employeeName'] ?? '',
-                $gst, $itc, $body['bankAccountId'] ?? '', $expAcc
-            ]);
-            accLogAuditPhp($pdo, $actor, 'EXPENSES', 'SAVE_EXPENSE', $id, $expNo, "Submitted {$type} {$expNo} for {$amt} ({$status})");
-            http_response_code(201);
-            echo json_encode(['success' => true, 'data' => ['id' => $id, 'expenseNumber' => $expNo, 'status' => $status]]);
+                $exStmt = $pdo->prepare('SELECT * FROM `solar_expenses` WHERE `id` = ? LIMIT 1');
+                $exStmt->execute([$id]);
+                $existing = $exStmt->fetch(PDO::FETCH_ASSOC);
+                if ($existing && ($existing['status'] === 'PAID' || !empty($existing['journal_entry_id']))) {
+                    throw new Exception('Disbursed expenses posted to the General Ledger cannot be edited.');
+                }
+
+                $expNo = !empty($body['expenseNumber']) ? $body['expenseNumber'] : ($existing['expense_number'] ?? ('EXP-' . substr($expDate, 0, 4) . '-' . accRandDigits(4)));
+                $gst = accRound2($body['gstAmount'] ?? 0);
+                $itc = (!empty($body['itcEligible']) && $gst > 0) ? 1 : 0;
+                $type = (($body['expenseType'] ?? '') === 'REIMBURSEMENT') ? 'REIMBURSEMENT' : 'DIRECT_EXPENSE';
+                $needsApproval = !empty($settings['require_expense_approval']) && $amt >= floatval($settings['approval_threshold'] ?? 0);
+                $status = (!empty($body['status']) && $body['status'] !== 'PAID') ? $body['status'] : '';
+                if (!$status || ($existing && $existing['status'] === 'REJECTED')) {
+                    $status = ($type === 'REIMBURSEMENT' || $needsApproval) ? 'PENDING_APPROVAL' : 'APPROVED';
+                }
+                $expAcc = $body['expenseAccountId'] ?? ($type === 'REIMBURSEMENT' ? 'acc-5040' : 'acc-5050');
+
+                $stmt = $pdo->prepare("INSERT INTO `solar_expenses` (`id`,`expense_number`,`project_id`,`project_code`,`vendor_name`,`category`,`amount`,`expense_date`,`payment_mode`,`reference_no`,`notes`,`receipt_url`,`approved_by`,`expense_type`,`status`,`employee_id`,`employee_name`,`gst_amount`,`itc_eligible`,`bank_account_id`,`expense_account_id`,`rejection_reason`,`tally_sync_status`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'','NOT SYNCED') ON DUPLICATE KEY UPDATE `project_id`=VALUES(`project_id`),`project_code`=VALUES(`project_code`),`vendor_name`=VALUES(`vendor_name`),`category`=VALUES(`category`),`amount`=VALUES(`amount`),`expense_date`=VALUES(`expense_date`),`payment_mode`=VALUES(`payment_mode`),`reference_no`=VALUES(`reference_no`),`notes`=VALUES(`notes`),`receipt_url`=VALUES(`receipt_url`),`approved_by`=VALUES(`approved_by`),`expense_type`=VALUES(`expense_type`),`status`=VALUES(`status`),`employee_id`=VALUES(`employee_id`),`employee_name`=VALUES(`employee_name`),`gst_amount`=VALUES(`gst_amount`),`itc_eligible`=VALUES(`itc_eligible`),`expense_account_id`=VALUES(`expense_account_id`),`rejection_reason`=''");
+                $stmt->execute([
+                    $id, $expNo, $body['projectId'] ?? '', $body['projectCode'] ?? '', $body['vendorName'] ?? ($body['employeeName'] ?? 'General Expense'),
+                    $body['category'] ?? 'Travel & Food', $amt, $expDate, $body['paymentMode'] ?? 'Bank Payment',
+                    $body['referenceNo'] ?? '', $body['notes'] ?? '', $body['receiptUrl'] ?? '',
+                    $status === 'APPROVED' ? ($actor['name'] ?? 'Auto-Approved') : '',
+                    $type, $status, $body['employeeId'] ?? '', $body['employeeName'] ?? '',
+                    $gst, $itc, $body['bankAccountId'] ?? '', $expAcc
+                ]);
+                accLogAuditPhp($pdo, $actor, 'EXPENSES', $existing ? 'UPDATE_EXPENSE' : 'SAVE_EXPENSE', $id, $expNo, ($existing ? 'Updated ' : 'Submitted ') . "{$type} {$expNo} for {$amt} ({$status})");
+                $pdo->commit();
+                http_response_code(201);
+                echo json_encode(['success' => true, 'data' => ['id' => $id, 'expenseNumber' => $expNo, 'status' => $status]]);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
             exit;
         }
 
@@ -881,6 +912,10 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $s->execute([$id]);
                 $je = $s->fetch(PDO::FETCH_ASSOC);
                 if (!$je || $je['status'] !== 'POSTED') throw new Exception('Only POSTED journals can be reversed.');
+                $revDate = accTodaySql();
+                accAssertNotLockedPhp($pdo, $revDate);
+                $reason = trim((string)($body['reason'] ?? ''));
+                $reasonPart = $reason !== '' ? " ({$reason})" : '';
                 $ls = $pdo->prepare('SELECT * FROM `solar_acc_journal_lines` WHERE `journal_id` = ? ORDER BY `line_order` ASC');
                 $ls->execute([$id]);
                 $lines = $ls->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -899,11 +934,11 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 }, $lines);
                 $revId = accInsertJournalTxPhp($pdo, [
                     'entryNumber' => 'REV-' . $je['entry_number'] . '-' . rand(10, 99),
-                    'entryDate' => accTodaySql(),
+                    'entryDate' => $revDate,
                     'referenceType' => 'REVERSAL',
                     'referenceId' => $id,
                     'referenceNumber' => $je['entry_number'],
-                    'narration' => 'Reversal of ' . $je['entry_number'] . ': ' . $je['narration'],
+                    'narration' => "Reversal of {$je['entry_number']}{$reasonPart}: {$je['narration']}",
                     'status' => 'POSTED',
                     'lines' => $revLines
                 ], $actor);
@@ -930,8 +965,11 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             exit;
         }
 
-        // Customer Receipts
-        if ($cleanPath === '/accounting/customer-receipts' && $method === 'POST') {
+        // Customer Receipts (Create & Edit)
+        $isReceiptCreate = ($cleanPath === '/accounting/customer-receipts' && $method === 'POST');
+        $isReceiptUpdate = (preg_match('#^/accounting/customer-receipts/([^/]+)$#', $cleanPath, $rm) && $method === 'PUT');
+        if ($isReceiptCreate || $isReceiptUpdate) {
+            if ($isReceiptUpdate) $body['id'] = urldecode($rm[1]);
             $amt = accRound2($body['amount'] ?? 0);
             if ($amt <= 0) throw new Exception('Receipt amount must be positive.');
             $pdo->beginTransaction();
@@ -940,9 +978,39 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $paidDate = accToSqlDate($body['paidDate'] ?? ($body['receiptDate'] ?? '')) ?: accTodaySql();
                 $dueDate = accToSqlDate($body['dueDate'] ?? '') ?: $paidDate;
                 $status = (($body['status'] ?? '') === 'PENDING') ? 'PENDING' : 'PAID';
+                $id = !empty($body['id']) ? $body['id'] : ('pay-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
+
+                $exStmt = $pdo->prepare('SELECT * FROM `solar_payments` WHERE `id` = ? LIMIT 1');
+                $exStmt->execute([$id]);
+                $existing = $exStmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($existing && $existing['status'] === 'PAID') {
+                    $oldDate = accToSqlDate($existing['paid_date'] ?? ($existing['due_date'] ?? '')) ?: accTodaySql();
+                    accAssertNotLockedPhp($pdo, $oldDate);
+                    $oldAmt = accRound2(floatval($existing['amount'] ?? 0));
+                    if (!empty($existing['bank_account_id'])) {
+                        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$oldAmt, $existing['bank_account_id']]);
+                    }
+                    if (!empty($existing['invoice_id'])) {
+                        $ois = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1');
+                        $ois->execute([$existing['invoice_id']]);
+                        $oldInv = $ois->fetch(PDO::FETCH_ASSOC);
+                        if ($oldInv) {
+                            $revPaid = accRound2(max(0, floatval($oldInv['paid_amount']) - $oldAmt));
+                            $tot = accRound2(floatval($oldInv['total_amount']));
+                            $revBal = accRound2(max(0, $tot - $revPaid));
+                            $revStat = $revBal <= 0.01 ? 'PAID' : ($revPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+                            $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')->execute([$revPaid, $revBal, $revStat, $oldInv['id']]);
+                        }
+                    }
+                    if (!empty($existing['journal_entry_id'])) {
+                        $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$existing['journal_entry_id']]);
+                        accRecalcBalancesPhp($pdo);
+                    }
+                }
+
                 if ($status === 'PAID') accAssertNotLockedPhp($pdo, $paidDate);
-                $id = !empty($body['id']) ? $body['id'] : ('pay-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
-                $rcptNo = !empty($body['receiptNumber']) ? $body['receiptNumber'] : ('RCPT-' . substr($paidDate, 0, 4) . '-' . rand(1000, 9999));
+                $rcptNo = !empty($body['receiptNumber']) ? $body['receiptNumber'] : ($existing['receipt_number'] ?? ('RCPT-' . substr($paidDate, 0, 4) . '-' . accRandDigits(4)));
 
                 $bankCoa = $settings['default_bank_account_id'] ?? 'acc-1020';
                 if (!empty($body['bankAccountId'])) {
@@ -993,12 +1061,55 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     ], $actor);
                 }
 
-                $pdo->prepare("INSERT INTO `solar_payments` (`id`,`receipt_number`,`project_id`,`customer_id`,`customer_name`,`milestone`,`amount`,`status`,`due_date`,`paid_date`,`payment_mode`,`transaction_reference`,`notes`,`invoice_id`,`invoice_number`,`bank_account_id`,`journal_entry_id`,`tally_sync_status`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT SYNCED') ON DUPLICATE KEY UPDATE `status`=VALUES(`status`),`paid_date`=VALUES(`paid_date`),`bank_account_id`=VALUES(`bank_account_id`),`journal_entry_id`=VALUES(`journal_entry_id`)")
+                $pdo->prepare("INSERT INTO `solar_payments` (`id`,`receipt_number`,`project_id`,`customer_id`,`customer_name`,`milestone`,`amount`,`status`,`due_date`,`paid_date`,`payment_mode`,`transaction_reference`,`notes`,`invoice_id`,`invoice_number`,`bank_account_id`,`journal_entry_id`,`tally_sync_status`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT SYNCED') ON DUPLICATE KEY UPDATE `project_id`=VALUES(`project_id`),`customer_id`=VALUES(`customer_id`),`customer_name`=VALUES(`customer_name`),`milestone`=VALUES(`milestone`),`amount`=VALUES(`amount`),`status`=VALUES(`status`),`due_date`=VALUES(`due_date`),`paid_date`=VALUES(`paid_date`),`payment_mode`=VALUES(`payment_mode`),`transaction_reference`=VALUES(`transaction_reference`),`notes`=VALUES(`notes`),`invoice_id`=VALUES(`invoice_id`),`invoice_number`=VALUES(`invoice_number`),`bank_account_id`=VALUES(`bank_account_id`),`journal_entry_id`=VALUES(`journal_entry_id`)")
                     ->execute([$id, $rcptNo, $projId, $custId, $custName, $body['milestone'] ?? 'Project Milestone', $amt, $status, $dueDate, $status === 'PAID' ? $paidDate : null, $body['paymentMode'] ?? 'Bank NEFT/RTGS', $body['transactionReference'] ?? '', $body['notes'] ?? '', $body['invoiceId'] ?? '', $invNo, $body['bankAccountId'] ?? '', $jeId]);
-                accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', 'RECORD_RECEIPT', $id, $rcptNo, "Recorded receipt {$rcptNo} from {$custName} for {$amt}");
+                accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', $existing ? 'UPDATE_RECEIPT' : 'RECORD_RECEIPT', $id, $rcptNo, ($existing ? 'Updated ' : 'Recorded ') . "receipt {$rcptNo} from {$custName} for {$amt}");
                 $pdo->commit();
-                http_response_code(201);
-                echo json_encode(['success' => true, 'data' => ['id' => $id, 'receiptNumber' => $rcptNo, 'journalEntryId' => $jeId]]);
+                if ($isReceiptCreate) http_response_code(201);
+                echo json_encode(['success' => true, 'data' => ['id' => $id, 'receiptNumber' => $rcptNo, 'amount' => $amt, 'status' => $status, 'journalEntryId' => $jeId]]);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+            exit;
+        }
+
+        if (preg_match('#^/accounting/customer-receipts/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $pdo->beginTransaction();
+            try {
+                $rs = $pdo->prepare('SELECT * FROM `solar_payments` WHERE `id` = ? LIMIT 1');
+                $rs->execute([$id]);
+                $receipt = $rs->fetch(PDO::FETCH_ASSOC);
+                if (!$receipt) throw new Exception('Customer receipt not found.');
+                if ($receipt['status'] === 'PAID') {
+                    $payDate = accToSqlDate($receipt['paid_date'] ?? ($receipt['due_date'] ?? '')) ?: accTodaySql();
+                    accAssertNotLockedPhp($pdo, $payDate);
+                    $amt = accRound2(floatval($receipt['amount'] ?? 0));
+                    if (!empty($receipt['bank_account_id'])) {
+                        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$amt, $receipt['bank_account_id']]);
+                    }
+                    if (!empty($receipt['invoice_id'])) {
+                        $is = $pdo->prepare('SELECT * FROM `solar_sales_invoices` WHERE `id` = ? LIMIT 1');
+                        $is->execute([$receipt['invoice_id']]);
+                        $inv = $is->fetch(PDO::FETCH_ASSOC);
+                        if ($inv) {
+                            $newPaid = accRound2(max(0, floatval($inv['paid_amount']) - $amt));
+                            $tot = accRound2(floatval($inv['total_amount']));
+                            $newBal = accRound2(max(0, $tot - $newPaid));
+                            $invStat = $newBal <= 0.01 ? 'PAID' : ($newPaid > 0.01 ? 'PARTIAL' : 'ISSUED');
+                            $pdo->prepare('UPDATE `solar_sales_invoices` SET `paid_amount`=?,`balance_amount`=?,`payment_status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $invStat, $inv['id']]);
+                        }
+                    }
+                    if (!empty($receipt['journal_entry_id'])) {
+                        $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$receipt['journal_entry_id']]);
+                        accRecalcBalancesPhp($pdo);
+                    }
+                }
+                $pdo->prepare('DELETE FROM `solar_payments` WHERE `id` = ?')->execute([$id]);
+                accLogAuditPhp($pdo, $actor, 'CUSTOMER_PAYMENTS', 'DELETE_RECEIPT', $id, $receipt['receipt_number'] ?? $id, "Deleted customer receipt {$receipt['receipt_number']} ({$receipt['customer_name']})");
+                $pdo->commit();
+                echo json_encode(['success' => true, 'message' => 'Customer receipt deleted.']);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
@@ -1011,10 +1122,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             $pdo->beginTransaction();
             try {
                 $settings = accGetSettingsRowPhp($pdo);
-                $id = !empty($body['id']) ? $body['id'] : ('vbill-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
+                $id = !empty($body['id']) ? $body['id'] : ('vbill-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
                 $billDate = accToSqlDate($body['billDate'] ?? '') ?: accTodaySql();
                 $dueDate = accToSqlDate($body['dueDate'] ?? '') ?: $billDate;
-                $billNo = !empty($body['billNumber']) ? $body['billNumber'] : (($settings['bill_prefix'] ?? 'BILL-') . substr($billDate, 0, 4) . '-' . rand(1000, 9999));
                 $items = is_array($body['items'] ?? null) ? $body['items'] : [];
                 $subtotal = accRound2($body['subtotal'] ?? 0);
                 $gst = accRound2($body['gstAmount'] ?? 0);
@@ -1042,9 +1152,28 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $ex = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1');
                 $ex->execute([$id]);
                 $existing = $ex->fetch(PDO::FETCH_ASSOC);
-                $jeId = $existing['journal_entry_id'] ?? '';
+                $billNo = trim((string)($body['billNumber'] ?? ($existing['bill_number'] ?? (($settings['bill_prefix'] ?? 'BILL-') . substr($billDate, 0, 4) . '-' . accRandDigits(4)))));
 
-                if ($status !== 'DRAFT' && empty($jeId)) {
+                if ($existing) {
+                    if (floatval($existing['paid_amount'] ?? 0) > 0) {
+                        throw new Exception('Vendor bills with recorded payments cannot be edited. Reverse the vendor payment first.');
+                    }
+                    $vpc = $pdo->prepare('SELECT COUNT(*) FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?');
+                    $vpc->execute([$id]);
+                    if ((int)$vpc->fetchColumn() > 0) {
+                        throw new Exception('Vendor bills with payment history cannot be edited.');
+                    }
+                    if (!empty($existing['journal_entry_id'])) {
+                        $oldBillDate = accToSqlDate($existing['bill_date'] ?? '') ?: accTodaySql();
+                        accAssertNotLockedPhp($pdo, $oldBillDate);
+                        $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$existing['journal_entry_id']]);
+                        accRecalcBalancesPhp($pdo);
+                    }
+                }
+
+                $jeId = '';
+                if ($status !== 'DRAFT') {
+                    accAssertNotLockedPhp($pdo, $billDate);
                     $lines = [];
                     if ($itc && $totGst > 0) {
                         $lines[] = ['accountId' => $expAcc, 'description' => "Bill {$billNo}", 'projectId' => $body['projectId'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $body['vendorId'] ?? '', 'partyName' => $body['vendorName'] ?? '', 'debit' => $subtotal, 'credit' => 0];
@@ -1056,13 +1185,13 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $billDate, 'referenceType' => 'VENDOR_BILL', 'referenceId' => $id, 'referenceNumber' => $billNo, 'narration' => "Vendor Bill {$billNo} - " . ($body['vendorName'] ?? ''), 'status' => 'POSTED', 'lines' => $lines], $actor);
                 }
 
-                $paid = accRound2($existing['paid_amount'] ?? 0);
-                $bal = accRound2(max(0, $totalAmt - $paid));
-                $pdo->prepare("INSERT INTO `solar_acc_vendor_bills` (`id`,`bill_number`,`vendor_id`,`vendor_name`,`vendor_gst`,`po_id`,`po_number`,`project_id`,`project_title`,`bill_date`,`due_date`,`category`,`subtotal`,`cgst_amount`,`sgst_amount`,`igst_amount`,`gst_amount`,`tds_section`,`tds_rate`,`tds_amount`,`total_amount`,`paid_amount`,`balance_amount`,`itc_eligible`,`status`,`expense_account_id`,`journal_entry_id`,`notes`,`items_json`,`created_by`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `vendor_id`=VALUES(`vendor_id`),`vendor_name`=VALUES(`vendor_name`),`bill_date`=VALUES(`bill_date`),`due_date`=VALUES(`due_date`),`category`=VALUES(`category`),`subtotal`=VALUES(`subtotal`),`cgst_amount`=VALUES(`cgst_amount`),`sgst_amount`=VALUES(`sgst_amount`),`igst_amount`=VALUES(`igst_amount`),`gst_amount`=VALUES(`gst_amount`),`tds_section`=VALUES(`tds_section`),`tds_rate`=VALUES(`tds_rate`),`tds_amount`=VALUES(`tds_amount`),`total_amount`=VALUES(`total_amount`),`balance_amount`=VALUES(`balance_amount`),`itc_eligible`=VALUES(`itc_eligible`),`status`=VALUES(`status`),`expense_account_id`=VALUES(`expense_account_id`),`journal_entry_id`=VALUES(`journal_entry_id`),`notes`=VALUES(`notes`),`items_json`=VALUES(`items_json`)")
+                $paid = 0;
+                $bal = accRound2($totalAmt);
+                $pdo->prepare("INSERT INTO `solar_acc_vendor_bills` (`id`,`bill_number`,`vendor_id`,`vendor_name`,`vendor_gst`,`po_id`,`po_number`,`project_id`,`project_title`,`bill_date`,`due_date`,`category`,`subtotal`,`cgst_amount`,`sgst_amount`,`igst_amount`,`gst_amount`,`tds_section`,`tds_rate`,`tds_amount`,`total_amount`,`paid_amount`,`balance_amount`,`itc_eligible`,`status`,`expense_account_id`,`journal_entry_id`,`notes`,`items_json`,`created_by`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `bill_number`=VALUES(`bill_number`),`vendor_id`=VALUES(`vendor_id`),`vendor_name`=VALUES(`vendor_name`),`vendor_gst`=VALUES(`vendor_gst`),`po_id`=VALUES(`po_id`),`po_number`=VALUES(`po_number`),`project_id`=VALUES(`project_id`),`project_title`=VALUES(`project_title`),`bill_date`=VALUES(`bill_date`),`due_date`=VALUES(`due_date`),`category`=VALUES(`category`),`subtotal`=VALUES(`subtotal`),`cgst_amount`=VALUES(`cgst_amount`),`sgst_amount`=VALUES(`sgst_amount`),`igst_amount`=VALUES(`igst_amount`),`gst_amount`=VALUES(`gst_amount`),`tds_section`=VALUES(`tds_section`),`tds_rate`=VALUES(`tds_rate`),`tds_amount`=VALUES(`tds_amount`),`total_amount`=VALUES(`total_amount`),`balance_amount`=VALUES(`balance_amount`),`itc_eligible`=VALUES(`itc_eligible`),`status`=VALUES(`status`),`expense_account_id`=VALUES(`expense_account_id`),`journal_entry_id`=VALUES(`journal_entry_id`),`notes`=VALUES(`notes`),`items_json`=VALUES(`items_json`)")
                     ->execute([$id, $billNo, $body['vendorId'] ?? '', $body['vendorName'] ?? 'Vendor', $body['vendorGst'] ?? '', $body['poId'] ?? '', $body['poNumber'] ?? '', $body['projectId'] ?? '', $body['projectTitle'] ?? '', $billDate, $dueDate, $body['category'] ?? 'Material Purchase', $subtotal, $cgst, $sgst, $igst, $totGst, $body['tdsSection'] ?? '', $tdsRate, $tdsAmt, $totalAmt, $paid, $bal, $itc, $status, $expAcc, $jeId, $body['notes'] ?? '', json_encode($items), $actor['name'] ?? 'Admin']);
-                accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', 'SAVE_VENDOR_BILL', $id, $billNo, "Saved Vendor Bill {$billNo}");
+                accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', $existing ? 'UPDATE_VENDOR_BILL' : 'SAVE_VENDOR_BILL', $id, $billNo, ($existing ? 'Updated ' : 'Saved ') . "Vendor Bill {$billNo}");
                 $pdo->commit();
-                echo json_encode(['success' => true, 'data' => ['id' => $id, 'billNumber' => $billNo, 'journalEntryId' => $jeId]]);
+                echo json_encode(['success' => true, 'data' => ['id' => $id, 'billNumber' => $billNo, 'totalAmount' => $totalAmt, 'balanceAmount' => $bal, 'status' => $status, 'journalEntryId' => $jeId]]);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
@@ -1072,12 +1201,29 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
 
         if (preg_match('#^/accounting/vendor-bills/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
             $id = urldecode($m[1]);
-            $s = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1');
-            $s->execute([$id]);
-            $bill = $s->fetch(PDO::FETCH_ASSOC);
-            if (!$bill || $bill['status'] !== 'DRAFT' || floatval($bill['paid_amount']) > 0) throw new Exception('Only unpaid DRAFT vendor bills can be deleted.');
-            $pdo->prepare('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?')->execute([$id]);
-            echo json_encode(['success' => true, 'message' => 'Draft vendor bill deleted.']);
+            $pdo->beginTransaction();
+            try {
+                $s = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1');
+                $s->execute([$id]);
+                $bill = $s->fetch(PDO::FETCH_ASSOC);
+                if (!$bill) throw new Exception('Vendor bill not found.');
+                if (floatval($bill['paid_amount']) > 0) throw new Exception('Cannot delete a vendor bill with payments recorded. Reverse vendor payments first.');
+                $vpc = $pdo->prepare('SELECT COUNT(*) FROM `solar_acc_vendor_payments` WHERE `bill_id` = ?');
+                $vpc->execute([$id]);
+                if ((int)$vpc->fetchColumn() > 0) throw new Exception('Cannot delete a vendor bill referenced by vendor payments.');
+                if (!empty($bill['journal_entry_id'])) {
+                    accAssertNotLockedPhp($pdo, accToSqlDate($bill['bill_date'] ?? '') ?: accTodaySql());
+                    $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$bill['journal_entry_id']]);
+                    accRecalcBalancesPhp($pdo);
+                }
+                $pdo->prepare('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?')->execute([$id]);
+                accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', 'DELETE_VENDOR_BILL', $id, $bill['bill_number'], "Deleted unpaid vendor bill {$bill['bill_number']}");
+                $pdo->commit();
+                echo json_encode(['success' => true, 'message' => 'Unpaid vendor bill deleted.']);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
             exit;
         }
 
@@ -1091,6 +1237,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             try {
                 $settings = accGetSettingsRowPhp($pdo);
                 $payDate = accToSqlDate($body['paymentDate'] ?? '') ?: accTodaySql();
+                accAssertNotLockedPhp($pdo, $payDate);
                 $bs = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1');
                 $bs->execute([$body['billId'] ?? '']);
                 $bill = $bs->fetch(PDO::FETCH_ASSOC);
@@ -1103,8 +1250,8 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 if (!$bank) throw new Exception('Valid bank/cash account required.');
                 $bankCoa = $bank['coa_account_id'] ?: ($bank['account_type'] === 'CASH' ? 'acc-1010' : 'acc-1020');
 
-                $payId = 'vpay-' . round(microtime(true) * 1000) . '-' . rand(100, 999);
-                $payNo = !empty($body['paymentNumber']) ? $body['paymentNumber'] : ('VPAY-' . substr($payDate, 0, 4) . '-' . rand(1000, 9999));
+                $payId = 'vpay-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+                $payNo = !empty($body['paymentNumber']) ? $body['paymentNumber'] : ('VPAY-' . substr($payDate, 0, 4) . '-' . accRandDigits(4));
 
                 $lines = [
                     ['accountId' => $settings['default_ap_account_id'] ?? 'acc-2010', 'description' => "Settlement {$bill['bill_number']}", 'projectId' => $bill['project_id'] ?? '', 'partyType' => 'VENDOR', 'partyId' => $bill['vendor_id'], 'partyName' => $bill['vendor_name'], 'debit' => $amt, 'credit' => 0],
@@ -1131,7 +1278,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     $pan = $vs->fetchColumn() ?: '';
                     $rate = accRound2(($tds / max(1, $amt)) * 100);
                     $pdo->prepare("INSERT INTO `solar_acc_tds_entries` (`id`,`section`,`party_type`,`party_id`,`party_name`,`pan_number`,`source_type`,`source_id`,`source_number`,`deduction_date`,`gross_amount`,`tds_rate`,`tds_amount`,`status`) VALUES (?,?,'VENDOR',?,?,?,'VENDOR_PAYMENT',?,?,?,?,?,?,'DEDUCTED')")
-                        ->execute(['tds-' . round(microtime(true) * 1000) . '-' . rand(100, 999), $body['tdsSection'] ?? ($bill['tds_section'] ?: '194C'), $bill['vendor_id'], $bill['vendor_name'], $pan, $payId, $payNo, $payDate, $amt, $rate, $tds]);
+                        ->execute(['tds-' . round(microtime(true) * 1000) . '-' . accRandHex(3), $body['tdsSection'] ?? ($bill['tds_section'] ?: '194C'), $bill['vendor_id'], $bill['vendor_name'], $pan, $payId, $payNo, $payDate, $amt, $rate, $tds]);
                 }
                 accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', 'RECORD_VENDOR_PAYMENT', $payId, $payNo, "Paid {$net} (TDS {$tds}) to {$bill['vendor_name']}");
                 $pdo->commit();
@@ -1144,23 +1291,114 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             exit;
         }
 
+        if (preg_match('#^/accounting/vendor-payments/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $pdo->beginTransaction();
+            try {
+                $vps = $pdo->prepare('SELECT * FROM `solar_acc_vendor_payments` WHERE `id` = ? LIMIT 1');
+                $vps->execute([$id]);
+                $vp = $vps->fetch(PDO::FETCH_ASSOC);
+                if (!$vp) throw new Exception('Vendor payment not found.');
+                accAssertNotLockedPhp($pdo, accToSqlDate($vp['payment_date'] ?? '') ?: accTodaySql());
+
+                $tdss = $pdo->prepare("SELECT * FROM `solar_acc_tds_entries` WHERE `source_type`='VENDOR_PAYMENT' AND `source_id`=?");
+                $tdss->execute([$id]);
+                foreach ($tdss->fetchAll(PDO::FETCH_ASSOC) ?: [] as $t) {
+                    if ($t['status'] === 'DEPOSITED') {
+                        throw new Exception('Cannot reverse vendor payment because deducted TDS has already been deposited via challan.');
+                    }
+                }
+                $pdo->prepare("DELETE FROM `solar_acc_tds_entries` WHERE `source_type`='VENDOR_PAYMENT' AND `source_id`=?")->execute([$id]);
+
+                if (!empty($vp['bank_account_id'])) {
+                    $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')->execute([accRound2(floatval($vp['net_paid'] ?? 0)), $vp['bank_account_id']]);
+                }
+
+                $bs = $pdo->prepare('SELECT * FROM `solar_acc_vendor_bills` WHERE `id` = ? LIMIT 1');
+                $bs->execute([$vp['bill_id']]);
+                $bill = $bs->fetch(PDO::FETCH_ASSOC);
+                if ($bill) {
+                    $newPaid = accRound2(max(0, floatval($bill['paid_amount']) - floatval($vp['amount'])));
+                    $newBal = accRound2(max(0, floatval($bill['total_amount']) - $newPaid));
+                    $newStatus = $newBal <= 0.01 ? 'PAID' : ($newPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+                    $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `paid_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')->execute([$newPaid, $newBal, $newStatus, $bill['id']]);
+                    if (!empty($bill['po_id'])) {
+                        $poPayStatus = $newStatus === 'PAID' ? 'PAID' : ($newStatus === 'PARTIAL' ? 'PARTIALLY_PAID' : 'UNPAID');
+                        $pdo->prepare('UPDATE `solar_purchase_orders` SET `payment_status`=? WHERE `id`=?')->execute([$poPayStatus, $bill['po_id']]);
+                    }
+                }
+
+                if (!empty($vp['journal_entry_id'])) {
+                    $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$vp['journal_entry_id']]);
+                    accRecalcBalancesPhp($pdo);
+                }
+
+                $pdo->prepare('DELETE FROM `solar_acc_vendor_payments` WHERE `id` = ?')->execute([$id]);
+                accLogAuditPhp($pdo, $actor, 'VENDOR_PAYMENTS', 'DELETE_VENDOR_PAYMENT', $id, $vp['payment_number'], "Reversed vendor payment {$vp['payment_number']}");
+                $pdo->commit();
+                echo json_encode(['success' => true, 'message' => 'Vendor payment reversed and deleted.']);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+            exit;
+        }
+
         // Bank accounts, transfers, reconciliations
         if ($cleanPath === '/accounting/bank-accounts' && $method === 'POST') {
             $name = trim((string)($body['accountName'] ?? ''));
             if (!$name) throw new Exception('Account name is required.');
-            $id = !empty($body['id']) ? $body['id'] : ('bank-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
+            $id = !empty($body['id']) ? $body['id'] : ('bank-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
             $type = (($body['accountType'] ?? '') === 'CASH') ? 'CASH' : 'BANK';
             $op = accRound2($body['openingBalance'] ?? 0);
             $exStmt = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
             $exStmt->execute([$id]);
             $ex = $exStmt->fetch(PDO::FETCH_ASSOC);
-            $cur = $ex ? floatval($ex['current_balance']) : $op;
+            $cur = $ex ? accRound2(floatval($ex['current_balance']) + ($op - accRound2(floatval($ex['opening_balance'])))) : $op;
             $coaId = $body['coaAccountId'] ?? ($type === 'CASH' ? 'acc-1010' : 'acc-1020');
+
+            if (!$ex && !empty($body['createCoaLedger'])) {
+                $code = '10' . accRandDigits(2);
+                $newCoaId = 'acc-' . $code . '-' . round(microtime(true) * 1000);
+                $pdo->prepare("INSERT INTO `solar_acc_accounts` (`id`,`code`,`name`,`account_type`,`sub_type`,`opening_balance`,`current_balance`,`is_system`,`is_active`) VALUES (?,?,?,'ASSET',?,?,?,0,1)")
+                    ->execute([$newCoaId, $code, $name, $type === 'CASH' ? 'Cash' : 'Bank', $op, $op]);
+                $coaId = $newCoaId;
+            }
+
             if (!empty($body['isPrimary'])) $pdo->exec('UPDATE `solar_acc_bank_accounts` SET `is_primary` = 0');
-            $pdo->prepare("INSERT INTO `solar_acc_bank_accounts` (`id`,`account_name`,`account_type`,`bank_name`,`account_number`,`ifsc_code`,`branch`,`coa_account_id`,`opening_balance`,`current_balance`,`is_primary`,`is_active`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `account_name`=VALUES(`account_name`),`account_type`=VALUES(`account_type`),`bank_name`=VALUES(`bank_name`),`account_number`=VALUES(`account_number`),`ifsc_code`=VALUES(`ifsc_code`),`branch`=VALUES(`branch`),`coa_account_id`=VALUES(`coa_account_id`),`is_primary`=VALUES(`is_primary`),`is_active`=VALUES(`is_active`)")
+            $pdo->prepare("INSERT INTO `solar_acc_bank_accounts` (`id`,`account_name`,`account_type`,`bank_name`,`account_number`,`ifsc_code`,`branch`,`coa_account_id`,`opening_balance`,`current_balance`,`is_primary`,`is_active`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `account_name`=VALUES(`account_name`),`account_type`=VALUES(`account_type`),`bank_name`=VALUES(`bank_name`),`account_number`=VALUES(`account_number`),`ifsc_code`=VALUES(`ifsc_code`),`branch`=VALUES(`branch`),`coa_account_id`=VALUES(`coa_account_id`),`opening_balance`=VALUES(`opening_balance`),`current_balance`=VALUES(`current_balance`),`is_primary`=VALUES(`is_primary`),`is_active`=VALUES(`is_active`)")
                 ->execute([$id, $name, $type, $body['bankName'] ?? '', $body['accountNumber'] ?? '', $body['ifscCode'] ?? '', $body['branch'] ?? '', $coaId, $op, $cur, !empty($body['isPrimary']) ? 1 : 0, (isset($body['isActive']) && $body['isActive'] === false) ? 0 : 1]);
-            accLogAuditPhp($pdo, $actor, 'CASH_BANK', 'SAVE_BANK_ACCOUNT', $id, $name, "Saved {$type} account {$name}");
-            echo json_encode(['success' => true, 'data' => ['id' => $id, 'accountName' => $name]]);
+            accLogAuditPhp($pdo, $actor, 'CASH_BANK', $ex ? 'UPDATE_BANK_ACCOUNT' : 'CREATE_BANK_ACCOUNT', $id, $name, "Saved {$type} account {$name}");
+            echo json_encode(['success' => true, 'data' => ['id' => $id, 'accountName' => $name, 'currentBalance' => $cur]]);
+            exit;
+        }
+
+        if (preg_match('#^/accounting/bank-accounts/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $bs = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
+            $bs->execute([$id]);
+            $bank = $bs->fetch(PDO::FETCH_ASSOC);
+            if (!$bank) throw new Exception('Cash/Bank register not found.');
+            if (!empty($bank['is_primary'])) throw new Exception('Cannot delete the primary Cash/Bank account. Assign another primary account or deactivate it instead.');
+
+            $checks = [
+                ['solar_payments', 'bank_account_id = ?', [$id]],
+                ['solar_acc_vendor_payments', 'bank_account_id = ?', [$id]],
+                ['solar_acc_bank_transfers', 'from_account_id = ? OR to_account_id = ?', [$id, $id]],
+                ['solar_acc_bank_reconciliations', 'bank_account_id = ?', [$id]],
+                ['solar_expenses', 'bank_account_id = ?', [$id]],
+                ['solar_acc_fixed_assets', 'payment_bank_account_id = ?', [$id]],
+            ];
+            foreach ($checks as $chk) {
+                $cs = $pdo->prepare("SELECT COUNT(*) FROM `{$chk[0]}` WHERE {$chk[1]}");
+                $cs->execute($chk[2]);
+                if ((int)$cs->fetchColumn() > 0) {
+                    throw new Exception('Cannot delete a Cash/Bank register with linked transactions or reconciliations. Deactivate it instead.');
+                }
+            }
+            $pdo->prepare('DELETE FROM `solar_acc_bank_accounts` WHERE `id` = ?')->execute([$id]);
+            accLogAuditPhp($pdo, $actor, 'CASH_BANK', 'DELETE_BANK_ACCOUNT', $id, $bank['account_name'], "Deleted {$bank['account_type']} account {$bank['account_name']}");
+            echo json_encode(['success' => true, 'message' => 'Cash/Bank register deleted.']);
             exit;
         }
 
@@ -1172,6 +1410,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             $pdo->beginTransaction();
             try {
                 $tDate = accToSqlDate($body['transferDate'] ?? '') ?: accTodaySql();
+                accAssertNotLockedPhp($pdo, $tDate);
                 $fs = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
                 $fs->execute([$body['fromAccountId']]);
                 $fromAcc = $fs->fetch(PDO::FETCH_ASSOC);
@@ -1180,8 +1419,8 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $toAcc = $ts->fetch(PDO::FETCH_ASSOC);
                 if (!$fromAcc || !$toAcc) throw new Exception('Invalid bank accounts.');
 
-                $id = 'xfer-' . round(microtime(true) * 1000) . '-' . rand(100, 999);
-                $tNo = 'TRF-' . substr($tDate, 0, 4) . '-' . rand(1000, 9999);
+                $id = 'xfer-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
+                $tNo = 'TRF-' . substr($tDate, 0, 4) . '-' . accRandDigits(4);
                 $fCoa = $fromAcc['coa_account_id'] ?: ($fromAcc['account_type'] === 'CASH' ? 'acc-1010' : 'acc-1020');
                 $tCoa = $toAcc['coa_account_id'] ?: ($toAcc['account_type'] === 'CASH' ? 'acc-1010' : 'acc-1020');
                 $jeId = '';
@@ -1203,26 +1442,86 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             exit;
         }
 
+        if (preg_match('#^/accounting/bank-transfers/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $pdo->beginTransaction();
+            try {
+                $ts = $pdo->prepare('SELECT * FROM `solar_acc_bank_transfers` WHERE `id` = ? LIMIT 1');
+                $ts->execute([$id]);
+                $tr = $ts->fetch(PDO::FETCH_ASSOC);
+                if (!$tr) throw new Exception('Bank transfer not found.');
+                accAssertNotLockedPhp($pdo, accToSqlDate($tr['transfer_date'] ?? '') ?: accTodaySql());
+                $amt = accRound2(floatval($tr['amount'] ?? 0));
+                $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')->execute([$amt, $tr['from_account_id']]);
+                $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$amt, $tr['to_account_id']]);
+                if (!empty($tr['journal_entry_id'])) {
+                    $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$tr['journal_entry_id']]);
+                    accRecalcBalancesPhp($pdo);
+                }
+                $pdo->prepare('DELETE FROM `solar_acc_bank_transfers` WHERE `id` = ?')->execute([$id]);
+                accLogAuditPhp($pdo, $actor, 'CASH_BANK', 'DELETE_BANK_TRANSFER', $id, $tr['transfer_number'], "Reversed contra transfer {$tr['transfer_number']}");
+                $pdo->commit();
+                echo json_encode(['success' => true, 'message' => 'Contra transfer reversed and deleted.']);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+            exit;
+        }
+
         if ($cleanPath === '/accounting/bank-reconciliations' && $method === 'POST') {
-            $id = !empty($body['id']) ? $body['id'] : ('brec-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
+            $id = !empty($body['id']) ? $body['id'] : ('brec-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
             $stDate = accToSqlDate($body['statementDate'] ?? '') ?: accTodaySql();
             $bk = accRound2($body['bookBalance'] ?? 0);
             $st = accRound2($body['statementBalance'] ?? 0);
             $diff = accRound2($st - $bk);
             $stat = (($body['status'] ?? '') === 'RECONCILED') ? 'RECONCILED' : 'DRAFT';
-            $pdo->prepare("INSERT INTO `solar_acc_bank_reconciliations` (`id`,`bank_account_id`,`statement_date`,`book_balance`,`statement_balance`,`cleared_txn_ids_json`,`difference`,`status`,`notes`,`reconciled_by`,`reconciled_at`) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `statement_date`=VALUES(`statement_date`),`book_balance`=VALUES(`book_balance`),`statement_balance`=VALUES(`statement_balance`),`cleared_txn_ids_json`=VALUES(`cleared_txn_ids_json`),`difference`=VALUES(`difference`),`status`=VALUES(`status`),`notes`=VALUES(`notes`),`reconciled_by`=VALUES(`reconciled_by`),`reconciled_at`=VALUES(`reconciled_at`)")
+            $pdo->prepare("INSERT INTO `solar_acc_bank_reconciliations` (`id`,`bank_account_id`,`statement_date`,`book_balance`,`statement_balance`,`cleared_txn_ids_json`,`difference`,`status`,`notes`,`reconciled_by`,`reconciled_at`) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `bank_account_id`=VALUES(`bank_account_id`),`statement_date`=VALUES(`statement_date`),`book_balance`=VALUES(`book_balance`),`statement_balance`=VALUES(`statement_balance`),`cleared_txn_ids_json`=VALUES(`cleared_txn_ids_json`),`difference`=VALUES(`difference`),`status`=VALUES(`status`),`notes`=VALUES(`notes`),`reconciled_by`=VALUES(`reconciled_by`),`reconciled_at`=VALUES(`reconciled_at`)")
                 ->execute([$id, $body['bankAccountId'] ?? '', $stDate, $bk, $st, json_encode($body['clearedTxnIds'] ?? []), $diff, $stat, $body['notes'] ?? '', $stat === 'RECONCILED' ? ($actor['name'] ?? 'Admin') : '', $stat === 'RECONCILED' ? gmdate('c') : null]);
+            accLogAuditPhp($pdo, $actor, 'CASH_BANK', 'BANK_RECONCILIATION', $id, $stDate, "Saved bank reconciliation ({$stat}) diff {$diff}");
             echo json_encode(['success' => true, 'data' => ['id' => $id, 'difference' => $diff, 'status' => $stat]]);
             exit;
         }
 
-        // Expense approve / pay
+        if (preg_match('#^/accounting/bank-reconciliations/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $rs = $pdo->prepare('SELECT * FROM `solar_acc_bank_reconciliations` WHERE `id` = ? LIMIT 1');
+            $rs->execute([$id]);
+            $rec = $rs->fetch(PDO::FETCH_ASSOC);
+            if (!$rec) throw new Exception('Bank reconciliation record not found.');
+            if ($rec['status'] === 'RECONCILED') throw new Exception('Completed bank reconciliations cannot be deleted.');
+            $pdo->prepare('DELETE FROM `solar_acc_bank_reconciliations` WHERE `id` = ?')->execute([$id]);
+            accLogAuditPhp($pdo, $actor, 'CASH_BANK', 'DELETE_BANK_RECONCILIATION', $id, accToSqlDate($rec['statement_date'] ?? '') ?: $id, "Deleted draft bank reconciliation {$id}");
+            echo json_encode(['success' => true, 'message' => 'Draft bank reconciliation deleted.']);
+            exit;
+        }
+
+        // Expense delete / approve / pay
+        if (preg_match('#^/accounting/expenses/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $es = $pdo->prepare('SELECT * FROM `solar_expenses` WHERE `id` = ? LIMIT 1');
+            $es->execute([$id]);
+            $exp = $es->fetch(PDO::FETCH_ASSOC);
+            if (!$exp) throw new Exception('Expense record not found.');
+            if ($exp['status'] === 'PAID' || !empty($exp['journal_entry_id'])) throw new Exception('Paid expenses posted to the General Ledger cannot be deleted.');
+            accAssertNotLockedPhp($pdo, accToSqlDate($exp['expense_date'] ?? '') ?: accTodaySql());
+            $pdo->prepare('DELETE FROM `solar_expenses` WHERE `id` = ?')->execute([$id]);
+            accLogAuditPhp($pdo, $actor, 'EXPENSES', 'DELETE_EXPENSE', $id, $exp['expense_number'] ?? $id, "Deleted unpaid expense {$exp['expense_number']}");
+            echo json_encode(['success' => true, 'message' => 'Expense deleted.']);
+            exit;
+        }
+
         if (preg_match('#^/accounting/expenses/([^/]+)/approve$#', $cleanPath, $m) && $method === 'POST') {
             $id = urldecode($m[1]);
+            $es = $pdo->prepare('SELECT * FROM `solar_expenses` WHERE `id` = ? LIMIT 1');
+            $es->execute([$id]);
+            $exp = $es->fetch(PDO::FETCH_ASSOC);
+            if (!$exp) throw new Exception('Expense record not found.');
+            if ($exp['status'] === 'PAID') throw new Exception('Paid expenses cannot be rejected.');
             $dec = (($body['decision'] ?? '') === 'REJECTED') ? 'REJECTED' : 'APPROVED';
             $pdo->prepare('UPDATE `solar_expenses` SET `status`=?,`approved_by`=?,`approved_at`=?,`rejection_reason`=? WHERE `id`=?')
-                ->execute([$dec, $actor['name'] ?? 'Admin', gmdate('c'), $dec === 'REJECTED' ? ($body['reason'] ?? 'Rejected') : '', $id]);
-            accLogAuditPhp($pdo, $actor, 'EXPENSES', $dec . '_EXPENSE', $id, $id, "{$dec} expense {$id}");
+                ->execute([$dec, $actor['name'] ?? 'Admin', gmdate('c'), $dec === 'REJECTED' ? ($body['reason'] ?? 'Rejected by Finance') : '', $id]);
+            accLogAuditPhp($pdo, $actor, 'EXPENSES', $dec === 'APPROVED' ? 'APPROVE_EXPENSE' : 'REJECT_EXPENSE', $id, $exp['expense_number'], "{$dec} expense {$exp['expense_number']}");
             echo json_encode(['success' => true, 'data' => ['id' => $id, 'status' => $dec]]);
             exit;
         }
@@ -1237,7 +1536,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $exp = $es->fetch(PDO::FETCH_ASSOC);
                 if (!$exp) throw new Exception('Expense not found.');
                 if ($exp['status'] === 'PAID' && !empty($exp['journal_entry_id'])) throw new Exception('Expense already paid.');
+                if ($exp['status'] === 'REJECTED') throw new Exception('Rejected expenses cannot be disbursed.');
                 $payDate = accToSqlDate($body['paidDate'] ?? '') ?: (accToSqlDate($exp['expense_date']) ?: accTodaySql());
+                accAssertNotLockedPhp($pdo, $payDate);
                 $bankId = $body['bankAccountId'] ?: ($exp['bank_account_id'] ?: 'bank-main-current');
                 $bs = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
                 $bs->execute([$bankId]);
@@ -1253,7 +1554,8 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $lines[] = ['accountId' => $bankCoa, 'description' => "Paid via {$bank['account_name']}", 'debit' => 0, 'credit' => $amt];
                 $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $payDate, 'referenceType' => 'EXPENSE_PAYMENT', 'referenceId' => $exp['id'], 'referenceNumber' => $exp['expense_number'], 'narration' => "Expense {$exp['expense_number']} ({$exp['category']})", 'status' => 'POSTED', 'lines' => $lines], $actor);
                 $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$amt, $bank['id']]);
-                $pdo->prepare('UPDATE `solar_expenses` SET `status`=?,`bank_account_id`=?,`journal_entry_id`=?,`paid_at`=?,`paid_by`=? WHERE `id`=?')->execute(['PAID', $bank['id'], $jeId, gmdate('c'), $actor['name'] ?? 'Admin', $id]);
+                $actorName = $actor['name'] ?? 'Admin';
+                $pdo->prepare('UPDATE `solar_expenses` SET `status`=?,`bank_account_id`=?,`journal_entry_id`=?,`paid_at`=?,`paid_by`=?,`approved_by`=COALESCE(NULLIF(`approved_by`,""),?) WHERE `id`=?')->execute(['PAID', $bank['id'], $jeId, gmdate('c'), $actorName, $actorName, $id]);
                 accLogAuditPhp($pdo, $actor, 'EXPENSES', 'PAY_EXPENSE', $id, $exp['expense_number'], "Paid {$amt} via {$bank['account_name']}");
                 $pdo->commit();
                 echo json_encode(['success' => true, 'data' => ['id' => $id, 'status' => 'PAID', 'journalEntryId' => $jeId]]);
@@ -1275,6 +1577,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $tds = $ts->fetch(PDO::FETCH_ASSOC);
                 if (!$tds || $tds['status'] === 'DEPOSITED') throw new Exception('Pending TDS entry not found.');
                 $dDate = accToSqlDate($body['depositDate'] ?? '') ?: accTodaySql();
+                accAssertNotLockedPhp($pdo, $dDate);
                 $bs = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
                 $bs->execute([$body['bankAccountId'] ?? 'bank-main-current']);
                 $bank = $bs->fetch(PDO::FETCH_ASSOC);
@@ -1284,6 +1587,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $dDate, 'referenceType' => 'TDS_CHALLAN', 'referenceId' => $id, 'referenceNumber' => $body['challanNo'] ?? $tds['source_number'], 'narration' => "TDS Challan deposit ({$tds['section']})", 'status' => 'POSTED', 'lines' => [['accountId' => $settings['default_tds_account_id'] ?? 'acc-2150', 'debit' => $amt, 'credit' => 0], ['accountId' => $bankCoa, 'debit' => 0, 'credit' => $amt]]], $actor);
                 $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$amt, $bank['id']]);
                 $pdo->prepare('UPDATE `solar_acc_tds_entries` SET `status`=?,`challan_no`=?,`bsr_code`=?,`deposit_date`=? WHERE `id`=?')->execute(['DEPOSITED', $body['challanNo'] ?? '', $body['bsrCode'] ?? '', $dDate, $id]);
+                accLogAuditPhp($pdo, $actor, 'GST_TAX', 'DEPOSIT_TDS', $id, $body['challanNo'] ?? $id, "Deposited TDS Sec {$tds['section']} {$amt}");
                 $pdo->commit();
                 echo json_encode(['success' => true, 'data' => ['id' => $id, 'status' => 'DEPOSITED', 'journalEntryId' => $jeId]]);
             } catch (Exception $e) {
@@ -1302,7 +1606,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             if (!$inv) throw new Exception('Sales invoice not found.');
             if (strlen(trim((string)($inv['customer_gst'] ?? ''))) < 15) throw new Exception('Valid 15-character Buyer GSTIN required.');
             $irn = hash('sha256', $inv['invoice_number'] . '|' . $inv['customer_gst'] . '|' . $inv['total_amount'] . '|' . $inv['invoice_date']);
-            $ackNo = '1126' . rand(1000000000, 9999999999);
+            $ackNo = '1126' . random_int(1000000000, 9999999999);
             $ackDate = date('Y-m-d H:i:s');
             $pdo->prepare('UPDATE `solar_sales_invoices` SET `einvoice_irn`=?,`einvoice_ack_no`=?,`einvoice_ack_date`=?,`einvoice_status`=? WHERE `id`=?')->execute([$irn, $ackNo, $ackDate, 'GENERATED', $invId]);
             accLogAuditPhp($pdo, $actor, 'GST_TAX', 'GENERATE_EINVOICE', $invId, $inv['invoice_number'], "Generated E-Invoice IRN for {$inv['invoice_number']}");
@@ -1312,7 +1616,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
 
         // Budgets
         if ($cleanPath === '/accounting/budgets' && $method === 'POST') {
-            $id = !empty($body['id']) ? $body['id'] : ('bud-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
+            $id = !empty($body['id']) ? $body['id'] : ('bud-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
             $amt = accRound2($body['allocatedAmount'] ?? 0);
             if (empty($body['name']) || $amt <= 0) throw new Exception('Budget name and positive amount required.');
             $pdo->prepare("INSERT INTO `solar_acc_budgets` (`id`,`name`,`fiscal_year`,`period_type`,`period_label`,`department`,`category`,`project_id`,`project_title`,`account_id`,`allocated_amount`,`notes`,`status`,`created_by`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`fiscal_year`=VALUES(`fiscal_year`),`period_type`=VALUES(`period_type`),`period_label`=VALUES(`period_label`),`department`=VALUES(`department`),`category`=VALUES(`category`),`project_id`=VALUES(`project_id`),`project_title`=VALUES(`project_title`),`account_id`=VALUES(`account_id`),`allocated_amount`=VALUES(`allocated_amount`),`notes`=VALUES(`notes`),`status`=VALUES(`status`)")
@@ -1323,7 +1627,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
         }
 
         if (preg_match('#^/accounting/budgets/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
-            $pdo->prepare('DELETE FROM `solar_acc_budgets` WHERE `id` = ?')->execute([urldecode($m[1])]);
+            $budId = urldecode($m[1]);
+            $pdo->prepare('DELETE FROM `solar_acc_budgets` WHERE `id` = ?')->execute([$budId]);
+            accLogAuditPhp($pdo, $actor, 'BUDGETS', 'DELETE_BUDGET', $budId, $budId, "Deleted budget {$budId}");
             echo json_encode(['success' => true, 'message' => 'Budget deleted.']);
             exit;
         }
@@ -1337,35 +1643,71 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             $pdo->beginTransaction();
             try {
                 $settings = accGetSettingsRowPhp($pdo);
-                $id = !empty($body['id']) ? $body['id'] : ('asset-' . round(microtime(true) * 1000) . '-' . rand(100, 999));
+                $id = !empty($body['id']) ? $body['id'] : ('asset-' . round(microtime(true) * 1000) . '-' . accRandHex(3));
                 $pDate = accToSqlDate($body['purchaseDate'] ?? '') ?: accTodaySql();
-                $code = !empty($body['assetCode']) ? $body['assetCode'] : ('AST-' . substr($pDate, 0, 4) . '-' . rand(100, 999));
                 $meth = (($body['depreciationMethod'] ?? '') === 'WDV') ? 'WDV' : 'SLM';
                 $rate = accRound2($body['depreciationRate'] ?? ($meth === 'SLM' ? (100 / $life) : min(60, 200 / $life)));
-                $assetAcc = $body['assetAccountId'] ?? 'acc-1500';
-                $depAcc = $body['depExpenseAccountId'] ?? ($settings['default_dep_expense_account_id'] ?? 'acc-5060');
 
                 $es = $pdo->prepare('SELECT * FROM `solar_acc_fixed_assets` WHERE `id` = ? LIMIT 1');
                 $es->execute([$id]);
                 $ex = $es->fetch(PDO::FETCH_ASSOC);
+                $code = !empty($body['assetCode']) ? $body['assetCode'] : ($ex['asset_code'] ?? ('AST-' . substr($pDate, 0, 4) . '-' . accRandDigits(3)));
+                $assetAcc = $body['assetAccountId'] ?? ($ex['asset_account_id'] ?? 'acc-1500');
+                $depAcc = $body['depExpenseAccountId'] ?? ($ex['dep_expense_account_id'] ?? ($settings['default_dep_expense_account_id'] ?? 'acc-5060'));
                 $pjId = $ex['purchase_journal_id'] ?? null;
+                $payBankId = $ex['payment_bank_account_id'] ?? '';
 
                 if (!$ex && !empty($body['postPurchaseJournal']) && !empty($body['paymentBankAccountId'])) {
+                    accAssertNotLockedPhp($pdo, $pDate);
                     $bs = $pdo->prepare('SELECT * FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
                     $bs->execute([$body['paymentBankAccountId']]);
                     $bank = $bs->fetch(PDO::FETCH_ASSOC);
                     if (!$bank) throw new Exception('Bank account not found.');
+                    $payBankId = $bank['id'];
                     $pjId = accInsertJournalTxPhp($pdo, ['entryDate' => $pDate, 'referenceType' => 'ASSET_PURCHASE', 'referenceId' => $id, 'referenceNumber' => $code, 'narration' => "Capitalization of {$code} - {$body['name']}", 'status' => 'POSTED', 'lines' => [['accountId' => $assetAcc, 'debit' => $cost, 'credit' => 0], ['accountId' => $bank['coa_account_id'] ?: 'acc-1020', 'debit' => 0, 'credit' => $cost]]], $actor);
                     $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` - ?, 2) WHERE `id` = ?')->execute([$cost, $bank['id']]);
                 }
 
                 $accDep = $ex ? floatval($ex['accumulated_depreciation']) : accRound2($body['accumulatedDepreciation'] ?? 0);
                 $bv = $ex ? floatval($ex['book_value']) : accRound2(max($salv, $cost - $accDep));
-                $pdo->prepare("INSERT INTO `solar_acc_fixed_assets` (`id`,`asset_code`,`name`,`category`,`purchase_date`,`vendor_name`,`purchase_cost`,`salvage_value`,`useful_life_years`,`depreciation_method`,`depreciation_rate`,`accumulated_depreciation`,`book_value`,`asset_account_id`,`dep_expense_account_id`,`location`,`custodian`,`status`,`purchase_journal_id`,`notes`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?) ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`category`=VALUES(`category`),`vendor_name`=VALUES(`vendor_name`),`location`=VALUES(`location`),`custodian`=VALUES(`custodian`),`notes`=VALUES(`notes`)")
-                    ->execute([$id, $code, $body['name'], $body['category'] ?? 'Solar Equipment & Tools', $pDate, $body['vendorName'] ?? '', $cost, $salv, $life, $meth, $rate, $accDep, $bv, $assetAcc, $depAcc, $body['location'] ?? '', $body['custodian'] ?? '', $pjId, $body['notes'] ?? '']);
-                accLogAuditPhp($pdo, $actor, 'ASSETS', 'SAVE_ASSET', $id, $code, "Saved fixed asset {$code}");
+                $pdo->prepare("INSERT INTO `solar_acc_fixed_assets` (`id`,`asset_code`,`name`,`category`,`purchase_date`,`vendor_name`,`purchase_cost`,`salvage_value`,`useful_life_years`,`depreciation_method`,`depreciation_rate`,`accumulated_depreciation`,`book_value`,`asset_account_id`,`dep_expense_account_id`,`location`,`custodian`,`status`,`purchase_journal_id`,`payment_bank_account_id`,`notes`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?) ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`category`=VALUES(`category`),`vendor_name`=VALUES(`vendor_name`),`location`=VALUES(`location`),`custodian`=VALUES(`custodian`),`notes`=VALUES(`notes`)")
+                    ->execute([$id, $code, $body['name'], $body['category'] ?? 'Solar Equipment & Tools', $pDate, $body['vendorName'] ?? '', $cost, $salv, $life, $meth, $rate, $accDep, $bv, $assetAcc, $depAcc, $body['location'] ?? '', $body['custodian'] ?? '', $pjId, $payBankId, $body['notes'] ?? '']);
+                accLogAuditPhp($pdo, $actor, 'ASSETS', $ex ? 'UPDATE_ASSET' : 'CREATE_ASSET', $id, $code, "Saved fixed asset {$code}");
                 $pdo->commit();
                 echo json_encode(['success' => true, 'data' => ['id' => $id, 'assetCode' => $code, 'bookValue' => $bv]]);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+            exit;
+        }
+
+        if (preg_match('#^/accounting/assets/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+            $id = urldecode($m[1]);
+            $pdo->beginTransaction();
+            try {
+                $as = $pdo->prepare('SELECT * FROM `solar_acc_fixed_assets` WHERE `id` = ? LIMIT 1');
+                $as->execute([$id]);
+                $asset = $as->fetch(PDO::FETCH_ASSOC);
+                if (!$asset) throw new Exception('Fixed asset not found.');
+                if ($asset['status'] === 'DISPOSED') throw new Exception('Disposed assets cannot be deleted.');
+                $dc = $pdo->prepare('SELECT COUNT(*) FROM `solar_acc_asset_depreciation` WHERE `asset_id` = ?');
+                $dc->execute([$id]);
+                if ((int)$dc->fetchColumn() > 0 || floatval($asset['accumulated_depreciation'] ?? 0) > 0) {
+                    throw new Exception('Fixed assets with depreciation history cannot be deleted.');
+                }
+                accAssertNotLockedPhp($pdo, accToSqlDate($asset['purchase_date'] ?? '') ?: accTodaySql());
+                if (!empty($asset['purchase_journal_id'])) {
+                    if (!empty($asset['payment_bank_account_id'])) {
+                        $pdo->prepare('UPDATE `solar_acc_bank_accounts` SET `current_balance` = ROUND(`current_balance` + ?, 2) WHERE `id` = ?')->execute([accRound2(floatval($asset['purchase_cost'] ?? 0)), $asset['payment_bank_account_id']]);
+                    }
+                    $pdo->prepare('DELETE FROM `solar_acc_journal_entries` WHERE `id` = ?')->execute([$asset['purchase_journal_id']]);
+                    accRecalcBalancesPhp($pdo);
+                }
+                $pdo->prepare('DELETE FROM `solar_acc_fixed_assets` WHERE `id` = ?')->execute([$id]);
+                accLogAuditPhp($pdo, $actor, 'ASSETS', 'DELETE_ASSET', $id, $asset['asset_code'], "Deleted fixed asset {$asset['asset_code']}");
+                $pdo->commit();
+                echo json_encode(['success' => true, 'message' => 'Fixed asset deleted.']);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
@@ -1382,6 +1724,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $asset = $as->fetch(PDO::FETCH_ASSOC);
                 if (!$asset || $asset['status'] !== 'ACTIVE') throw new Exception('Active asset not found.');
                 $runDate = accToSqlDate($body['runDate'] ?? '') ?: accTodaySql();
+                accAssertNotLockedPhp($pdo, $runDate);
                 $openBv = accRound2(floatval($asset['book_value']));
                 $salv = accRound2(floatval($asset['salvage_value']));
                 $maxDep = accRound2(max(0, $openBv - $salv));
@@ -1401,11 +1744,12 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $label = $body['periodLabel'] ?? (substr($runDate, 0, 7) . " ({$months}m)");
 
                 $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $runDate, 'referenceType' => 'ASSET_DEPRECIATION', 'referenceId' => $assetId, 'referenceNumber' => $asset['asset_code'], 'narration' => "Depreciation on {$asset['asset_code']} ({$label})", 'status' => 'POSTED', 'lines' => [['accountId' => $asset['dep_expense_account_id'] ?: 'acc-5060', 'debit' => $depAmt, 'credit' => 0], ['accountId' => 'acc-1590', 'debit' => 0, 'credit' => $depAmt]]], $actor);
-                $logId = 'adep-' . round(microtime(true) * 1000) . '-' . rand(100, 999);
+                $logId = 'adep-' . round(microtime(true) * 1000) . '-' . accRandHex(3);
                 $pdo->prepare("INSERT INTO `solar_acc_asset_depreciation` (`id`,`asset_id`,`period_label`,`run_date`,`opening_book_value`,`depreciation_amount`,`closing_book_value`,`journal_entry_id`,`run_by`) VALUES (?,?,?,?,?,?,?,?,?)")->execute([$logId, $assetId, $label, $runDate, $openBv, $depAmt, $closeBv, $jeId, $actor['name'] ?? 'Admin']);
                 $pdo->prepare('UPDATE `solar_acc_fixed_assets` SET `accumulated_depreciation`=?,`book_value`=?,`last_depreciation_date`=? WHERE `id`=?')->execute([$newAccum, $closeBv, $runDate, $assetId]);
+                accLogAuditPhp($pdo, $actor, 'ASSETS', 'RUN_DEPRECIATION', $assetId, $asset['asset_code'], "Posted {$depAmt} depreciation on {$asset['asset_code']}");
                 $pdo->commit();
-                echo json_encode(['success' => true, 'data' => ['id' => $logId, 'depreciationAmount' => $depAmt, 'closingBookValue' => $closeBv]]);
+                echo json_encode(['success' => true, 'data' => ['id' => $logId, 'depreciationAmount' => $depAmt, 'closingBookValue' => $closeBv, 'journalEntryId' => $jeId]]);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
@@ -1423,6 +1767,7 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 $asset = $as->fetch(PDO::FETCH_ASSOC);
                 if (!$asset || $asset['status'] === 'DISPOSED') throw new Exception('Active asset not found.');
                 $dDate = accToSqlDate($body['disposalDate'] ?? '') ?: accTodaySql();
+                accAssertNotLockedPhp($pdo, $dDate);
                 $proceeds = accRound2($body['disposalProceeds'] ?? 0);
                 if ($proceeds < 0) throw new Exception('Disposal proceeds cannot be negative.');
                 $cost = accRound2(floatval($asset['purchase_cost']));
@@ -1446,8 +1791,9 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
 
                 $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $dDate, 'referenceType' => 'ASSET_DISPOSAL', 'referenceId' => $assetId, 'referenceNumber' => $asset['asset_code'], 'narration' => "Disposal of {$asset['asset_code']}", 'status' => 'POSTED', 'lines' => $lines], $actor);
                 $pdo->prepare('UPDATE `solar_acc_fixed_assets` SET `status`=?,`book_value`=0,`disposal_date`=?,`disposal_proceeds`=?,`disposal_gain_loss`=?,`disposal_journal_id`=? WHERE `id`=?')->execute(['DISPOSED', $dDate, $proceeds, $gl, $jeId, $assetId]);
+                accLogAuditPhp($pdo, $actor, 'ASSETS', 'DISPOSE_ASSET', $assetId, $asset['asset_code'], "Disposed {$asset['asset_code']} for {$proceeds}");
                 $pdo->commit();
-                echo json_encode(['success' => true, 'data' => ['assetId' => $assetId, 'disposalGainLoss' => $gl, 'disposalJournalId' => $jeId]]);
+                echo json_encode(['success' => true, 'data' => ['assetId' => $assetId, 'disposalProceeds' => $proceeds, 'disposalGainLoss' => $gl, 'disposalJournalId' => $jeId]]);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;

@@ -1469,6 +1469,23 @@ class ApiClient {
     return data.data;
   }
 
+  async updateCustomerReceipt(id: string, payload: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/accounting/customer-receipts/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await this.parseJsonResponse(res, 'Failed to update customer receipt');
+    return data.data;
+  }
+
+  async deleteCustomerReceipt(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/customer-receipts/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete customer receipt');
+  }
+
   async saveVendorBill(payload: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/accounting/vendor-bills`, {
       method: 'POST',
@@ -1496,6 +1513,13 @@ class ApiClient {
     return data.data;
   }
 
+  async deleteVendorPayment(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/vendor-payments/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to reverse vendor payment');
+  }
+
   async saveBankAccount(payload: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/accounting/bank-accounts`, {
       method: 'POST',
@@ -1504,6 +1528,13 @@ class ApiClient {
     });
     const data = await this.parseJsonResponse(res, 'Failed to save cash/bank account');
     return data.data;
+  }
+
+  async deleteBankAccount(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-accounts/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete bank/cash account');
   }
 
   async recordBankTransfer(payload: any): Promise<any> {
@@ -1516,6 +1547,13 @@ class ApiClient {
     return data.data;
   }
 
+  async deleteBankTransfer(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-transfers/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to reverse fund transfer');
+  }
+
   async saveBankReconciliation(payload: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/accounting/bank-reconciliations`, {
       method: 'POST',
@@ -1526,6 +1564,13 @@ class ApiClient {
     return data.data;
   }
 
+  async deleteBankReconciliation(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/bank-reconciliations/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete bank reconciliation draft');
+  }
+
   async saveAccountingExpense(payload: any): Promise<any> {
     const res = await this.request(`${this.baseUrl}/accounting/expenses`, {
       method: 'POST',
@@ -1534,6 +1579,13 @@ class ApiClient {
     });
     const data = await this.parseJsonResponse(res, 'Failed to submit expense');
     return data.data;
+  }
+
+  async deleteAccountingExpense(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/expenses/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete expense');
   }
 
   async approveAccountingExpense(id: string, decision: 'APPROVED' | 'REJECTED', reason?: string): Promise<any> {
@@ -1601,6 +1653,13 @@ class ApiClient {
     });
     const data = await this.parseJsonResponse(res, 'Failed to save fixed asset');
     return data.data;
+  }
+
+  async deleteFixedAsset(id: string): Promise<void> {
+    const res = await this.request(`${this.baseUrl}/accounting/assets/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    await this.parseJsonResponse(res, 'Failed to delete fixed asset');
   }
 
   async runAssetDepreciation(id: string, payload: { runDate: string; months?: number; periodLabel?: string; customAmount?: number }): Promise<any> {

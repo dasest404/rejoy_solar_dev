@@ -2875,6 +2875,26 @@ apiRouter.post('/accounting/customer-receipts', requireFinanceManager, async (re
   }
 });
 
+apiRouter.put('/accounting/customer-receipts/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    const result = await accountingService.recordCustomerReceipt(pool, { ...(req.body || {}), id: req.params.id }, (req as any).user);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to update customer receipt');
+  }
+});
+
+apiRouter.delete('/accounting/customer-receipts/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteCustomerReceipt(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Customer receipt deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete customer receipt');
+  }
+});
+
 // Vendor Bills & Payments
 apiRouter.post('/accounting/vendor-bills', requireFinanceManager, async (req: Request, res: Response) => {
   try {
@@ -2890,7 +2910,7 @@ apiRouter.delete('/accounting/vendor-bills/:id', requireFinanceManager, async (r
   try {
     const pool = getRequiredPool();
     await accountingService.deleteVendorBill(pool, req.params.id, (req as any).user);
-    res.json({ success: true, message: 'Draft vendor bill deleted.' });
+    res.json({ success: true, message: 'Unpaid vendor bill deleted.' });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to delete vendor bill');
   }
@@ -2906,6 +2926,16 @@ apiRouter.post('/accounting/vendor-payments', requireFinanceManager, async (req:
   }
 });
 
+apiRouter.delete('/accounting/vendor-payments/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteVendorPayment(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Vendor payment reversed and deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete vendor payment');
+  }
+});
+
 // Cash & Bank
 apiRouter.post('/accounting/bank-accounts', requireFinanceManager, async (req: Request, res: Response) => {
   try {
@@ -2914,6 +2944,16 @@ apiRouter.post('/accounting/bank-accounts', requireFinanceManager, async (req: R
     res.json({ success: true, data: result });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to save bank account');
+  }
+});
+
+apiRouter.delete('/accounting/bank-accounts/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteBankAccount(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Cash/Bank register deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete cash/bank register');
   }
 });
 
@@ -2927,6 +2967,16 @@ apiRouter.post('/accounting/bank-transfers', requireFinanceManager, async (req: 
   }
 });
 
+apiRouter.delete('/accounting/bank-transfers/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteBankTransfer(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Contra transfer reversed and deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete contra transfer');
+  }
+});
+
 apiRouter.post('/accounting/bank-reconciliations', requireFinanceManager, async (req: Request, res: Response) => {
   try {
     const pool = getRequiredPool();
@@ -2934,6 +2984,16 @@ apiRouter.post('/accounting/bank-reconciliations', requireFinanceManager, async 
     res.json({ success: true, data: result });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to save bank reconciliation');
+  }
+});
+
+apiRouter.delete('/accounting/bank-reconciliations/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteBankReconciliation(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Draft bank reconciliation deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete bank reconciliation');
   }
 });
 
@@ -2945,6 +3005,16 @@ apiRouter.post('/accounting/expenses', requireFinanceViewer, async (req: Request
     res.status(201).json({ success: true, data: result });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to submit expense');
+  }
+});
+
+apiRouter.delete('/accounting/expenses/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteExpense(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Expense deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete expense');
   }
 });
 
@@ -3022,6 +3092,16 @@ apiRouter.post('/accounting/assets', requireFinanceManager, async (req: Request,
   }
 });
 
+apiRouter.delete('/accounting/assets/:id', requireFinanceManager, async (req: Request, res: Response) => {
+  try {
+    const pool = getRequiredPool();
+    await accountingService.deleteFixedAsset(pool, req.params.id, (req as any).user);
+    res.json({ success: true, message: 'Fixed asset deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete fixed asset');
+  }
+});
+
 apiRouter.post('/accounting/assets/:id/depreciate', requireFinanceManager, async (req: Request, res: Response) => {
   try {
     const pool = getRequiredPool();
@@ -3043,7 +3123,7 @@ apiRouter.post('/accounting/assets/:id/dispose', requireFinanceManager, async (r
 });
 
 // Settings & ERP Sync
-apiRouter.put('/accounting/settings', requireFinanceManager, async (req: Request, res: Response) => {
+const handleUpdateAccountingSettings = async (req: Request, res: Response) => {
   try {
     const pool = getRequiredPool();
     const result = await accountingService.updateSettings(pool, req.body || {}, (req as any).user);
@@ -3051,7 +3131,9 @@ apiRouter.put('/accounting/settings', requireFinanceManager, async (req: Request
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update finance settings');
   }
-});
+};
+apiRouter.put('/accounting/settings', requireFinanceManager, handleUpdateAccountingSettings);
+apiRouter.post('/accounting/settings', requireFinanceManager, handleUpdateAccountingSettings);
 
 apiRouter.post('/accounting/sync-erp-vouchers', requireFinanceManager, async (req: Request, res: Response) => {
   try {
@@ -3062,4 +3144,5 @@ apiRouter.post('/accounting/sync-erp-vouchers', requireFinanceManager, async (re
     sendApiError(res, err, 'Failed to sync ERP vouchers into ledger');
   }
 });
+
 
