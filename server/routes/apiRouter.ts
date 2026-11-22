@@ -595,7 +595,7 @@ apiRouter.post(['/auth/login', '/auth/login/'], async (req: Request, res: Respon
           userAgent: req.headers['user-agent']
         });
       } catch (authErr: any) {
-        if (authErr?.message?.includes('disabled')) {
+        if (String(authErr?.message || '').toLowerCase().includes('disabled')) {
           res.status(403).json({ success: false, message: authErr.message });
           return;
         }
@@ -605,15 +605,29 @@ apiRouter.post(['/auth/login', '/auth/login/'], async (req: Request, res: Respon
 
     // Fallback authentication via dbManager if needed
     if (!authResult) {
-      const legacyUser = await dbManager.authenticateUser(cleanEmail, cleanPass);
+      let legacyUser: any = null;
+      try {
+        legacyUser = await dbManager.authenticateUser(cleanEmail, cleanPass);
+      } catch (legacyErr: any) {
+        if (String(legacyErr?.message || '').toLowerCase().includes('disabled')) {
+          res.status(403).json({ success: false, message: legacyErr.message });
+          return;
+        }
+        throw legacyErr;
+      }
       if (legacyUser) {
+        const upperRole = String(legacyUser.role || '').trim().toUpperCase();
+        const derivedAccountType =
+          upperRole === 'CUSTOMER'
+            ? 'CUSTOMER'
+            : (upperRole === 'ADMIN' || upperRole === 'SUPER ADMIN' ? 'ADMIN' : 'EMPLOYEE');
         let sessToken = '';
         if (pool) {
           sessToken = await authService.createSession(pool, {
             userId: legacyUser.id,
             email: legacyUser.email,
             role: legacyUser.role || 'Admin',
-            accountType: legacyUser.role === 'Customer' ? 'CUSTOMER' : 'ADMIN',
+            accountType: derivedAccountType,
             linkedEntityId: legacyUser.customerId || legacyUser.employeeId || legacyUser.id,
             ipAddress: req.ip,
             userAgent: req.headers['user-agent']
@@ -743,8 +757,8 @@ apiRouter.post(['/auth/change-password', '/auth/change-password/'], async (req: 
   }
 });
 
-// Password Reset Endpoint (/api/auth/reset-password)
-apiRouter.post(['/auth/reset-password', '/auth/reset-password/'], async (req: Request, res: Response) => {
+// Password Reset Endpoint (/api/auth/reset-password - Admin / Super Admin only)
+apiRouter.post(['/auth/reset-password', '/auth/reset-password/'], requireRole(['Admin', 'Super Admin']), async (req: Request, res: Response) => {
   try {
     const { email, newPassword } = req.body || {};
     if (!email) {

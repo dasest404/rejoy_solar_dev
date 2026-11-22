@@ -224,7 +224,7 @@ class ApiClient {
 
   // --- Auth & Customer Portal ---
 
-  async login(email: string, pass: string): Promise<any> {
+  async login(email: string, pass: string): Promise<{ success: boolean; user?: any; token?: string; message?: string; status?: number }> {
     try {
       let res = await this.request(`${this.baseUrl}/auth/login`, {
         method: 'POST',
@@ -242,13 +242,29 @@ class ApiClient {
           });
         } catch {}
       }
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        const msg =
+          res.status === 404
+            ? `Authentication API endpoint not found (HTTP 404). Please verify backend routing for ${this.baseUrl}/auth/login.`
+            : `Authentication server returned HTTP ${res.status} (${res.statusText || 'Non-JSON response'}).`;
+        return { success: false, message: msg, status: res.status };
+      }
       if (res.ok && data.success && data.token) {
         this.setToken(data.token);
       }
+      if (!res.ok || !data.success) {
+        return {
+          success: false,
+          message: data.message || data.error || `Authentication failed (HTTP ${res.status}).`,
+          status: res.status
+        };
+      }
       return data;
     } catch (e: any) {
-      return { success: false, message: e.message };
+      return { success: false, message: e?.message || 'Unable to reach authentication server.' };
     }
   }
 

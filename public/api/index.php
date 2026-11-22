@@ -10,13 +10,47 @@
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
-// Helper: HTTPS detection for Hostinger / LiteSpeed / Reverse Proxies
+// PHP < 8.0 compatibility polyfills (prevents HTTP 500 on PHP 7.4 Hostinger environments)
+if (!function_exists('str_starts_with')) {
+    function str_starts_with($haystack, $needle) {
+        $haystack = (string)$haystack;
+        $needle = (string)$needle;
+        return $needle === '' || strncmp($haystack, $needle, strlen($needle)) === 0;
+    }
+}
+if (!function_exists('str_contains')) {
+    function str_contains($haystack, $needle) {
+        $haystack = (string)$haystack;
+        $needle = (string)$needle;
+        return $needle === '' || strpos($haystack, $needle) !== false;
+    }
+}
+if (!function_exists('str_ends_with')) {
+    function str_ends_with($haystack, $needle) {
+        $haystack = (string)$haystack;
+        $needle = (string)$needle;
+        if ($needle === '') return true;
+        $len = strlen($needle);
+        return strlen($haystack) >= $len && substr($haystack, -$len) === $needle;
+    }
+}
+
+// Helper: HTTPS detection for Hostinger / LiteSpeed / Cloudflare / Reverse Proxies
 function isRequestHttps() {
-    if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') return true;
-    if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') return true;
-    if (isset($_SERVER['HTTP_X_FORWARDED_SSL']) && strtolower($_SERVER['HTTP_X_FORWARDED_SSL']) === 'on') return true;
-    if (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443) return true;
-    if (!empty($_SERVER['HTTP_HOST']) && strpos($_SERVER['HTTP_HOST'], 'adduglobal.com') !== false) return true;
+    if (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') return true;
+    $xfProto = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+    if (strpos($xfProto, 'https') !== false) return true;
+    if (strtolower((string)($_SERVER['HTTP_X_FORWARDED_SSL'] ?? '')) === 'on') return true;
+    if (strtolower((string)($_SERVER['HTTP_X_FORWARDED_SCHEME'] ?? '')) === 'https') return true;
+    $reqScheme = strtolower((string)($_SERVER['HTTP_REQUEST_SCHEME'] ?? $_SERVER['REQUEST_SCHEME'] ?? ''));
+    if ($reqScheme === 'https') return true;
+    $cfVisitor = strtolower((string)($_SERVER['HTTP_CF_VISITOR'] ?? ''));
+    if (strpos($cfVisitor, '"https"') !== false) return true;
+    if (isset($_SERVER['SERVER_PORT']) && intval($_SERVER['SERVER_PORT']) === 443) return true;
+    $origin = strtolower((string)($_SERVER['HTTP_ORIGIN'] ?? ''));
+    if (strpos($origin, 'https://') === 0) return true;
+    $referer = strtolower((string)($_SERVER['HTTP_REFERER'] ?? ''));
+    if (strpos($referer, 'https://') === 0) return true;
     return false;
 }
 
@@ -24,12 +58,12 @@ function isRequestHttps() {
 header('Content-Type: application/json; charset=UTF-8');
 header('X-Content-Type-Options: nosniff');
 
-$reqOrigin = $_SERVER['HTTP_ORIGIN'] ?? '';
+$reqOrigin = str_replace(["\r", "\n"], '', (string)($_SERVER['HTTP_ORIGIN'] ?? ''));
 if (!empty($reqOrigin)) {
     header("Access-Control-Allow-Origin: {$reqOrigin}");
     header('Access-Control-Allow-Credentials: true');
 } else {
-    $serverHost = $_SERVER['HTTP_HOST'] ?? 'test.adduglobal.com';
+    $serverHost = str_replace(["\r", "\n"], '', (string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
     $proto = isRequestHttps() ? 'https' : 'http';
     header("Access-Control-Allow-Origin: {$proto}://{$serverHost}");
     header('Access-Control-Allow-Credentials: true');
@@ -531,7 +565,7 @@ function ensureRequiredTables($pdo) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
-        // Seed initial admin accounts into solar_auth_credentials if table is empty
+        // Seed initial accounts into solar_auth_credentials if table is empty
         $credCount = $pdo->query("SELECT COUNT(*) FROM `solar_auth_credentials`")->fetchColumn();
         if ($credCount == 0) {
             // Seed from solar_users
@@ -540,26 +574,50 @@ function ensureRequiredTables($pdo) {
                 if (empty($u['email'])) continue;
                 $pHash = $u['password'] ?? '';
                 if (empty($pHash)) continue;
-                if (!str_starts_with($pHash, '$2')) {
+                if (!str_starts_with((string)$pHash, '$2')) {
                     $pHash = password_hash($pHash, PASSWORD_BCRYPT);
                 }
-                $acctType = ($u['role'] === 'Customer') ? 'CUSTOMER' : (in_array($u['role'], ['Admin', 'Super Admin']) ? 'ADMIN' : 'EMPLOYEE');
+                $uRole = $u['role'] ?: 'Admin';
+                $acctType = (strcasecmp($uRole, 'Customer') === 0) ? 'CUSTOMER' : (in_array(strtoupper(trim($uRole)), ['ADMIN', 'SUPER ADMIN'], true) ? 'ADMIN' : 'EMPLOYEE');
+                $uStatus = in_array(strtoupper((string)($u['status'] ?? 'ACTIVE')), ['DISABLED', 'INACTIVE'], true) ? 'DISABLED' : 'ACTIVE';
                 $ins = $pdo->prepare("
                     INSERT INTO `solar_auth_credentials` (`id`, `user_id`, `email`, `password_hash`, `role`, `account_type`, `linked_entity_id`, `status`)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE `password_hash` = VALUES(`password_hash`), `role` = VALUES(`role`)
+                    ON DUPLICATE KEY UPDATE `password_hash` = VALUES(`password_hash`), `role` = VALUES(`role`), `account_type` = VALUES(`account_type`), `status` = VALUES(`status`)
                 ");
                 $ins->execute([
                     'cred-' . $u['id'],
                     $u['id'],
                     strtolower(trim($u['email'])),
                     $pHash,
-                    $u['role'] ?: 'Admin',
+                    $uRole,
                     $acctType,
                     $u['employee_id'] ?? $u['id'],
-                    $u['status'] ?? 'ACTIVE'
+                    $uStatus
                 ]);
             }
+
+            // Seed customers with passwords into solar_auth_credentials (if not colliding on email)
+            try {
+                $cStmt = $pdo->query("SELECT * FROM `solar_customers`");
+                while ($c = $cStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $cEmail = strtolower(trim((string)($c['email'] ?? '')));
+                    $cPass = (string)($c['password'] ?? '');
+                    if (empty($cEmail) || empty($cPass)) continue;
+                    if (!str_starts_with($cPass, '$2')) {
+                        $cPass = password_hash($cPass, PASSWORD_BCRYPT);
+                    }
+                    $rawCustId = preg_replace('/^usr-/', '', (string)$c['id']);
+                    $cStatus = in_array(strtoupper((string)($c['status'] ?? 'ACTIVE')), ['DISABLED', 'INACTIVE'], true) ? 'DISABLED' : 'ACTIVE';
+                    try {
+                        $insC = $pdo->prepare("
+                            INSERT IGNORE INTO `solar_auth_credentials` (`id`, `user_id`, `email`, `password_hash`, `role`, `account_type`, `linked_entity_id`, `status`)
+                            VALUES (?, ?, ?, ?, 'Customer', 'CUSTOMER', ?, ?)
+                        ");
+                        $insC->execute(['cred-cust-' . $rawCustId, 'usr-' . $rawCustId, $cEmail, $cPass, $rawCustId, $cStatus]);
+                    } catch (Exception $e) {}
+                }
+            } catch (Exception $e) {}
         }
     } catch (Exception $e) {
         error_log('Notice ensuring auth tables: ' . $e->getMessage());
@@ -871,13 +929,13 @@ function createDbSession($pdo, $userId, $email, $role, $accountType, $linkedEnti
     $token = bin2hex(random_bytes(32));
     $ip = $_SERVER['REMOTE_ADDR'] ?? null;
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? null;
-    $expiresAt = date('Y-m-d H:i:s', time() + 14 * 24 * 3600);
 
+    // Use MySQL's authoritative NOW() clock to eliminate PHP <-> MySQL timezone drift
     $stmt = $pdo->prepare("
         INSERT INTO `solar_auth_sessions` (
             `id`, `user_id`, `email`, `role`, `account_type`,
             `linked_entity_id`, `ip_address`, `user_agent`, `expires_at`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 14 DAY))
     ");
     $stmt->execute([
         $token,
@@ -887,8 +945,7 @@ function createDbSession($pdo, $userId, $email, $role, $accountType, $linkedEnti
         $accountType,
         $linkedEntityId,
         $ip,
-        $ua,
-        $expiresAt
+        $ua
     ]);
 
     return $token;
@@ -899,7 +956,7 @@ function validateDbSession($pdo, $sessionToken) {
     if (!$pdo || empty($sessionToken)) return null;
 
     try {
-        $stmt = $pdo->prepare("SELECT * FROM `solar_auth_sessions` WHERE `id` = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT *, UNIX_TIMESTAMP(`expires_at`) AS `expires_unix`, UNIX_TIMESTAMP(NOW()) AS `now_unix` FROM `solar_auth_sessions` WHERE `id` = ? LIMIT 1");
         $stmt->execute([trim($sessionToken)]);
         $sess = $stmt->fetch(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
@@ -910,8 +967,9 @@ function validateDbSession($pdo, $sessionToken) {
         return null;
     }
 
-    $expiresAt = strtotime($sess['expires_at'] ?? '');
-    if ($expiresAt && time() > $expiresAt) {
+    $expiresUnix = intval($sess['expires_unix'] ?? 0);
+    $nowUnix = intval($sess['now_unix'] ?? 0);
+    if ($expiresUnix > 0 && $nowUnix > 0 && $nowUnix > $expiresUnix) {
         try {
             $del = $pdo->prepare("DELETE FROM `solar_auth_sessions` WHERE `id` = ?");
             $del->execute([$sessionToken]);
@@ -927,91 +985,115 @@ function validateDbSession($pdo, $sessionToken) {
 
     $userId = $sess['user_id'];
     $email = strtolower(trim($sess['email']));
+    $accountType = strtoupper(trim((string)($sess['account_type'] ?? '')));
 
-    // 1. Resolve via solar_employees (and fallback to solar_employee)
-    try {
-        $emp = null;
+    $resolveCustomer = function () use ($pdo, $sess, $userId, $email) {
+        $rawId = preg_replace('/^usr-/', '', (string)($sess['linked_entity_id'] ?: $userId));
         try {
-            $stmtEmp = $pdo->prepare("SELECT * FROM `solar_employees` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1");
-            $stmtEmp->execute([$userId, $email]);
-            $emp = $stmtEmp->fetch(PDO::FETCH_ASSOC);
+            $stmtCust = $pdo->prepare("SELECT * FROM `solar_customers` WHERE `id` = ? OR `id` = ? OR LOWER(`email`) = ? LIMIT 1");
+            $stmtCust->execute([$rawId, $userId, $email]);
+            $cust = $stmtCust->fetch(PDO::FETCH_ASSOC);
+            if ($cust) {
+                $cleanCustId = preg_replace('/^usr-/', '', (string)$cust['id']);
+                return [
+                    'id' => 'usr-' . $cleanCustId,
+                    'userId' => 'usr-' . $cleanCustId,
+                    'customerId' => $cust['id'],
+                    'employeeId' => 'CUST-' . $cust['id'],
+                    'name' => $cust['name'] ?? 'Customer',
+                    'email' => $cust['email'],
+                    'role' => 'Customer',
+                    'phone' => $cust['phone'] ?? '',
+                    'department' => 'Customer Portal',
+                    'designation' => 'Customer',
+                    'isFieldWorker' => false,
+                    'accountType' => 'CUSTOMER',
+                    'status' => $cust['status'] ?? 'ACTIVE'
+                ];
+            }
         } catch (Exception $e) {}
+        return null;
+    };
 
-        if (!$emp) {
+    $resolveEmployee = function () use ($pdo, $sess, $userId, $email) {
+        try {
+            $emp = null;
+            $lookupId = $sess['linked_entity_id'] ?: $userId;
             try {
-                $stmtEmpOld = $pdo->prepare("SELECT * FROM `solar_employee` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1");
-                $stmtEmpOld->execute([$userId, $email]);
-                $emp = $stmtEmpOld->fetch(PDO::FETCH_ASSOC);
+                $stmtEmp = $pdo->prepare("SELECT * FROM `solar_employees` WHERE `id` = ? OR `id` = ? OR `auth_uid` = ? OR LOWER(`email`) = ? LIMIT 1");
+                $stmtEmp->execute([$userId, $lookupId, $userId, $email]);
+                $emp = $stmtEmp->fetch(PDO::FETCH_ASSOC);
             } catch (Exception $e) {}
-        }
 
-        if ($emp) {
-            $isFw = (bool)($emp['is_field_worker'] ?? false) || in_array($emp['system_role'] ?? '', [
-                'Site Survey Engineer', 'Site Inspector', 'Civil Team', 'Structure Team', 'Installation Team', 'Electrical Team', 'Technician'
-            ]);
-            return [
-                'id' => $emp['id'],
-                'userId' => $emp['id'],
-                'employeeId' => $emp['employee_code'] ?? $emp['id'],
-                'name' => $emp['name'] ?? 'Solar Employee',
-                'email' => $emp['email'],
-                'role' => $sess['role'] ?: ($emp['system_role'] ?? $emp['assigned_role'] ?? 'Staff'),
-                'phone' => $emp['phone'] ?? '',
-                'department' => $emp['department'] ?? 'Operations',
-                'designation' => $emp['designation'] ?? $sess['role'],
-                'isFieldWorker' => $isFw,
-                'accountType' => $sess['account_type'],
-                'status' => $emp['status'] ?? 'ACTIVE'
-            ];
-        }
-    } catch (Exception $e) {}
+            if (!$emp) {
+                try {
+                    $stmtEmpOld = $pdo->prepare("SELECT * FROM `solar_employee` WHERE `id` = ? OR `id` = ? OR `auth_uid` = ? OR LOWER(`email`) = ? LIMIT 1");
+                    $stmtEmpOld->execute([$userId, $lookupId, $userId, $email]);
+                    $emp = $stmtEmpOld->fetch(PDO::FETCH_ASSOC);
+                } catch (Exception $e) {}
+            }
 
-    // 2. Resolve via solar_users
-    try {
-        $stmtUser = $pdo->prepare("SELECT * FROM `solar_users` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1");
-        $stmtUser->execute([$userId, $email]);
-        $u = $stmtUser->fetch(PDO::FETCH_ASSOC);
-        if ($u) {
-            return [
-                'id' => $u['id'],
-                'userId' => $u['id'],
-                'employeeId' => $u['employee_id'] ?? $u['id'],
-                'name' => $u['name'] ?? 'User',
-                'email' => $u['email'],
-                'role' => $sess['role'] ?: ($u['role'] ?? 'Admin'),
-                'phone' => $u['phone'] ?? '',
-                'department' => $u['department'] ?? 'Administration',
-                'designation' => $u['designation'] ?? 'Staff',
-                'isFieldWorker' => (bool)($u['is_field_worker'] ?? false),
-                'accountType' => $sess['account_type'],
-                'status' => $u['status'] ?? 'ACTIVE'
-            ];
-        }
-    } catch (Exception $e) {}
+            if ($emp) {
+                $isDisabledEmp = (isset($emp['login_enabled']) && intval($emp['login_enabled']) === 0)
+                    || in_array(strtoupper((string)($emp['status'] ?? 'ACTIVE')), ['DISABLED', 'INACTIVE', 'TERMINATED'], true)
+                    || strtoupper((string)($emp['account_status'] ?? 'ACTIVE')) === 'DISABLED';
+                $isFw = (bool)($emp['is_field_worker'] ?? false) || in_array($emp['system_role'] ?? '', [
+                    'Site Survey Engineer', 'Site Inspector', 'Civil Team', 'Structure Team', 'Installation Team', 'Electrical Team', 'Technician'
+                ]);
+                return [
+                    'id' => $emp['id'],
+                    'userId' => $emp['auth_uid'] ?? $emp['id'],
+                    'employeeId' => $emp['employee_code'] ?? $emp['id'],
+                    'name' => $emp['name'] ?? 'Solar Employee',
+                    'email' => $emp['email'],
+                    'role' => $sess['role'] ?: ($emp['system_role'] ?? $emp['assigned_role'] ?? 'Staff'),
+                    'phone' => $emp['phone'] ?? '',
+                    'department' => $emp['department'] ?? 'Operations',
+                    'designation' => $emp['designation'] ?? $sess['role'],
+                    'isFieldWorker' => $isFw,
+                    'accountType' => $sess['account_type'],
+                    'status' => $isDisabledEmp ? 'DISABLED' : ($emp['status'] ?? 'ACTIVE')
+                ];
+            }
+        } catch (Exception $e) {}
+        return null;
+    };
 
-    // 3. Resolve via solar_customers
-    try {
-        $stmtCust = $pdo->prepare("SELECT * FROM `solar_customers` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1");
-        $stmtCust->execute([$sess['linked_entity_id'] ?: $userId, $email]);
-        $cust = $stmtCust->fetch(PDO::FETCH_ASSOC);
-        if ($cust) {
-            return [
-                'id' => 'usr-' . $cust['id'],
-                'userId' => 'usr-' . $cust['id'],
-                'customerId' => $cust['id'],
-                'employeeId' => 'CUST-' . $cust['id'],
-                'name' => $cust['name'] ?? 'Customer',
-                'email' => $cust['email'],
-                'role' => 'Customer',
-                'phone' => $cust['phone'] ?? '',
-                'department' => 'Customer Portal',
-                'designation' => 'Customer',
-                'isFieldWorker' => false,
-                'accountType' => 'CUSTOMER',
-                'status' => $cust['status'] ?? 'ACTIVE'
-            ];
-        }
-    } catch (Exception $e) {}
+    $resolveUser = function () use ($pdo, $sess, $userId, $email) {
+        try {
+            $stmtUser = $pdo->prepare("SELECT * FROM `solar_users` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1");
+            $stmtUser->execute([$userId, $email]);
+            $u = $stmtUser->fetch(PDO::FETCH_ASSOC);
+            if ($u) {
+                return [
+                    'id' => $u['id'],
+                    'userId' => $u['id'],
+                    'employeeId' => $u['employee_id'] ?? $u['id'],
+                    'name' => $u['name'] ?? 'User',
+                    'email' => $u['email'],
+                    'role' => $sess['role'] ?: ($u['role'] ?? 'Admin'),
+                    'phone' => $u['phone'] ?? '',
+                    'department' => $u['department'] ?? 'Administration',
+                    'designation' => $u['designation'] ?? 'Staff',
+                    'isFieldWorker' => (bool)($u['is_field_worker'] ?? false),
+                    'accountType' => $sess['account_type'],
+                    'status' => $u['status'] ?? 'ACTIVE'
+                ];
+            }
+        } catch (Exception $e) {}
+        return null;
+    };
+
+    if ($accountType === 'CUSTOMER') {
+        if ($profile = $resolveCustomer()) return $profile;
+    } elseif ($accountType === 'ADMIN') {
+        if ($profile = $resolveUser()) return $profile;
+        if ($profile = $resolveEmployee()) return $profile;
+    } else {
+        if ($profile = $resolveEmployee()) return $profile;
+        if ($profile = $resolveUser()) return $profile;
+        if ($profile = $resolveCustomer()) return $profile;
+    }
 
     // Fallback based on session
     return [
@@ -1130,12 +1212,15 @@ function requireAdminOrHrUserPhp($pdo) {
     return $user;
 }
 
-// 7. Normalize Path & Method
+// 7. Normalize Path & Method (Guard against Apache/LiteSpeed PATH_INFO='/' overwriting REQUEST_URI)
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
 $parsedPath = parse_url($requestUri, PHP_URL_PATH) ?: '/';
-if (!empty($_SERVER['PATH_INFO'])) {
-    $parsedPath = $_SERVER['PATH_INFO'];
+$pathInfo = isset($_SERVER['PATH_INFO']) ? trim((string)$_SERVER['PATH_INFO']) : '';
+if ($pathInfo !== '' && $pathInfo !== '/' && strpos($pathInfo, '/index.php') === false) {
+    if ($parsedPath === '/' || preg_match('#(?:/api)?/index\.php/?$#i', $parsedPath)) {
+        $parsedPath = $pathInfo;
+    }
 }
 
 $cleanPath = rtrim($parsedPath, '/');
@@ -1194,6 +1279,7 @@ function saveCustomerToDb($pdo, $item) {
         ? ($item['activeProjectId'] ?? $item['active_project_id'])
         : ($ex['active_project_id'] ?? null);
 
+    $hasExplicitCustomerPass = !empty($rawCustomerPass);
     $stmt = $pdo->prepare("
         INSERT INTO `solar_customers` (
             `id`, `customer_code`, `name`, `company_name`, `customer_type`,
@@ -1207,6 +1293,7 @@ function saveCustomerToDb($pdo, $item) {
             `customer_type` = VALUES(`customer_type`),
             `phone` = VALUES(`phone`),
             `email` = VALUES(`email`),
+            " . ($hasExplicitCustomerPass ? "`password` = VALUES(`password`)," : "") . "
             `site_address` = VALUES(`site_address`),
             `city` = VALUES(`city`),
             `state` = VALUES(`state`),
@@ -1223,6 +1310,12 @@ function saveCustomerToDb($pdo, $item) {
         $pincode, $gstNumber, $electricityConsumerNo, $sanctionedLoadKw,
         $status, $activeProjectId
     ]);
+    if (!empty($email)) {
+        $rawCustId = preg_replace('/^usr-/', '', (string)$item['id']);
+        $credStatus = in_array(strtoupper((string)$status), ['DISABLED', 'INACTIVE'], true) ? 'DISABLED' : 'ACTIVE';
+        $passToSync = ($hasExplicitCustomerPass || !$ex) ? $password : null;
+        syncAuthCredentialPhp($pdo, 'usr-' . $rawCustId, $email, $passToSync, 'Customer', 'CUSTOMER', $rawCustId, $credStatus);
+    }
     return array_merge($item, [
         'id' => $item['id'],
         'customerCode' => $customerCode,
@@ -5603,6 +5696,7 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
     $authenticatedUser = null;
     $accountType = 'ADMIN';
     $linkedEntityId = null;
+    $disabledAccountMsg = null;
 
     // 1. Authoritative check via solar_auth_credentials table
     try {
@@ -5611,19 +5705,20 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
         $cred = $stmtCred->fetch(PDO::FETCH_ASSOC);
 
         if ($cred) {
-            if ($cred['status'] === 'DISABLED' || $cred['status'] === 'INACTIVE') {
+            $credStatusUpper = strtoupper(trim((string)($cred['status'] ?? 'ACTIVE')));
+            if (in_array($credStatusUpper, ['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'], true)) {
                 http_response_code(403);
                 echo json_encode(['success' => false, 'message' => 'Account has been disabled. Please contact system administrator.']);
                 exit;
             }
 
-            $storedHash = $cred['password_hash'] ?? '';
-            $credMatches = password_verify($password, $storedHash) || ($password === $storedHash);
+            $storedHash = (string)($cred['password_hash'] ?? '');
+            $credMatches = !empty($storedHash) && (password_verify($password, $storedHash) || hash_equals($storedHash, $password));
 
             if ($credMatches) {
                 // If stored password was plaintext, securely upgrade to bcrypt hash
                 if (!str_starts_with($storedHash, '$2')) {
-                    $newHash = password_hash($password, PASSWORD_BCRYPT);
+                    $newHash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
                     $up = $pdo->prepare('UPDATE `solar_auth_credentials` SET `password_hash` = ?, `password_changed_at` = NOW() WHERE `id` = ?');
                     $up->execute([$newHash, $cred['id']]);
                 }
@@ -5634,19 +5729,25 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
                     $upLogin->execute([$cred['id']]);
                 } catch (Exception $e) {}
 
-                $accountType = $cred['account_type'];
+                $accountType = strtoupper(trim((string)($cred['account_type'] ?? 'ADMIN')));
                 $linkedEntityId = $cred['linked_entity_id'] ?: $cred['user_id'];
 
-                // Build authenticated user profile
                 if ($accountType === 'CUSTOMER') {
-                    $stmtC = $pdo->prepare('SELECT * FROM `solar_customers` WHERE `id` = ? OR LOWER(email) = ? LIMIT 1');
-                    $stmtC->execute([$linkedEntityId, $email]);
+                    $rawCustLookup = preg_replace('/^usr-/', '', (string)$linkedEntityId);
+                    $stmtC = $pdo->prepare('SELECT * FROM `solar_customers` WHERE `id` = ? OR `id` = ? OR LOWER(email) = ? LIMIT 1');
+                    $stmtC->execute([$rawCustLookup, $linkedEntityId, $email]);
                     $c = $stmtC->fetch(PDO::FETCH_ASSOC);
+                    if ($c && in_array(strtoupper((string)($c['status'] ?? 'ACTIVE')), ['DISABLED', 'INACTIVE'], true)) {
+                        http_response_code(403);
+                        echo json_encode(['success' => false, 'message' => 'Account has been disabled. Please contact system administrator.']);
+                        exit;
+                    }
+                    $resolvedCustId = preg_replace('/^usr-/', '', (string)($c['id'] ?? $cred['user_id']));
                     $authenticatedUser = [
-                        'id' => 'usr-' . ($c['id'] ?? $cred['user_id']),
-                        'userId' => 'usr-' . ($c['id'] ?? $cred['user_id']),
-                        'customerId' => $c['id'] ?? $linkedEntityId,
-                        'employeeId' => 'CUST-' . ($c['id'] ?? $linkedEntityId),
+                        'id' => 'usr-' . $resolvedCustId,
+                        'userId' => 'usr-' . $resolvedCustId,
+                        'customerId' => $c['id'] ?? $resolvedCustId,
+                        'employeeId' => 'CUST-' . ($c['id'] ?? $resolvedCustId),
                         'name' => $c['name'] ?? 'Customer',
                         'email' => $c['email'] ?? $cred['email'],
                         'role' => 'Customer',
@@ -5657,33 +5758,64 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
                         'accountType' => 'CUSTOMER',
                         'status' => $c['status'] ?? 'ACTIVE'
                     ];
+                    $linkedEntityId = $c['id'] ?? $resolvedCustId;
                 } else {
-                    $emp = null;
-                    try {
-                        $stmtE = $pdo->prepare('SELECT * FROM `solar_employees` WHERE `id` = ? OR LOWER(email) = ? LIMIT 1');
-                        $stmtE->execute([$linkedEntityId, $email]);
-                        $emp = $stmtE->fetch(PDO::FETCH_ASSOC);
-                    } catch (Exception $e) {}
+                    $lookupUser = function () use ($pdo, $cred, $email, $accountType) {
+                        $stmtU = $pdo->prepare('SELECT * FROM `solar_users` WHERE `id` = ? OR LOWER(email) = ? LIMIT 1');
+                        $stmtU->execute([$cred['user_id'], $email]);
+                        $u = $stmtU->fetch(PDO::FETCH_ASSOC);
+                        if (!$u) return null;
+                        $uStat = strtoupper(trim((string)($u['status'] ?? 'ACTIVE')));
+                        if (in_array($uStat, ['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'], true)) {
+                            return ['__disabled' => true];
+                        }
+                        return [
+                            'id' => $u['id'],
+                            'userId' => $u['id'],
+                            'employeeId' => $u['employee_id'] ?? $u['id'],
+                            'name' => $u['name'] ?? 'User',
+                            'email' => $u['email'],
+                            'role' => $cred['role'] ?: ($u['role'] ?? 'Admin'),
+                            'phone' => $u['phone'] ?? '',
+                            'department' => $u['department'] ?? 'Administration',
+                            'designation' => $u['designation'] ?? 'Staff',
+                            'isFieldWorker' => (bool)($u['is_field_worker'] ?? false),
+                            'accountType' => $accountType,
+                            'status' => $u['status'] ?? 'ACTIVE'
+                        ];
+                    };
 
-                    if (!$emp) {
+                    $lookupEmployee = function () use ($pdo, $cred, $linkedEntityId, $email, $accountType) {
+                        $emp = null;
                         try {
-                            $stmtEOld = $pdo->prepare('SELECT * FROM `solar_employee` WHERE `id` = ? OR LOWER(email) = ? LIMIT 1');
-                            $stmtEOld->execute([$linkedEntityId, $email]);
-                            $emp = $stmtEOld->fetch(PDO::FETCH_ASSOC);
+                            $stmtE = $pdo->prepare('SELECT * FROM `solar_employees` WHERE `id` = ? OR `id` = ? OR `auth_uid` = ? OR LOWER(email) = ? LIMIT 1');
+                            $stmtE->execute([$linkedEntityId, $cred['user_id'], $cred['user_id'], $email]);
+                            $emp = $stmtE->fetch(PDO::FETCH_ASSOC);
                         } catch (Exception $e) {}
-                    }
-
-                    if ($emp) {
+                        if (!$emp) {
+                            try {
+                                $stmtEOld = $pdo->prepare('SELECT * FROM `solar_employee` WHERE `id` = ? OR `id` = ? OR `auth_uid` = ? OR LOWER(email) = ? LIMIT 1');
+                                $stmtEOld->execute([$linkedEntityId, $cred['user_id'], $cred['user_id'], $email]);
+                                $emp = $stmtEOld->fetch(PDO::FETCH_ASSOC);
+                            } catch (Exception $e) {}
+                        }
+                        if (!$emp) return null;
+                        $eDisabled = (isset($emp['login_enabled']) && intval($emp['login_enabled']) === 0)
+                            || in_array(strtoupper(trim((string)($emp['status'] ?? 'ACTIVE'))), ['DISABLED', 'INACTIVE', 'TERMINATED'], true)
+                            || strtoupper(trim((string)($emp['account_status'] ?? 'ACTIVE'))) === 'DISABLED';
+                        if ($eDisabled) {
+                            return ['__disabled' => true];
+                        }
                         $isFw = (bool)($emp['is_field_worker'] ?? false) || in_array($emp['system_role'] ?? '', [
                             'Site Survey Engineer', 'Site Inspector', 'Civil Team', 'Structure Team', 'Installation Team', 'Electrical Team', 'Technician'
                         ]);
-                        $authenticatedUser = [
+                        return [
                             'id' => $emp['id'],
-                            'userId' => $emp['id'],
+                            'userId' => $emp['auth_uid'] ?? $emp['id'],
                             'employeeId' => $emp['employee_code'] ?? $emp['id'],
                             'name' => $emp['name'] ?? 'Solar Employee',
                             'email' => $emp['email'],
-                            'role' => $cred['role'] ?: ($emp['system_role'] ?? 'Technician'),
+                            'role' => $cred['role'] ?: ($emp['system_role'] ?? $emp['assigned_role'] ?? 'Technician'),
                             'phone' => $emp['phone'] ?? '',
                             'department' => $emp['department'] ?? 'Operations',
                             'designation' => $emp['designation'] ?? $cred['role'],
@@ -5691,27 +5823,19 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
                             'accountType' => $accountType,
                             'status' => $emp['status'] ?? 'ACTIVE'
                         ];
-                    } else {
-                        // Check solar_users
-                        $stmtU = $pdo->prepare('SELECT * FROM `solar_users` WHERE `id` = ? OR LOWER(email) = ? LIMIT 1');
-                        $stmtU->execute([$cred['user_id'], $email]);
-                        $u = $stmtU->fetch(PDO::FETCH_ASSOC);
-                        if ($u) {
-                            $authenticatedUser = [
-                                'id' => $u['id'],
-                                'userId' => $u['id'],
-                                'employeeId' => $u['employee_id'] ?? $u['id'],
-                                'name' => $u['name'] ?? 'User',
-                                'email' => $u['email'],
-                                'role' => $cred['role'] ?: ($u['role'] ?? 'Admin'),
-                                'phone' => $u['phone'] ?? '',
-                                'department' => $u['department'] ?? 'Administration',
-                                'designation' => $u['designation'] ?? 'Staff',
-                                'isFieldWorker' => (bool)($u['is_field_worker'] ?? false),
-                                'accountType' => $accountType,
-                                'status' => $u['status'] ?? 'ACTIVE'
-                            ];
-                        }
+                    };
+
+                    $resolvedProfile = ($accountType === 'ADMIN')
+                        ? ($lookupUser() ?: $lookupEmployee())
+                        : ($lookupEmployee() ?: $lookupUser());
+
+                    if (is_array($resolvedProfile) && !empty($resolvedProfile['__disabled'])) {
+                        http_response_code(403);
+                        echo json_encode(['success' => false, 'message' => 'Account has been disabled. Please contact system administrator.']);
+                        exit;
+                    }
+                    if ($resolvedProfile) {
+                        $authenticatedUser = $resolvedProfile;
                     }
                 }
             }
@@ -5728,37 +5852,44 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($user) {
-                $storedHash = $user['password'] ?? '';
+                $storedHash = (string)($user['password'] ?? '');
                 $matches = false;
 
-                if (password_verify($password, $storedHash)) {
+                if (!empty($storedHash) && password_verify($password, $storedHash)) {
                     $matches = true;
-                } elseif ($password === $storedHash) {
+                } elseif (!empty($storedHash) && hash_equals($storedHash, $password)) {
                     $matches = true;
                     try {
-                        $newHash = password_hash($password, PASSWORD_BCRYPT);
+                        $storedHash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
                         $up = $pdo->prepare('UPDATE `solar_users` SET `password` = ? WHERE `id` = ?');
-                        $up->execute([$newHash, $user['id']]);
+                        $up->execute([$storedHash, $user['id']]);
                     } catch (Exception $e) {}
                 }
 
                 if ($matches) {
-                    $accountType = ($user['role'] === 'Customer') ? 'CUSTOMER' : (in_array($user['role'], ['Admin', 'Super Admin']) ? 'ADMIN' : 'EMPLOYEE');
-                    $authenticatedUser = [
-                        'id' => $user['id'],
-                        'userId' => $user['id'],
-                        'employeeId' => $user['employee_id'] ?? $user['id'],
-                        'name' => $user['name'] ?? 'User',
-                        'email' => $user['email'],
-                        'role' => $user['role'] ?? 'Admin',
-                        'phone' => $user['phone'] ?? '',
-                        'department' => $user['department'] ?? 'Administration',
-                        'designation' => $user['designation'] ?? 'Staff',
-                        'isFieldWorker' => (bool)($user['is_field_worker'] ?? false),
-                        'accountType' => $accountType,
-                        'status' => $user['status'] ?? 'ACTIVE'
-                    ];
-                    $linkedEntityId = $user['employee_id'] ?? $user['id'];
+                    $uStat = strtoupper(trim((string)($user['status'] ?? 'ACTIVE')));
+                    if (in_array($uStat, ['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'], true)) {
+                        $disabledAccountMsg = 'Account has been disabled. Please contact system administrator.';
+                    } else {
+                        $uRole = $user['role'] ?? 'Admin';
+                        $accountType = (strcasecmp($uRole, 'Customer') === 0) ? 'CUSTOMER' : (in_array(strtoupper(trim($uRole)), ['ADMIN', 'SUPER ADMIN'], true) ? 'ADMIN' : 'EMPLOYEE');
+                        $authenticatedUser = [
+                            'id' => $user['id'],
+                            'userId' => $user['id'],
+                            'employeeId' => $user['employee_id'] ?? $user['id'],
+                            'name' => $user['name'] ?? 'User',
+                            'email' => $user['email'],
+                            'role' => $uRole,
+                            'phone' => $user['phone'] ?? '',
+                            'department' => $user['department'] ?? 'Administration',
+                            'designation' => $user['designation'] ?? 'Staff',
+                            'isFieldWorker' => (bool)($user['is_field_worker'] ?? false),
+                            'accountType' => $accountType,
+                            'status' => $user['status'] ?? 'ACTIVE'
+                        ];
+                        $linkedEntityId = $user['employee_id'] ?? $user['id'];
+                        syncAuthCredentialPhp($pdo, $user['id'], $email, $storedHash, $uRole, $accountType, $linkedEntityId, 'ACTIVE');
+                    }
                 }
             }
         } catch (PDOException $e) {
@@ -5767,7 +5898,7 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
     }
 
     // 3. Tertiary fallback via solar_employees table
-    if (!$authenticatedUser) {
+    if (!$authenticatedUser && !$disabledAccountMsg) {
         try {
             $emp = null;
             try {
@@ -5785,64 +5916,94 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
             }
 
             if ($emp) {
-                $ePass = $emp['password'] ?? '';
-                $eMatches = !empty($ePass) && (password_verify($password, $ePass) || hash_equals((string)$ePass, (string)$password));
+                $ePass = (string)($emp['password'] ?? '');
+                $eMatches = !empty($ePass) && (password_verify($password, $ePass) || hash_equals($ePass, $password));
                 if ($eMatches) {
-                    $isFw = (bool)($emp['is_field_worker'] ?? false) || in_array($emp['system_role'] ?? '', [
-                        'Site Survey Engineer', 'Site Inspector', 'Civil Team', 'Structure Team', 'Installation Team', 'Electrical Team', 'Technician'
-                    ]);
-                    $eRole = $emp['system_role'] ?? $emp['assigned_role'] ?? 'Technician';
-                    $accountType = (in_array($eRole, ['Admin', 'Super Admin'])) ? 'ADMIN' : 'EMPLOYEE';
-                    $authenticatedUser = [
-                        'id' => $emp['id'],
-                        'userId' => $emp['id'],
-                        'employeeId' => $emp['employee_code'] ?? $emp['id'],
-                        'name' => $emp['name'] ?? 'Solar Employee',
-                        'email' => $emp['email'],
-                        'role' => $eRole,
-                        'phone' => $emp['phone'] ?? '',
-                        'department' => $emp['department'] ?? 'Operations',
-                        'designation' => $emp['designation'] ?? $eRole,
-                        'isFieldWorker' => $isFw,
-                        'accountType' => $accountType,
-                        'status' => $emp['status'] ?? 'ACTIVE'
-                    ];
-                    $linkedEntityId = $emp['id'];
+                    $eDisabled = (isset($emp['login_enabled']) && intval($emp['login_enabled']) === 0)
+                        || in_array(strtoupper(trim((string)($emp['status'] ?? 'ACTIVE'))), ['DISABLED', 'INACTIVE', 'TERMINATED'], true)
+                        || strtoupper(trim((string)($emp['account_status'] ?? 'ACTIVE'))) === 'DISABLED';
+                    if ($eDisabled) {
+                        $disabledAccountMsg = 'Account has been disabled. Please contact system administrator.';
+                    } else {
+                        if (!str_starts_with($ePass, '$2')) {
+                            $ePass = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
+                        }
+                        $isFw = (bool)($emp['is_field_worker'] ?? false) || in_array($emp['system_role'] ?? '', [
+                            'Site Survey Engineer', 'Site Inspector', 'Civil Team', 'Structure Team', 'Installation Team', 'Electrical Team', 'Technician'
+                        ]);
+                        $eRole = $emp['system_role'] ?? $emp['assigned_role'] ?? 'Technician';
+                        $accountType = in_array(strtoupper(trim($eRole)), ['ADMIN', 'SUPER ADMIN'], true) ? 'ADMIN' : 'EMPLOYEE';
+                        $authenticatedUser = [
+                            'id' => $emp['id'],
+                            'userId' => $emp['auth_uid'] ?? $emp['id'],
+                            'employeeId' => $emp['employee_code'] ?? $emp['id'],
+                            'name' => $emp['name'] ?? 'Solar Employee',
+                            'email' => $emp['email'],
+                            'role' => $eRole,
+                            'phone' => $emp['phone'] ?? '',
+                            'department' => $emp['department'] ?? 'Operations',
+                            'designation' => $emp['designation'] ?? $eRole,
+                            'isFieldWorker' => $isFw,
+                            'accountType' => $accountType,
+                            'status' => $emp['status'] ?? 'ACTIVE'
+                        ];
+                        $linkedEntityId = $emp['id'];
+                        syncAuthCredentialPhp($pdo, $emp['auth_uid'] ?? $emp['id'], $email, $ePass, $eRole, $accountType, $emp['id'], 'ACTIVE');
+                    }
                 }
             }
         } catch (Exception $e) {}
     }
 
     // 4. Quaternary fallback via solar_customers table
-    if (!$authenticatedUser) {
+    if (!$authenticatedUser && !$disabledAccountMsg) {
         try {
             $stmtCust = $pdo->prepare('SELECT * FROM `solar_customers` WHERE LOWER(email) = ? LIMIT 1');
             $stmtCust->execute([$email]);
             $cust = $stmtCust->fetch(PDO::FETCH_ASSOC);
             if ($cust) {
-                $cHash = $cust['password'] ?? '';
-                $cMatches = !empty($cHash) && (password_verify($password, $cHash) || hash_equals((string)$cHash, (string)$password));
+                $cHash = (string)($cust['password'] ?? '');
+                $cMatches = !empty($cHash) && (password_verify($password, $cHash) || hash_equals($cHash, $password));
                 if ($cMatches) {
-                    $accountType = 'CUSTOMER';
-                    $linkedEntityId = $cust['id'];
-                    $authenticatedUser = [
-                        'id' => 'usr-' . $cust['id'],
-                        'userId' => 'usr-' . $cust['id'],
-                        'customerId' => $cust['id'],
-                        'employeeId' => 'CUST-' . $cust['id'],
-                        'name' => $cust['name'] ?? 'Customer',
-                        'email' => $cust['email'],
-                        'role' => 'Customer',
-                        'phone' => $cust['phone'] ?? '',
-                        'department' => 'Customer Portal',
-                        'designation' => 'Customer',
-                        'isFieldWorker' => false,
-                        'accountType' => 'CUSTOMER',
-                        'status' => $cust['status'] ?? 'ACTIVE'
-                    ];
+                    $cStat = strtoupper(trim((string)($cust['status'] ?? 'ACTIVE')));
+                    if (in_array($cStat, ['DISABLED', 'INACTIVE'], true)) {
+                        $disabledAccountMsg = 'Account has been disabled. Please contact system administrator.';
+                    } else {
+                        if (!str_starts_with($cHash, '$2')) {
+                            $cHash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
+                            try {
+                                $pdo->prepare('UPDATE `solar_customers` SET `password` = ? WHERE `id` = ?')->execute([$cHash, $cust['id']]);
+                            } catch (Exception $e) {}
+                        }
+                        $accountType = 'CUSTOMER';
+                        $rawCustId = preg_replace('/^usr-/', '', (string)$cust['id']);
+                        $linkedEntityId = $cust['id'];
+                        $authenticatedUser = [
+                            'id' => 'usr-' . $rawCustId,
+                            'userId' => 'usr-' . $rawCustId,
+                            'customerId' => $cust['id'],
+                            'employeeId' => 'CUST-' . $cust['id'],
+                            'name' => $cust['name'] ?? 'Customer',
+                            'email' => $cust['email'],
+                            'role' => 'Customer',
+                            'phone' => $cust['phone'] ?? '',
+                            'department' => 'Customer Portal',
+                            'designation' => 'Customer',
+                            'isFieldWorker' => false,
+                            'accountType' => 'CUSTOMER',
+                            'status' => $cust['status'] ?? 'ACTIVE'
+                        ];
+                        syncAuthCredentialPhp($pdo, 'usr-' . $rawCustId, $email, $cHash, 'Customer', 'CUSTOMER', $cust['id'], 'ACTIVE');
+                    }
                 }
             }
         } catch (Exception $e) {}
+    }
+
+    if ($disabledAccountMsg) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => $disabledAccountMsg]);
+        exit;
     }
 
     if ($authenticatedUser) {
@@ -5910,7 +6071,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/auth/me', '/auth/me/', '/auth/v
         exit;
     }
 
-    if (!empty($user['status']) && in_array($user['status'], ['DISABLED', 'INACTIVE'])) {
+    if (!empty($user['status']) && in_array(strtoupper(trim((string)$user['status'])), ['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'], true)) {
         clearServerSessionCookie();
         http_response_code(403);
         echo json_encode([
@@ -5967,23 +6128,51 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/change-password', '/auth/
         exit;
     }
     $pdo = getDbConnection($dbConfig);
-    $stmt = $pdo->prepare('SELECT id, password FROM `solar_users` WHERE id = ? LIMIT 1');
+    ensureRequiredTables($pdo);
+    $rawCustId = preg_replace('/^usr-/', '', $userId);
+    $currentHash = null;
+    $resolvedEmail = '';
+
+    $stmt = $pdo->prepare('SELECT id, email, password FROM `solar_users` WHERE id = ? LIMIT 1');
     $stmt->execute([$userId]);
-    $u = $stmt->fetch();
-    if (!$u) {
+    if ($u = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $currentHash = $u['password'] ?? null;
+        $resolvedEmail = strtolower(trim((string)($u['email'] ?? '')));
+    }
+    if (empty($currentHash)) {
+        $stmtC = $pdo->prepare('SELECT id, email, password FROM `solar_customers` WHERE id = ? OR id = ? LIMIT 1');
+        $stmtC->execute([$rawCustId, $userId]);
+        if ($c = $stmtC->fetch(PDO::FETCH_ASSOC)) {
+            $currentHash = $c['password'] ?? null;
+            $resolvedEmail = strtolower(trim((string)($c['email'] ?? '')));
+        }
+    }
+    if (empty($currentHash)) {
+        $stmtCred = $pdo->prepare('SELECT user_id, email, password_hash FROM `solar_auth_credentials` WHERE user_id = ? OR linked_entity_id = ? LIMIT 1');
+        $stmtCred->execute([$userId, $rawCustId]);
+        if ($cr = $stmtCred->fetch(PDO::FETCH_ASSOC)) {
+            $currentHash = $cr['password_hash'] ?? null;
+            $resolvedEmail = strtolower(trim((string)($cr['email'] ?? '')));
+        }
+    }
+    if (empty($currentHash)) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'User account not found.']);
         exit;
     }
-    $validOld = !empty($u['password']) && (password_verify($oldPass, $u['password']) || hash_equals((string)$u['password'], (string)$oldPass));
+    $validOld = password_verify($oldPass, $currentHash) || hash_equals((string)$currentHash, (string)$oldPass);
     if (!$validOld) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Current password does not match.']);
         exit;
     }
     $hashed = password_hash($newPass, PASSWORD_BCRYPT, ['cost' => 10]);
-    $upStmt = $pdo->prepare('UPDATE `solar_users` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE id = ?');
-    $upStmt->execute([$hashed, $userId]);
+    $pdo->prepare('UPDATE `solar_users` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE id = ?')->execute([$hashed, $userId]);
+    $pdo->prepare('UPDATE `solar_customers` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE id = ? OR id = ?')->execute([$hashed, $rawCustId, $userId]);
+    try {
+        $pdo->prepare('UPDATE `solar_auth_credentials` SET `password_hash` = ?, `password_changed_at` = NOW() WHERE `user_id` = ? OR `linked_entity_id` = ?' . (!empty($resolvedEmail) ? ' OR LOWER(`email`) = ?' : ''))
+            ->execute(!empty($resolvedEmail) ? [$hashed, $userId, $rawCustId, $resolvedEmail] : [$hashed, $userId, $rawCustId]);
+    } catch (Exception $e) {}
     http_response_code(200);
     echo json_encode(['success' => true, 'message' => 'Password changed and securely hashed with bcrypt in MySQL.']);
     exit;
@@ -5991,6 +6180,9 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/change-password', '/auth/
 
 // POST /api/auth/reset-password
 if ($method === 'POST' && in_array($cleanPath, ['/auth/reset-password', '/auth/reset-password/'])) {
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAdminUserPhp($pdo);
     $email = strtolower(trim($body['email'] ?? ''));
     $newPass = trim($body['newPassword'] ?? '');
     if (empty($email) || empty($newPass)) {
@@ -6004,13 +6196,57 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/reset-password', '/auth/r
         exit;
     }
     $hashed = password_hash($newPass, PASSWORD_BCRYPT, ['cost' => 10]);
-    $pdo = getDbConnection($dbConfig);
-    $stmtU = $pdo->prepare('UPDATE `solar_users` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE LOWER(email) = ?');
-    $stmtU->execute([$hashed, $email]);
-    $stmtC = $pdo->prepare('UPDATE `solar_customers` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE LOWER(email) = ?');
-    $stmtC->execute([$hashed, $email]);
+    $pdo->prepare('UPDATE `solar_users` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE LOWER(email) = ?')->execute([$hashed, $email]);
+    $pdo->prepare('UPDATE `solar_customers` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE LOWER(email) = ?')->execute([$hashed, $email]);
+    try {
+        $pdo->prepare('UPDATE `solar_auth_credentials` SET `password_hash` = ?, `password_changed_at` = NOW() WHERE LOWER(`email`) = ?')
+            ->execute([$hashed, $email]);
+    } catch (Exception $e) {}
+    logSolarUsersAuditPhp('PASSWORD_RESET', 'POST /auth/reset-password', $email, $email, $actor);
     http_response_code(200);
     echo json_encode(['success' => true, 'message' => "Password for $email reset and securely hashed with bcrypt in MySQL."]);
+    exit;
+}
+
+// PUT /api/customers/{id}/password (Protected: Admin / Super Admin or matching Customer)
+if ($method === 'PUT' && preg_match('#^/customers/([^/]+)/password/?$#', $cleanPath, $matches)) {
+    $custId = urldecode($matches[1]);
+    $rawCustId = preg_replace('/^usr-/', '', $custId);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    $actorRoleUpper = strtoupper(trim((string)($actor['role'] ?? '')));
+    $isActorAdmin = in_array($actorRoleUpper, ['ADMIN', 'SUPER ADMIN'], true);
+    $actorCustId = preg_replace('/^usr-/', '', (string)($actor['customerId'] ?? $actor['id'] ?? ''));
+    if (!$isActorAdmin && $actorCustId !== $rawCustId) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied: Cannot update another customer password.']);
+        exit;
+    }
+    $newPass = trim($body['password'] ?? '');
+    if (empty($newPass) || strlen($newPass) < 6) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Password must be at least 6 characters long.']);
+        exit;
+    }
+    $hashed = password_hash($newPass, PASSWORD_BCRYPT, ['cost' => 10]);
+    $stmtC = $pdo->prepare('SELECT id, email, status FROM `solar_customers` WHERE id = ? OR id = ? LIMIT 1');
+    $stmtC->execute([$rawCustId, $custId]);
+    $custRow = $stmtC->fetch(PDO::FETCH_ASSOC);
+    if (!$custRow) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'Customer record not found in MySQL.']);
+        exit;
+    }
+    $pdo->prepare('UPDATE `solar_customers` SET `password` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE id = ?')
+        ->execute([$hashed, $custRow['id']]);
+    $custEmail = strtolower(trim((string)($custRow['email'] ?? '')));
+    if (!empty($custEmail)) {
+        $credStatus = in_array(strtoupper((string)($custRow['status'] ?? 'ACTIVE')), ['DISABLED', 'INACTIVE'], true) ? 'DISABLED' : 'ACTIVE';
+        syncAuthCredentialPhp($pdo, 'usr-' . preg_replace('/^usr-/', '', $custRow['id']), $custEmail, $hashed, 'Customer', 'CUSTOMER', $custRow['id'], $credStatus);
+    }
+    http_response_code(200);
+    echo json_encode(['success' => true, 'message' => 'Customer password updated and securely hashed with bcrypt in MySQL.']);
     exit;
 }
 

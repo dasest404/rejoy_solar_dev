@@ -4241,8 +4241,13 @@ class StorageService {
     return deepClone;
   }
 
+  private isAdminRole(role?: UserRole | string): boolean {
+    const norm = String(role || '').trim().toLowerCase();
+    return norm === 'admin' || norm === 'super admin';
+  }
+
   hasAclPermission(role: UserRole, permissionId: string): boolean {
-    if (role === 'Admin') return true;
+    if (this.isAdminRole(role)) return true;
     const config = this.getAclConfig();
     const rolePerms = config[role];
     if (!rolePerms) return false;
@@ -4250,14 +4255,14 @@ class StorageService {
   }
 
   assertPermission(role: UserRole, permissionId: string, actionDescription?: string): void {
-    if (role === 'Admin') return;
+    if (this.isAdminRole(role)) return;
     if (!this.hasAclPermission(role, permissionId)) {
       throw new Error(`Security Exception: Access Denied. Role "${role}" is not authorized to ${actionDescription || permissionId}.`);
     }
   }
 
   assertAdmin(role: UserRole, actionDescription?: string): void {
-    if (role !== 'Admin') {
+    if (!this.isAdminRole(role)) {
       throw new Error(`Security Exception: Access Denied. Role "${role}" is not authorized for administrative operation: ${actionDescription || 'Admin access required'}.`);
     }
   }

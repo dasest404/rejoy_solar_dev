@@ -86,7 +86,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   className = '',
   onPunchSuccess
 }) => {
-  const { currentUser, currentRole } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const { triggerRefresh, showToast, refreshTrigger } = useApp();
 
   const [isLocating, setIsLocating] = useState(false);
@@ -558,7 +558,7 @@ export const TodayAttendanceCard: React.FC<TodayAttendanceCardProps> = ({
   }, [todayRecord]);
 
   // Strictly do not show on Admin Dashboard or for Admin users (placed after all hooks)
-  if (currentRole === 'Admin' || currentUser?.role === 'Admin') {
+  if (isAdmin) {
     return null;
   }
 

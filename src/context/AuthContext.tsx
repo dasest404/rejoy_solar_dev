@@ -270,26 +270,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cleanEmail = email.trim().toLowerCase();
       const cleanPass = pass.trim();
 
-      // Authenticate directly with the authoritative MySQL backend
-      const res = await fetch(`${apiClient.getBaseUrl()}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email: cleanEmail, password: cleanPass })
-      });
+      // Authenticate directly with the authoritative MySQL backend via unified apiClient (with /auth/login fallback)
+      const data = await apiClient.login(cleanEmail, cleanPass);
 
-      let data: any = {};
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error(
-          res.status === 404
-            ? `Authentication API endpoint not found (HTTP 404). Please ensure the backend server or reverse proxy is configured for ${apiClient.getBaseUrl()}/auth/login.`
-            : `Authentication server returned HTTP ${res.status} (${res.statusText || 'Non-JSON response'}).`
-        );
-      }
-
-      if (!res.ok || !data.success || !data.user) {
+      if (!data.success || !data.user) {
         throw new Error(data.message || 'Invalid email or password. Please verify your credentials in MySQL.');
       }
 
@@ -478,9 +462,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const currentRole: UserRole = currentUser?.role || 'Admin';
-  const isCustomer = currentRole === 'Customer';
-  const isAdmin = currentRole === 'Admin';
-  const isProjectManager = currentRole === 'Project Manager';
+  const normalizedRoleLower = String(currentRole || '').trim().toLowerCase();
+  const isCustomer = normalizedRoleLower === 'customer' || normalizedRoleLower === 'client';
+  const isAdmin = normalizedRoleLower === 'admin' || normalizedRoleLower === 'super admin';
+  const isProjectManager = normalizedRoleLower === 'project manager';
   const isFieldStaff = Boolean(
     currentUser?.isFieldWorker ||
     [
@@ -754,6 +739,7 @@ export const useAuth = (): AuthContextType => {
 };
 
 export function getRoleDefaultPath(role?: UserRole): string {
-  if (role === 'Customer') return '/customer-portal';
+  const norm = String(role || '').trim().toLowerCase();
+  if (norm === 'customer' || norm === 'client') return '/customer-portal';
   return '/dashboard';
 }

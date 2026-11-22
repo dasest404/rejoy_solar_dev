@@ -29,8 +29,7 @@ import {
 
 export const WarehouseManager: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast, setActiveView } = useApp();
-  const { currentUser, currentRole } = useAuth();
-  const isAdmin = currentRole === 'Admin' || currentUser?.role === 'Admin';
+  const { currentUser, isAdmin } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');

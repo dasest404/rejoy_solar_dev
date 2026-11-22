@@ -10011,7 +10011,7 @@ class MySqlDatabaseManager {
           return authResult.user;
         }
       } catch (authErr: any) {
-        if (authErr?.message?.includes('disabled')) throw authErr;
+        if (String(authErr?.message || '').toLowerCase().includes('disabled')) throw authErr;
         console.warn('[DB Manager] Centralized auth check notice:', authErr?.message || authErr);
       }
     }
@@ -10020,59 +10020,149 @@ class MySqlDatabaseManager {
     if (Array.isArray(users) && users.length > 0) {
       const u = users[0];
       let isMatch = false;
+      let effectiveHash = String(u.password || '');
 
-      if (u.password && (u.password.startsWith('$2a$') || u.password.startsWith('$2b$') || u.password.startsWith('$2y$'))) {
-        isMatch = await bcrypt.compare(cleanPass, u.password);
-      } else if (u.password && u.password === cleanPass) {
+      if (effectiveHash && (effectiveHash.startsWith('$2a$') || effectiveHash.startsWith('$2b$') || effectiveHash.startsWith('$2y$'))) {
+        isMatch = await bcrypt.compare(cleanPass, effectiveHash);
+      } else if (effectiveHash && effectiveHash === cleanPass) {
         isMatch = true;
         // Automatically upgrade legacy plaintext to bcrypt in MySQL
         try {
-          const hashed = await bcrypt.hash(cleanPass, 10);
-          await this.pool!.query('UPDATE `solar_users` SET `password` = ? WHERE `id` = ?', [hashed, u.id]);
+          effectiveHash = await bcrypt.hash(cleanPass, 10);
+          await this.pool!.query('UPDATE `solar_users` SET `password` = ? WHERE `id` = ?', [effectiveHash, u.id]);
         } catch {}
       }
 
       if (isMatch) {
+        const uStatus = String(u.status || 'ACTIVE').trim().toUpperCase();
+        if (['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'].includes(uStatus)) {
+          throw new Error('This account has been disabled. Please contact system administrator.');
+        }
+        const uRole = u.role || 'Admin';
+        const uUpper = uRole.trim().toUpperCase();
+        const acctType = uUpper === 'CUSTOMER' ? 'CUSTOMER' : (uUpper === 'ADMIN' || uUpper === 'SUPER ADMIN' ? 'ADMIN' : 'EMPLOYEE');
+        await authService.setCredential(this.pool!, {
+          userId: u.id,
+          email: u.email,
+          password: effectiveHash,
+          role: uRole,
+          accountType: acctType,
+          linkedEntityId: u.employee_id || u.id,
+          status: 'ACTIVE'
+        }).catch(() => {});
+
         return {
           id: u.id,
+          userId: u.id,
           name: u.name,
           email: u.email,
-          role: u.role,
+          role: uRole,
           phone: u.phone,
           department: u.department,
           designation: u.designation,
-          employeeId: u.employee_id,
-          isFieldWorker: Boolean(u.is_field_worker)
+          employeeId: u.employee_id || u.id,
+          isFieldWorker: Boolean(u.is_field_worker),
+          accountType: acctType,
+          status: u.status || 'ACTIVE'
         };
       }
+    }
+
+    // Check solar_employee fallback if employee row carries a password
+    try {
+      const [employees]: any = await this.pool!.query('SELECT * FROM `solar_employee` WHERE LOWER(email) = ? LIMIT 1', [cleanEmail]);
+      if (Array.isArray(employees) && employees.length > 0) {
+        const emp = employees[0];
+        const ePass = String(emp.password || '');
+        let eMatch = false;
+        if (ePass && (ePass.startsWith('$2a$') || ePass.startsWith('$2b$') || ePass.startsWith('$2y$'))) {
+          eMatch = await bcrypt.compare(cleanPass, ePass);
+        } else if (ePass && ePass === cleanPass) {
+          eMatch = true;
+        }
+        if (eMatch) {
+          const eDisabled = emp.login_enabled === 0 || emp.login_enabled === false
+            || ['DISABLED', 'INACTIVE', 'TERMINATED'].includes(String(emp.status || 'ACTIVE').toUpperCase())
+            || String(emp.account_status || 'ACTIVE').toUpperCase() === 'DISABLED';
+          if (eDisabled) {
+            throw new Error('This account has been disabled. Please contact system administrator.');
+          }
+          const eRole = emp.system_role || emp.assigned_role || 'Technician';
+          const acctType = ['ADMIN', 'SUPER ADMIN'].includes(eRole.trim().toUpperCase()) ? 'ADMIN' : 'EMPLOYEE';
+          await authService.setCredential(this.pool!, {
+            userId: emp.auth_uid || emp.id,
+            email: emp.email,
+            password: cleanPass,
+            role: eRole,
+            accountType: acctType,
+            linkedEntityId: emp.id,
+            status: 'ACTIVE'
+          }).catch(() => {});
+          return {
+            id: emp.id,
+            userId: emp.auth_uid || emp.id,
+            employeeId: emp.employee_code || emp.id,
+            name: emp.name,
+            email: emp.email,
+            role: eRole,
+            phone: emp.phone || '',
+            department: emp.department || 'Operations',
+            designation: emp.designation || eRole,
+            isFieldWorker: Boolean(emp.is_field_worker),
+            accountType: acctType,
+            status: emp.status || 'ACTIVE'
+          };
+        }
+      }
+    } catch (empErr: any) {
+      if (String(empErr?.message || '').toLowerCase().includes('disabled')) throw empErr;
     }
 
     const [customers]: any = await this.pool!.query('SELECT * FROM `solar_customers` WHERE LOWER(email) = ?', [cleanEmail]);
     if (Array.isArray(customers) && customers.length > 0) {
       const c = customers[0];
       let isMatch = false;
+      let effectiveHash = String(c.password || '');
 
-      if (c.password && (c.password.startsWith('$2a$') || c.password.startsWith('$2b$') || c.password.startsWith('$2y$'))) {
-        isMatch = await bcrypt.compare(cleanPass, c.password);
-      } else if (c.password && c.password === cleanPass) {
+      if (effectiveHash && (effectiveHash.startsWith('$2a$') || effectiveHash.startsWith('$2b$') || effectiveHash.startsWith('$2y$'))) {
+        isMatch = await bcrypt.compare(cleanPass, effectiveHash);
+      } else if (effectiveHash && effectiveHash === cleanPass) {
         isMatch = true;
         try {
-          const hashed = await bcrypt.hash(cleanPass, 10);
-          await this.pool!.query('UPDATE `solar_customers` SET `password` = ? WHERE `id` = ?', [hashed, c.id]);
+          effectiveHash = await bcrypt.hash(cleanPass, 10);
+          await this.pool!.query('UPDATE `solar_customers` SET `password` = ? WHERE `id` = ?', [effectiveHash, c.id]);
         } catch {}
       }
 
       if (isMatch) {
+        const cStatus = String(c.status || 'ACTIVE').trim().toUpperCase();
+        if (['DISABLED', 'INACTIVE'].includes(cStatus)) {
+          throw new Error('This account has been disabled. Please contact system administrator.');
+        }
+        const rawCid = String(c.id).replace(/^usr-/, '');
+        await authService.setCredential(this.pool!, {
+          userId: `usr-${rawCid}`,
+          email: c.email,
+          password: effectiveHash,
+          role: 'Customer',
+          accountType: 'CUSTOMER',
+          linkedEntityId: c.id,
+          status: 'ACTIVE'
+        }).catch(() => {});
         return {
-          id: `usr-${c.id}`,
+          id: `usr-${rawCid}`,
+          userId: `usr-${rawCid}`,
           customerId: c.id,
+          employeeId: `CUST-${c.id}`,
           name: c.name,
           email: c.email,
           role: 'Customer',
           phone: c.phone,
-          department: 'Customer',
+          department: 'Customer Portal',
           designation: 'Customer',
-          isFieldWorker: false
+          isFieldWorker: false,
+          accountType: 'CUSTOMER',
+          status: c.status || 'ACTIVE'
         };
       }
     }

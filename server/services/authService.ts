@@ -221,27 +221,28 @@ export class AuthService {
             const status = isLoginDisabled ? 'DISABLED' : 'ACTIVE';
             const passwordHash = await this.hashPassword(rawEmpPass);
 
-            await pool.query(`
-              INSERT INTO \`solar_auth_credentials\` (
-                \`id\`, \`user_id\`, \`email\`, \`password_hash\`, \`role\`,
-                \`account_type\`, \`linked_entity_id\`, \`status\`
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE
-                \`role\` = VALUES(\`role\`),
-                \`account_type\` = VALUES(\`account_type\`),
-                \`linked_entity_id\` = VALUES(\`linked_entity_id\`),
-                \`status\` = VALUES(\`status\`)
-            `, [
-              `cred-${emp.id}`,
-              emp.id,
-              email,
-              passwordHash,
-              role,
-              accountType,
-              emp.id,
-              status
-            ]);
-            migratedEmployees++;
+            const [existingCred]: any = await pool.query(
+              'SELECT id FROM `solar_auth_credentials` WHERE `user_id` = ? OR LOWER(`email`) = ? LIMIT 1',
+              [emp.id, email]
+            );
+            if (!Array.isArray(existingCred) || existingCred.length === 0) {
+              await pool.query(`
+                INSERT IGNORE INTO \`solar_auth_credentials\` (
+                  \`id\`, \`user_id\`, \`email\`, \`password_hash\`, \`role\`,
+                  \`account_type\`, \`linked_entity_id\`, \`status\`
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              `, [
+                `cred-${emp.id}`,
+                emp.id,
+                email,
+                passwordHash,
+                role,
+                accountType,
+                emp.id,
+                status
+              ]);
+              migratedEmployees++;
+            }
           }
         }
       } catch (err: any) {
@@ -372,7 +373,8 @@ export class AuthService {
     const cred: AuthCredentialRecord = rows[0];
 
     // Check account status
-    if (cred.status === 'DISABLED' || cred.status === 'INACTIVE') {
+    const credStatusUpper = String(cred.status || 'ACTIVE').trim().toUpperCase();
+    if (['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'].includes(credStatusUpper)) {
       throw new Error('This account has been disabled. Please contact system administrator.');
     }
 
@@ -385,6 +387,12 @@ export class AuthService {
         [cred.id]
       ).catch(() => {});
       return null;
+    }
+
+    // Build unified user profile from authoritative tables and verify entity-level active status
+    const userProfile = await this.fetchUserProfile(pool, cred);
+    if (['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'].includes(String(userProfile.status || 'ACTIVE').toUpperCase())) {
+      throw new Error('This account has been disabled. Please contact system administrator.');
     }
 
     // Upgrade hash if legacy plaintext was detected
@@ -401,14 +409,11 @@ export class AuthService {
       ).catch(() => {});
     }
 
-    // Build unified user profile from authoritative tables
-    const userProfile = await this.fetchUserProfile(pool, cred);
-
     // Create server-managed session in solar_auth_sessions
     const sessionToken = await this.createSession(pool, {
-      userId: cred.user_id,
+      userId: userProfile.id || cred.user_id,
       email: cred.email,
-      role: cred.role,
+      role: userProfile.role || cred.role,
       accountType: cred.account_type,
       linkedEntityId: cred.linked_entity_id,
       ipAddress: clientInfo?.ip,
@@ -435,92 +440,116 @@ export class AuthService {
       'Technician'
     ].includes(cred.role);
 
-    // If CUSTOMER account
-    if (cred.account_type === 'CUSTOMER') {
-      const custId = cred.linked_entity_id || cred.user_id.replace(/^usr-/, '');
+    const resolveCustomer = async (): Promise<SanitizedUser | null> => {
+      const custId = String(cred.linked_entity_id || cred.user_id || '').replace(/^usr-/, '');
       const [cRows]: any = await pool.query(
-        'SELECT * FROM `solar_customers` WHERE `id` = ? OR `email` = ? LIMIT 1',
-        [custId, cred.email]
+        'SELECT * FROM `solar_customers` WHERE `id` = ? OR `id` = ? OR LOWER(`email`) = ? LIMIT 1',
+        [custId, cred.user_id, cred.email]
       );
       if (Array.isArray(cRows) && cRows.length > 0) {
         const c = cRows[0];
+        const rawCid = String(c.id).replace(/^usr-/, '');
         return {
-          id: `usr-${c.id}`,
-          userId: `usr-${c.id}`,
+          id: `usr-${rawCid}`,
+          userId: `usr-${rawCid}`,
           customerId: c.id,
+          employeeId: `CUST-${c.id}`,
           name: c.name,
           email: c.email,
           role: 'Customer',
           phone: c.phone || '',
-          department: 'Customer',
+          department: 'Customer Portal',
           designation: 'Customer',
           isFieldWorker: false,
           accountType: 'CUSTOMER',
           status: c.status || 'ACTIVE'
         };
       }
-    }
+      return null;
+    };
 
-    // If EMPLOYEE account or ADMIN, first check solar_employees (and fallback to solar_employee)
-    const empId = cred.linked_entity_id || cred.user_id;
-    let eRows: any[] = [];
-    try {
-      const [rows]: any = await pool.query(
-        'SELECT * FROM `solar_employees` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1',
-        [empId, cred.email]
-      );
-      if (Array.isArray(rows) && rows.length > 0) eRows = rows;
-    } catch {}
-
-    if (eRows.length === 0) {
+    const resolveEmployee = async (): Promise<SanitizedUser | null> => {
+      const empId = cred.linked_entity_id || cred.user_id;
+      let eRows: any[] = [];
       try {
-        const [rowsOld]: any = await pool.query(
-          'SELECT * FROM `solar_employee` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1',
-          [empId, cred.email]
+        const [rows]: any = await pool.query(
+          'SELECT * FROM `solar_employees` WHERE `id` = ? OR `id` = ? OR `auth_uid` = ? OR LOWER(`email`) = ? LIMIT 1',
+          [empId, cred.user_id, cred.user_id, cred.email]
         );
-        if (Array.isArray(rowsOld) && rowsOld.length > 0) eRows = rowsOld;
+        if (Array.isArray(rows) && rows.length > 0) eRows = rows;
       } catch {}
-    }
 
-    if (Array.isArray(eRows) && eRows.length > 0) {
-      const e = eRows[0];
-      return {
-        id: e.id,
-        userId: cred.user_id,
-        employeeId: e.employee_code || e.id,
-        name: e.name,
-        email: e.email,
-        role: cred.role || e.system_role || e.designation || 'Technician',
-        phone: e.phone || '',
-        department: e.department || 'Operations',
-        designation: e.designation || cred.role,
-        isFieldWorker: Boolean(e.is_field_worker || isFieldWorkerRole),
-        accountType: cred.account_type,
-        status: e.status || 'ACTIVE'
-      };
-    }
+      if (eRows.length === 0) {
+        try {
+          const [rowsOld]: any = await pool.query(
+            'SELECT * FROM `solar_employee` WHERE `id` = ? OR `id` = ? OR `auth_uid` = ? OR LOWER(`email`) = ? LIMIT 1',
+            [empId, cred.user_id, cred.user_id, cred.email]
+          );
+          if (Array.isArray(rowsOld) && rowsOld.length > 0) eRows = rowsOld;
+        } catch {}
+      }
 
-    // Check solar_users
-    const [uRows]: any = await pool.query(
-      'SELECT * FROM `solar_users` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1',
-      [cred.user_id, cred.email]
-    );
-    if (Array.isArray(uRows) && uRows.length > 0) {
-      const u = uRows[0];
-      return {
-        id: u.id,
-        userId: u.id,
-        employeeId: u.employee_id || u.id,
-        name: u.name,
-        email: u.email,
-        role: cred.role || u.role,
-        phone: u.phone || '',
-        department: u.department || 'Administration',
-        designation: u.designation || cred.role,
-        isFieldWorker: Boolean(u.is_field_worker || isFieldWorkerRole),
-        accountType: cred.account_type,
-        status: u.status || 'ACTIVE'
-      };
+      if (Array.isArray(eRows) && eRows.length > 0) {
+        const e = eRows[0];
+        const isDisabledEmp = e.login_enabled === 0 || e.login_enabled === false
+          || ['DISABLED', 'INACTIVE', 'TERMINATED'].includes(String(e.status || 'ACTIVE').toUpperCase())
+          || String(e.account_status || 'ACTIVE').toUpperCase() === 'DISABLED';
+        return {
+          id: e.id,
+          userId: e.auth_uid || cred.user_id,
+          employeeId: e.employee_code || e.id,
+          name: e.name,
+          email: e.email,
+          role: cred.role || e.system_role || e.designation || 'Technician',
+          phone: e.phone || '',
+          department: e.department || 'Operations',
+          designation: e.designation || cred.role,
+          isFieldWorker: Boolean(e.is_field_worker || isFieldWorkerRole),
+          accountType: cred.account_type,
+          status: isDisabledEmp ? 'DISABLED' : (e.status || 'ACTIVE')
+        };
+      }
+      return null;
+    };
+
+    const resolveUser = async (): Promise<SanitizedUser | null> => {
+      const [uRows]: any = await pool.query(
+        'SELECT * FROM `solar_users` WHERE `id` = ? OR LOWER(`email`) = ? LIMIT 1',
+        [cred.user_id, cred.email]
+      );
+      if (Array.isArray(uRows) && uRows.length > 0) {
+        const u = uRows[0];
+        return {
+          id: u.id,
+          userId: u.id,
+          employeeId: u.employee_id || u.id,
+          name: u.name,
+          email: u.email,
+          role: cred.role || u.role,
+          phone: u.phone || '',
+          department: u.department || 'Administration',
+          designation: u.designation || cred.role,
+          isFieldWorker: Boolean(u.is_field_worker || isFieldWorkerRole),
+          accountType: cred.account_type,
+          status: u.status || 'ACTIVE'
+        };
+      }
+      return null;
+    };
+
+    if (cred.account_type === 'CUSTOMER') {
+      const cProf = await resolveCustomer();
+      if (cProf) return cProf;
+    } else if (cred.account_type === 'ADMIN') {
+      const uProf = await resolveUser();
+      if (uProf) return uProf;
+      const eProf = await resolveEmployee();
+      if (eProf) return eProf;
+    } else {
+      const eProf = await resolveEmployee();
+      if (eProf) return eProf;
+      const uProf = await resolveUser();
+      if (uProf) return uProf;
     }
 
     // Default fallback
@@ -549,13 +578,13 @@ export class AuthService {
     userAgent?: string;
   }): Promise<string> {
     const sessionToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
 
+    // Use MySQL's authoritative clock to prevent UTC vs local timezone mismatch
     await pool.query(`
       INSERT INTO \`solar_auth_sessions\` (
         \`id\`, \`user_id\`, \`email\`, \`role\`, \`account_type\`,
         \`linked_entity_id\`, \`ip_address\`, \`user_agent\`, \`expires_at\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 14 DAY))
     `, [
       sessionToken,
       data.userId,
@@ -564,8 +593,7 @@ export class AuthService {
       data.accountType,
       data.linkedEntityId || null,
       data.ipAddress || null,
-      data.userAgent || null,
-      expiresAt
+      data.userAgent || null
     ]);
 
     return sessionToken;
@@ -581,7 +609,7 @@ export class AuthService {
 
     const cleanToken = sessionToken.trim();
     const [rows]: any = await pool.query(
-      'SELECT * FROM \`solar_auth_sessions\` WHERE \`id\` = ? LIMIT 1',
+      'SELECT *, UNIX_TIMESTAMP(`expires_at`) AS `expires_unix`, UNIX_TIMESTAMP(NOW()) AS `now_unix` FROM `solar_auth_sessions` WHERE `id` = ? LIMIT 1',
       [cleanToken]
     );
 
@@ -590,16 +618,10 @@ export class AuthService {
     }
 
     const sess = rows[0];
-    let expiryMs = 0;
-    if (sess.expires_at instanceof Date) {
-      expiryMs = sess.expires_at.getTime();
-    } else {
-      const str = String(sess.expires_at || '');
-      expiryMs = new Date(str.includes('Z') ? str : str.replace(' ', 'T') + 'Z').getTime();
-      if (isNaN(expiryMs)) expiryMs = new Date(sess.expires_at).getTime();
-    }
+    const expiresUnix = Number(sess.expires_unix || 0);
+    const nowUnix = Number(sess.now_unix || 0);
 
-    if (expiryMs > 0 && Date.now() > expiryMs) {
+    if (expiresUnix > 0 && nowUnix > 0 && nowUnix > expiresUnix) {
       await pool.query('DELETE FROM `solar_auth_sessions` WHERE `id` = ?', [cleanToken]).catch(() => {});
       return { valid: false, error: 'Session has expired.' };
     }
@@ -607,22 +629,37 @@ export class AuthService {
     // Touch last_active_at
     await pool.query('UPDATE `solar_auth_sessions` SET `last_active_at` = NOW() WHERE `id` = ?', [cleanToken]).catch(() => {});
 
-    // Get current credentials and profile
+    // Get current credentials and profile (fall back to session metadata if row was created by fallback login)
     const [credRows]: any = await pool.query(
       'SELECT * FROM `solar_auth_credentials` WHERE `user_id` = ? OR LOWER(`email`) = ? LIMIT 1',
-      [sess.user_id, sess.email]
+      [sess.user_id, String(sess.email || '').toLowerCase()]
     );
 
-    if (!Array.isArray(credRows) || credRows.length === 0) {
-      return { valid: false, error: 'User credential record not found in MySQL.' };
-    }
+    const cred: AuthCredentialRecord = (Array.isArray(credRows) && credRows.length > 0)
+      ? credRows[0]
+      : {
+          id: `sess-${sess.user_id}`,
+          user_id: sess.user_id,
+          email: String(sess.email || '').toLowerCase(),
+          password_hash: '',
+          role: sess.role || 'Admin',
+          account_type: (sess.account_type || 'ADMIN') as AccountType,
+          linked_entity_id: sess.linked_entity_id || sess.user_id,
+          status: 'ACTIVE',
+          failed_login_attempts: 0,
+          created_at: '',
+          updated_at: ''
+        };
 
-    const cred = credRows[0];
-    if (cred.status === 'DISABLED' || cred.status === 'INACTIVE') {
+    if (['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'].includes(String(cred.status || 'ACTIVE').toUpperCase())) {
       return { valid: false, error: 'Account has been disabled.' };
     }
 
     const userProfile = await this.fetchUserProfile(pool, cred);
+    if (['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'].includes(String(userProfile.status || 'ACTIVE').toUpperCase())) {
+      return { valid: false, error: 'Account has been disabled.' };
+    }
+
     return { valid: true, user: userProfile };
   }
 
@@ -683,9 +720,14 @@ export class AuthService {
     if (req.protocol === 'https') return true;
     const proto = String(req.headers['x-forwarded-proto'] || '');
     if (proto.toLowerCase().includes('https')) return true;
-    if (req.headers['x-forwarded-ssl'] === 'on') return true;
+    if (String(req.headers['x-forwarded-ssl'] || '').toLowerCase() === 'on') return true;
+    if (String(req.headers['x-forwarded-scheme'] || '').toLowerCase() === 'https') return true;
+    if (String(req.headers['cf-visitor'] || '').toLowerCase().includes('"https"')) return true;
     if (req.headers['x-cloud-trace-context']) return true;
-    if (process.env.NODE_ENV === 'production') return true;
+    const origin = String(req.headers.origin || '').toLowerCase();
+    if (origin.startsWith('https://')) return true;
+    const referer = String(req.headers.referer || '').toLowerCase();
+    if (referer.startsWith('https://')) return true;
     return false;
   }
 
@@ -694,7 +736,7 @@ export class AuthService {
    */
   public setSessionCookie(res: Response, req: Request, sessionToken: string): void {
     const isHttps = this.isSecureRequest(req);
-    const maxAgeMs = 7 * 24 * 3600 * 1000; // 7 days
+    const maxAgeMs = 14 * 24 * 3600 * 1000; // 14 days
 
     if (isHttps) {
       // Primary cookie for iframes (SameSite=None, Secure, Partitioned)
