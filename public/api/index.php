@@ -295,7 +295,7 @@ function ensureRequiredTables($pdo) {
             'net_adjustment_value' => 'DECIMAL(14,2) DEFAULT 0.00'
         ],
         'solar_projects' => [
-            'received_inflow' => 'DECIMAL(14,2) DEFAULT NULL'
+            'received_inflow' => 'DECIMAL(18,2) DEFAULT NULL'
         ]
     ];
     foreach ($spMigrations as $tbl => $colsMap) {
@@ -309,6 +309,22 @@ function ensureRequiredTables($pdo) {
                 if (!isset($existingCols[strtolower($colName)])) {
                     try { $pdo->exec("ALTER TABLE `$tbl` ADD COLUMN `$colName` $colDef"); } catch (Exception $e) {}
                 }
+            }
+        } catch (Exception $e) {}
+    }
+
+    // Safely widen currency columns to DECIMAL(18,2) so large contract values / inflows never hit 14,2 caps
+    $widenMigrations = [
+        ['solar_projects', 'total_value', 'DECIMAL(18,2) NOT NULL DEFAULT 0.00'],
+        ['solar_projects', 'received_inflow', 'DECIMAL(18,2) DEFAULT NULL'],
+        ['solar_payments', 'amount', 'DECIMAL(18,2) NOT NULL DEFAULT 0.00']
+    ];
+    foreach ($widenMigrations as $wm) {
+        try {
+            $colRows = $pdo->query("SHOW COLUMNS FROM `{$wm[0]}` LIKE '{$wm[1]}'")->fetchAll(PDO::FETCH_ASSOC);
+            $currentType = strtolower((string)($colRows[0]['Type'] ?? ''));
+            if ($currentType !== '' && strpos($currentType, '(18,') === false) {
+                $pdo->exec("ALTER TABLE `{$wm[0]}` MODIFY COLUMN `{$wm[1]}` {$wm[2]}");
             }
         } catch (Exception $e) {}
     }
@@ -11370,15 +11386,22 @@ function updateProjectControlCenterPhp($pdo, $projectId, $payload, $actor) {
         return ['error' => "Project \"$projectId\" not found.", 'status' => 404];
     }
 
+    $parseCleanNumberPhp = static function ($val) {
+        if (is_int($val) || is_float($val)) return floatval($val);
+        $cleaned = str_replace(',', '', trim((string)$val));
+        if ($cleaned === '' || !is_numeric($cleaned)) return NAN;
+        return floatval($cleaned);
+    };
+
     $nextCapacity = array_key_exists('capacityKw', $payload)
-        ? floatval($payload['capacityKw'])
+        ? $parseCleanNumberPhp($payload['capacityKw'])
         : floatval($existing['capacity_kw'] ?? 0);
     if (!is_finite($nextCapacity) || $nextCapacity <= 0) {
         return ['error' => 'Project capacity must be greater than 0 kW.', 'status' => 400];
     }
 
     $nextTotalValue = array_key_exists('totalValue', $payload)
-        ? round(floatval($payload['totalValue']), 2)
+        ? round($parseCleanNumberPhp($payload['totalValue']), 2)
         : floatval($existing['total_value'] ?? 0);
     if (!is_finite($nextTotalValue) || $nextTotalValue < 0) {
         return ['error' => 'Total project/contract value cannot be negative.', 'status' => 400];
@@ -11403,10 +11426,11 @@ function updateProjectControlCenterPhp($pdo, $projectId, $payload, $actor) {
         ? floatval($existing['received_inflow'])
         : null;
 
-    if (array_key_exists('receivedInflow', $payload) && $payload['receivedInflow'] !== null && $payload['receivedInflow'] !== '') {
-        $targetInflow = round(floatval($payload['receivedInflow']), 2);
+    if (array_key_exists('receivedInflow', $payload) && $payload['receivedInflow'] !== null && trim((string)$payload['receivedInflow']) !== '') {
+        $parsedInflow = $parseCleanNumberPhp($payload['receivedInflow']);
+        $targetInflow = is_finite($parsedInflow) ? round($parsedInflow, 2) : NAN;
         if (!is_finite($targetInflow) || $targetInflow < 0) {
-            return ['error' => 'Received inflow cannot be negative.', 'status' => 400];
+            return ['error' => 'Received inflow must be a valid amount (0 or greater).', 'status' => 400];
         }
 
         $safeProjId = substr(preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$projectId), 0, 56);

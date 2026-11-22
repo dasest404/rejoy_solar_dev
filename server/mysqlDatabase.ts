@@ -241,7 +241,7 @@ class MySqlDatabaseManager {
       // Auto-migrate extended columns on Sales & Purchase ERP tables
       const salesPurchaseMigrations: Record<string, Record<string, string>> = {
         solar_projects: {
-          received_inflow: "DECIMAL(14,2) DEFAULT NULL"
+          received_inflow: "DECIMAL(18,2) DEFAULT NULL"
         },
         solar_products: {
           gst_rate: "DECIMAL(5,2) DEFAULT 18.00",
@@ -345,6 +345,22 @@ class MySqlDatabaseManager {
                 await this.pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${col}\` ${typeDef}`);
               } catch {}
             }
+          }
+        } catch {}
+      }
+
+      // Safely widen currency columns to DECIMAL(18,2) so large contract values / inflows never hit 14,2 caps
+      const widenMigrations: Array<[string, string, string]> = [
+        ['solar_projects', 'total_value', 'DECIMAL(18,2) NOT NULL DEFAULT 0.00'],
+        ['solar_projects', 'received_inflow', 'DECIMAL(18,2) DEFAULT NULL'],
+        ['solar_payments', 'amount', 'DECIMAL(18,2) NOT NULL DEFAULT 0.00']
+      ];
+      for (const [tbl, col, colDef] of widenMigrations) {
+        try {
+          const [colRows]: any = await this.pool.query(`SHOW COLUMNS FROM \`${tbl}\` LIKE ?`, [col]);
+          const currentType = String(colRows?.[0]?.Type || '').toLowerCase();
+          if (currentType && !currentType.includes('(18,')) {
+            await this.pool.query(`ALTER TABLE \`${tbl}\` MODIFY COLUMN \`${col}\` ${colDef}`);
           }
         } catch {}
       }
@@ -1803,14 +1819,26 @@ class MySqlDatabaseManager {
       throw Object.assign(new Error(`Project "${projectId}" not found.`), { statusCode: 404 });
     }
 
+    const parseCleanNumber = (val: any): number => {
+      if (typeof val === 'number') return val;
+      if (typeof val === 'string') {
+        const cleaned = val.replace(/,/g, '').trim();
+        if (!cleaned) return Number.NaN;
+        return Number(cleaned);
+      }
+      return Number(val);
+    };
+
     const nextCapacity =
-      payload.capacityKw !== undefined ? Number(payload.capacityKw) : Number(existing.capacity_kw || 0);
+      payload.capacityKw !== undefined ? parseCleanNumber(payload.capacityKw) : Number(existing.capacity_kw || 0);
     if (!Number.isFinite(nextCapacity) || nextCapacity <= 0) {
       throw Object.assign(new Error('Project capacity must be greater than 0 kW.'), { statusCode: 400 });
     }
 
     const nextTotalValue =
-      payload.totalValue !== undefined ? Math.round(Number(payload.totalValue) * 100) / 100 : Number(existing.total_value || 0);
+      payload.totalValue !== undefined
+        ? Math.round(parseCleanNumber(payload.totalValue) * 100) / 100
+        : Number(existing.total_value || 0);
     if (!Number.isFinite(nextTotalValue) || nextTotalValue < 0) {
       throw Object.assign(new Error('Total project/contract value cannot be negative.'), { statusCode: 400 });
     }
@@ -1834,10 +1862,10 @@ class MySqlDatabaseManager {
         ? Number(existing.received_inflow)
         : null;
 
-    if (payload.receivedInflow !== undefined && payload.receivedInflow !== null) {
-      const targetInflow = Math.round(Number(payload.receivedInflow) * 100) / 100;
+    if (payload.receivedInflow !== undefined && payload.receivedInflow !== null && String(payload.receivedInflow).trim() !== '') {
+      const targetInflow = Math.round(parseCleanNumber(payload.receivedInflow) * 100) / 100;
       if (!Number.isFinite(targetInflow) || targetInflow < 0) {
-        throw Object.assign(new Error('Received inflow cannot be negative.'), { statusCode: 400 });
+        throw Object.assign(new Error('Received inflow must be a valid amount (0 or greater).'), { statusCode: 400 });
       }
 
       const adjId = 'pay-cc-' + String(projectId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 56);
@@ -4672,7 +4700,8 @@ class MySqlDatabaseManager {
     const customerId = item.customerId ?? item.customer_id ?? existing?.customer_id ?? '';
     const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? 'Solar Customer';
     const milestone = item.milestone ?? existing?.milestone ?? 'Project Milestone';
-    const amount = Number(item.amount ?? existing?.amount) || 0;
+    const rawPaymentAmount = item.amount ?? existing?.amount;
+    const amount = rawPaymentAmount !== undefined && rawPaymentAmount !== null ? Number(rawPaymentAmount) : 0;
     const status = item.status ?? existing?.status ?? 'PENDING';
     const dueDate = (item.dueDate ?? item.due_date ?? existing?.due_date) ? this.toSqlDate(item.dueDate ?? item.due_date ?? existing?.due_date) : null;
     const rawPaid = item.paidDate ?? item.paymentDate ?? item.paid_date ?? existing?.paid_date;

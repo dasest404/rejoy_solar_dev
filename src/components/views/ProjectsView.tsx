@@ -22,6 +22,14 @@ const formatLakhValue = (amount: number): string => {
   return lakhs || '0';
 };
 
+const parseNumericInput = (raw: string): number | null => {
+  const cleaned = String(raw ?? '').replace(/,/g, '').trim();
+  if (!cleaned) return null;
+  if (!/^-?(\d+\.?\d*|\.\d+)$/.test(cleaned)) return null;
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? Math.round(num * 100) / 100 : null;
+};
+
 export const ProjectsView: React.FC = () => {
   const {
     openCustomerControlCenter,
@@ -98,14 +106,14 @@ export const ProjectsView: React.FC = () => {
   };
 
   const handleSaveSpecs = async (projectId: string) => {
-    const parsedCapacity = Number(editCapacityInput);
-    const parsedTotalValue = Number(editTotalValueInput);
+    const parsedCapacity = parseNumericInput(editCapacityInput);
+    const parsedTotalValue = parseNumericInput(editTotalValueInput);
 
-    if (!Number.isFinite(parsedCapacity) || parsedCapacity <= 0) {
+    if (parsedCapacity === null || parsedCapacity <= 0) {
       setEditError('Project Capacity must be greater than 0 kW.');
       return;
     }
-    if (!Number.isFinite(parsedTotalValue) || parsedTotalValue < 0) {
+    if (parsedTotalValue === null || parsedTotalValue < 0) {
       setEditError('Total Project Value cannot be negative.');
       return;
     }
@@ -114,8 +122,8 @@ export const ProjectsView: React.FC = () => {
     setEditError(null);
     try {
       await storageService.updateProjectSpecsAsync(projectId, {
-        capacityKw: Math.round(parsedCapacity * 100) / 100,
-        totalValue: Math.round(parsedTotalValue * 100) / 100
+        capacityKw: parsedCapacity,
+        totalValue: parsedTotalValue
       });
       setEditingProjectId(null);
       setLocalUpdateCounter(prev => prev + 1);
@@ -269,9 +277,9 @@ export const ProjectsView: React.FC = () => {
                           Project Capacity (kW)
                         </label>
                         <input
-                          type="number"
-                          min="0.1"
-                          step="0.1"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
                           value={editCapacityInput}
                           onChange={(e) => setEditCapacityInput(e.target.value)}
                           onKeyDown={(e) => {
@@ -288,9 +296,9 @@ export const ProjectsView: React.FC = () => {
                           Total Value (₹)
                         </label>
                         <input
-                          type="number"
-                          min="0"
-                          step="100"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
                           value={editTotalValueInput}
                           onChange={(e) => setEditTotalValueInput(e.target.value)}
                           onKeyDown={(e) => {
@@ -302,7 +310,7 @@ export const ProjectsView: React.FC = () => {
                           className="w-full px-2.5 py-1.5 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-amber-500"
                         />
                         <span className="block text-[10px] text-slate-500 mt-0.5">
-                          ≈ ₹{formatLakhValue(Number(editTotalValueInput || 0))}L
+                          ≈ ₹{formatLakhValue(parseNumericInput(editTotalValueInput) ?? 0)}L
                         </span>
                       </div>
                     </div>
