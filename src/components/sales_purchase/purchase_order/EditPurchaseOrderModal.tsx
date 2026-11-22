@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject } from '../../../types/solar';
+import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject, VendorBillAttachment } from '../../../types/solar';
 import { storageService } from '../../../services/storage';
 import { useApp } from '../../../context/AppContext';
 import { validatePOLineItem, validatePOLineItems } from '../../../services/validation';
+import { VendorBillAttachmentsSection } from './VendorBillAttachmentsSection';
 import {
   Edit3,
   X,
@@ -54,8 +55,28 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     return (order.items || []).map(it => ({ ...it }));
   });
 
+  // Vendor bills state
+  const [vendorBills, setVendorBills] = useState<VendorBillAttachment[]>(() => {
+    if (Array.isArray(order.vendorBills) && order.vendorBills.length > 0) {
+      return order.vendorBills;
+    }
+    if (order.vendorBillUrl) {
+      return [
+        {
+          id: `bill-${order.id}-primary`,
+          fileName: order.vendorBillName || 'Vendor Bill',
+          fileUrl: order.vendorBillUrl,
+          mimeType: order.vendorBillMimeType || 'application/pdf',
+          fileSize: Number(order.vendorBillSize || 0),
+          uploadedAt: order.vendorBillUploadedAt || order.updatedAt || order.createdAt || ''
+        }
+      ];
+    }
+    return [];
+  });
+
   // Adding new item state
-  const { refreshTrigger } = useApp();
+  const { refreshTrigger, triggerRefresh } = useApp();
   const warehouses = useMemo(() => storageService.getWarehouses(), [refreshTrigger]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [newItemQty, setNewItemQty] = useState<number>(10);
@@ -280,6 +301,12 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
       subtotal: totals.subtotal,
       taxAmount: totals.taxAmount,
       totalAmount: totals.grandTotal,
+      vendorBills,
+      vendorBillUrl: vendorBills[0]?.fileUrl || undefined,
+      vendorBillName: vendorBills[0]?.fileName || undefined,
+      vendorBillMimeType: vendorBills[0]?.mimeType || undefined,
+      vendorBillSize: vendorBills[0]?.fileSize || undefined,
+      vendorBillUploadedAt: vendorBills[0]?.uploadedAt || undefined,
       updatedAt: new Date().toISOString()
     };
 
@@ -693,7 +720,19 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
             </div>
           </div>
 
-          {/* Section 3: Procurement Notes */}
+          {/* Section 3: Vendor Bill Attachments */}
+          <VendorBillAttachmentsSection
+            poId={order.id}
+            bills={vendorBills}
+            onBillsChange={(nextBills) => {
+              setVendorBills(nextBills);
+              storageService.applyPurchaseOrderBillsUpdate(order.id, nextBills);
+              triggerRefresh();
+            }}
+            showToast={showToast}
+          />
+
+          {/* Section 4: Procurement Notes */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
               Procurement & Dispatch Notes

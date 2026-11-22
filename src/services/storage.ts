@@ -38,7 +38,9 @@ import {
   StockMovement,
   Warehouse,
   StockAuditRecord,
-  UserRole
+  UserRole,
+  PhotoAttachment,
+  VendorBillAttachment
 } from '../types/solar';
 import { SystemAclConfig, AclAuditLogEntry } from '../types/acl';
 import { DEFAULT_SYSTEM_ACL_CONFIG } from './aclDefaults';
@@ -1633,9 +1635,46 @@ class StorageService {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
+      }).then(async res => {
+        if (!res.ok) {
+          let errMsg = `Stage update failed (HTTP ${res.status})`;
+          try {
+            const errJson = await res.json();
+            errMsg = errJson?.error || errJson?.message || errMsg;
+          } catch {}
+          console.warn('[Backend Stage Sync Error]:', errMsg);
+          window.dispatchEvent(new CustomEvent('solarpulse_storage_error', { detail: { message: errMsg } }));
+        }
       }).catch(err => console.warn('[Backend Stage Sync]:', err));
     }
 
+    return project;
+  }
+
+  applyStagePhotosUpdate(
+    projectId: string,
+    stageIdOrKey: string,
+    photos: PhotoAttachment[]
+  ): SolarProject | null {
+    const projects = this.getProjects();
+    const projIdx = projects.findIndex(p => p.id === projectId);
+    if (projIdx === -1) return null;
+
+    const project = { ...projects[projIdx] };
+    const stages = [...(project.stages || [])];
+    const stageIdx = stages.findIndex(s => s.id === stageIdOrKey || s.stageKey === stageIdOrKey);
+    if (stageIdx === -1) return null;
+
+    stages[stageIdx] = {
+      ...stages[stageIdx],
+      photos: Array.isArray(photos) ? photos : []
+    };
+    project.stages = stages;
+
+    const nextProjects = [...projects];
+    nextProjects[projIdx] = project;
+    this.memStore.set(STORAGE_KEYS.PROJECTS, nextProjects);
+    this.notifyStorageUpdated();
     return project;
   }
 
@@ -2991,12 +3030,60 @@ class StorageService {
         };
       });
 
+      const vendorBills: VendorBillAttachment[] = Array.isArray(order.vendorBills)
+        ? order.vendorBills
+        : order.vendorBillUrl
+        ? [
+            {
+              id: `bill-${order.id}-primary`,
+              fileName: order.vendorBillName || 'Vendor Bill',
+              fileUrl: order.vendorBillUrl,
+              mimeType: order.vendorBillMimeType || 'application/pdf',
+              fileSize: Number(order.vendorBillSize || 0),
+              uploadedAt: order.vendorBillUploadedAt || order.updatedAt || order.createdAt || ''
+            }
+          ]
+        : [];
+      const primaryBill = vendorBills[0];
+
       return {
         ...order,
         items,
-        deliveryReceipts: order.deliveryReceipts || []
+        deliveryReceipts: order.deliveryReceipts || [],
+        vendorBills,
+        vendorBillUrl: primaryBill?.fileUrl ?? order.vendorBillUrl,
+        vendorBillName: primaryBill?.fileName ?? order.vendorBillName,
+        vendorBillMimeType: primaryBill?.mimeType ?? order.vendorBillMimeType,
+        vendorBillSize: primaryBill?.fileSize ?? order.vendorBillSize,
+        vendorBillUploadedAt: primaryBill?.uploadedAt ?? order.vendorBillUploadedAt
       };
     });
+  }
+
+  applyPurchaseOrderBillsUpdate(
+    poId: string,
+    vendorBills: VendorBillAttachment[]
+  ): PurchaseOrder | null {
+    const orders = this.get<PurchaseOrder[]>(STORAGE_KEYS.PURCHASE_ORDERS, initialPurchaseOrders);
+    const idx = orders.findIndex(o => o.id === poId);
+    if (idx === -1) return null;
+
+    const normalizedBills = Array.isArray(vendorBills) ? vendorBills : [];
+    const primary = normalizedBills[0];
+    const updatedOrder: PurchaseOrder = {
+      ...orders[idx],
+      vendorBills: normalizedBills,
+      vendorBillUrl: primary?.fileUrl || '',
+      vendorBillName: primary?.fileName || '',
+      vendorBillMimeType: primary?.mimeType || '',
+      vendorBillSize: primary?.fileSize || 0,
+      vendorBillUploadedAt: primary?.uploadedAt || ''
+    };
+    const nextOrders = [...orders];
+    nextOrders[idx] = updatedOrder;
+    this.memStore.set(STORAGE_KEYS.PURCHASE_ORDERS, nextOrders);
+    this.notifyStorageUpdated();
+    return updatedOrder;
   }
 
   private normalizePurchaseOrderForSave(order: PurchaseOrder): PurchaseOrder {
@@ -3044,6 +3131,8 @@ class StorageService {
       }
     }
 
+    const vendorBills = Array.isArray(order.vendorBills) ? order.vendorBills : [];
+    const primaryBill = vendorBills[0];
     const now = new Date().toISOString();
     return {
       ...order,
@@ -3054,6 +3143,12 @@ class StorageService {
       totalAmount,
       status,
       deliveryReceipts: order.deliveryReceipts || [],
+      vendorBills,
+      vendorBillUrl: primaryBill?.fileUrl ?? order.vendorBillUrl,
+      vendorBillName: primaryBill?.fileName ?? order.vendorBillName,
+      vendorBillMimeType: primaryBill?.mimeType ?? order.vendorBillMimeType,
+      vendorBillSize: primaryBill?.fileSize ?? order.vendorBillSize,
+      vendorBillUploadedAt: primaryBill?.uploadedAt ?? order.vendorBillUploadedAt,
       createdAt: order.createdAt || now,
       updatedAt: now
     };

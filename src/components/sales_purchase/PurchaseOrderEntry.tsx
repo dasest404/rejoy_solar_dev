@@ -2,7 +2,8 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storage';
-import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject, BankAccount } from '../../types/solar';
+import { apiClient } from '../../services/apiClient';
+import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject, BankAccount, VendorBillAttachment } from '../../types/solar';
 import { validatePOLineItem, validatePOLineItems, validatePurchaseOrder } from '../../services/validation';
 import {
   ShoppingCart,
@@ -25,11 +26,13 @@ import {
   PackageCheck,
   Loader2,
   CreditCard,
-  Landmark
+  Landmark,
+  Paperclip
 } from 'lucide-react';
 import { GoodsReceiptModal } from './purchase_order/GoodsReceiptModal';
 import { EditPurchaseOrderModal } from './purchase_order/EditPurchaseOrderModal';
 import { PurchaseOrderSummaryModal } from './purchase_order/PurchaseOrderSummaryModal';
+import { VendorBillAttachmentsSection } from './purchase_order/VendorBillAttachmentsSection';
 
 export const PurchaseOrderEntry: React.FC = () => {
   const { refreshTrigger, triggerRefresh, showToast } = useApp();
@@ -79,6 +82,8 @@ export const PurchaseOrderEntry: React.FC = () => {
   );
   const [formInvoiceRef, setFormInvoiceRef] = useState('');
   const [formNotes, setFormNotes] = useState('');
+  const [draftPoId, setDraftPoId] = useState(() => `po-${Date.now()}`);
+  const [formVendorBills, setFormVendorBills] = useState<VendorBillAttachment[]>([]);
   const [lineItemError, setLineItemError] = useState('');
   const [formError, setFormError] = useState('');
 
@@ -341,7 +346,7 @@ export const PurchaseOrderEntry: React.FC = () => {
     const selectedBank = activeBankAccounts.find(b => b.id === formBankAccountId);
 
     const newPO: PurchaseOrder & { paymentMode?: string; referenceNo?: string } = {
-      id: `po-${Date.now()}`,
+      id: draftPoId || `po-${Date.now()}`,
       purchaseNumber: `PO-${new Date().getFullYear()}-${String(orders.length + 1).padStart(3, '0')}`,
       vendorId: formVendorId,
       vendorName: vendor?.name || 'Authorized Supplier',
@@ -365,6 +370,12 @@ export const PurchaseOrderEntry: React.FC = () => {
       paymentDueDate: formPaymentDueDate,
       invoiceReference: formInvoiceRef.trim() || undefined,
       notes: formNotes.trim() || undefined,
+      vendorBills: formVendorBills,
+      vendorBillUrl: formVendorBills[0]?.fileUrl || undefined,
+      vendorBillName: formVendorBills[0]?.fileName || undefined,
+      vendorBillMimeType: formVendorBills[0]?.mimeType || undefined,
+      vendorBillSize: formVendorBills[0]?.fileSize || undefined,
+      vendorBillUploadedAt: formVendorBills[0]?.uploadedAt || undefined,
       stockUpdated: false,
       deliveryReceipts: [],
       createdAt: new Date().toISOString(),
@@ -391,6 +402,8 @@ export const PurchaseOrderEntry: React.FC = () => {
       setFormPaymentStatus('UNPAID');
       setFormInitialPaidAmount(0);
       setFormPaymentReference('');
+      setFormVendorBills([]);
+      setDraftPoId(`po-${Date.now()}`);
       setLineItemError('');
       setFormError('');
     } catch (err: unknown) {
@@ -400,6 +413,20 @@ export const PurchaseOrderEntry: React.FC = () => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleCloseCreateModal = () => {
+    if (isSaving) return;
+    if (formVendorBills.length > 0 && draftPoId) {
+      formVendorBills.forEach(bill => {
+        apiClient.deletePurchaseOrderBill(draftPoId, bill.id).catch(() => undefined);
+      });
+    }
+    setIsCreateModalOpen(false);
+    setFormVendorBills([]);
+    setDraftPoId(`po-${Date.now()}`);
+    setLineItemError('');
+    setFormError('');
   };
 
   const openPaymentModal = (order: PurchaseOrder) => {
@@ -595,8 +622,14 @@ export const PurchaseOrderEntry: React.FC = () => {
 
         <button
           id="btn-create-po"
-          onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors"
+          onClick={() => {
+            setDraftPoId(`po-${Date.now()}`);
+            setFormVendorBills([]);
+            setLineItemError('');
+            setFormError('');
+            setIsCreateModalOpen(true);
+          }}
+          className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-xs transition-colors cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           New Purchase Entry
@@ -680,6 +713,21 @@ export const PurchaseOrderEntry: React.FC = () => {
                         <span className="block text-[10px] text-slate-400 font-mono font-normal">
                           Ref: {order.invoiceReference}
                         </span>
+                      )}
+                      {((order.vendorBills && order.vendorBills.length > 0) || order.vendorBillUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingPOId(order.id)}
+                          className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[10px] font-semibold cursor-pointer"
+                          title="View attached vendor bill"
+                        >
+                          <Paperclip className="w-2.5 h-2.5" />
+                          <span>
+                            {order.vendorBills && order.vendorBills.length > 1
+                              ? `${order.vendorBills.length} Vendor Bills`
+                              : 'Bill Attached'}
+                          </span>
+                        </button>
                       )}
                     </td>
                     <td className="p-3.5 text-slate-600 max-w-xs truncate">
@@ -874,8 +922,9 @@ export const PurchaseOrderEntry: React.FC = () => {
                 </div>
               </div>
               <button
-                onClick={() => setIsCreateModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg"
+                type="button"
+                onClick={handleCloseCreateModal}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1278,6 +1327,14 @@ export const PurchaseOrderEntry: React.FC = () => {
                 )}
               </div>
 
+              {/* Vendor Bill Upload */}
+              <VendorBillAttachmentsSection
+                poId={draftPoId}
+                bills={formVendorBills}
+                onBillsChange={setFormVendorBills}
+                showToast={showToast}
+              />
+
               {/* Notes */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1305,11 +1362,7 @@ export const PurchaseOrderEntry: React.FC = () => {
                 <button
                   type="button"
                   disabled={isSaving}
-                  onClick={() => {
-                    setIsCreateModalOpen(false);
-                    setLineItemError('');
-                    setFormError('');
-                  }}
+                  onClick={handleCloseCreateModal}
                   className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Cancel

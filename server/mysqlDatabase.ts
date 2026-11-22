@@ -270,6 +270,12 @@ class MySqlDatabaseManager {
           refunded_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
           balance_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
           bank_account_id: "VARCHAR(64) DEFAULT ''",
+          vendor_bills_json: "LONGTEXT DEFAULT NULL",
+          vendor_bill_url: "TEXT DEFAULT NULL",
+          vendor_bill_name: "VARCHAR(255) DEFAULT ''",
+          vendor_bill_mime: "VARCHAR(128) DEFAULT ''",
+          vendor_bill_size: "BIGINT DEFAULT 0",
+          vendor_bill_uploaded_at: "VARCHAR(64) DEFAULT ''",
           updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
         },
         solar_boms: {
@@ -1729,10 +1735,19 @@ class MySqlDatabaseManager {
             \`notes\` = VALUES(\`notes\`), \`approved_by\` = VALUES(\`approved_by\`),
             \`rejection_reason\` = VALUES(\`rejection_reason\`)
         `;
+        let resolvedStageId = s.id;
+        const stageKeyVal = s.stageKey || s.key || 'stage';
+        if (!resolvedStageId) {
+          const [exStageRows]: any = await this.pool!.query(
+            'SELECT `id` FROM `solar_project_stages` WHERE `project_id` = ? AND `stage_key` = ? LIMIT 1',
+            [item.id, stageKeyVal]
+          );
+          resolvedStageId = exStageRows?.[0]?.id || `${item.id}-${stageKeyVal}`;
+        }
         await this.pool!.query(stageSql, [
-          s.id || `${item.id}-${s.stageKey || s.key || 'stage'}`,
+          resolvedStageId,
           item.id,
-          s.stageKey || s.key || 'stage',
+          stageKeyVal,
           s.title || s.name || 'Stage',
           Number(s.order ?? s.stageOrder) || 1,
           s.department || 'Operations',
@@ -1869,6 +1884,106 @@ class MySqlDatabaseManager {
 
     const saved = await this.saveProject(project);
     return saved;
+  }
+
+  public async addStagePhotoToProject(
+    projectId: string,
+    stageKey: string,
+    photo: any
+  ): Promise<{ photo: any; photos: any[] } | null> {
+    this.assertDbConnected();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [projRows]: any = await conn.query('SELECT `id` FROM `solar_projects` WHERE `id` = ? LIMIT 1', [projectId]);
+      if (!projRows || projRows.length === 0) {
+        await conn.rollback();
+        return null;
+      }
+      const [stageRows]: any = await conn.query(
+        'SELECT `id`, `photos_json` FROM `solar_project_stages` WHERE `project_id` = ? AND (`stage_key` = ? OR `id` = ?) LIMIT 1 FOR UPDATE',
+        [projectId, stageKey, stageKey]
+      );
+      let photos: any[] = [];
+      if (!stageRows || stageRows.length === 0) {
+        const sId = `${projectId}-${String(stageKey).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        photos = [photo];
+        await conn.query(
+          `INSERT INTO \`solar_project_stages\` (
+            \`id\`, \`project_id\`, \`stage_key\`, \`title\`, \`stage_order\`,
+            \`department\`, \`assigned_role\`, \`status\`, \`priority\`,
+            \`checklist_json\`, \`photos_json\`, \`documents_json\`
+          ) VALUES (?, ?, ?, ?, 1, 'Operations', 'Technician', 'IN PROGRESS', 'MEDIUM', '[]', ?, '[]')`,
+          [sId, projectId, stageKey, stageKey.replace(/_/g, ' '), JSON.stringify(photos)]
+        );
+      } else {
+        let existing: any[] = [];
+        try {
+          existing = stageRows[0].photos_json ? JSON.parse(stageRows[0].photos_json) : [];
+        } catch {
+          existing = [];
+        }
+        if (!Array.isArray(existing)) existing = [];
+        photos = [...existing, photo];
+        await conn.query('UPDATE `solar_project_stages` SET `photos_json` = ? WHERE `id` = ?', [
+          JSON.stringify(photos),
+          stageRows[0].id
+        ]);
+      }
+      await conn.commit();
+      return { photo, photos };
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async removeStagePhotoFromProject(
+    projectId: string,
+    stageKey: string,
+    photoId: string
+  ): Promise<{ removedPhoto: any | null; photos: any[] } | null> {
+    this.assertDbConnected();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [stageRows]: any = await conn.query(
+        'SELECT `id`, `photos_json` FROM `solar_project_stages` WHERE `project_id` = ? AND (`stage_key` = ? OR `id` = ?) LIMIT 1 FOR UPDATE',
+        [projectId, stageKey, stageKey]
+      );
+      if (!stageRows || stageRows.length === 0) {
+        await conn.rollback();
+        return null;
+      }
+      let existing: any[] = [];
+      try {
+        existing = stageRows[0].photos_json ? JSON.parse(stageRows[0].photos_json) : [];
+      } catch {
+        existing = [];
+      }
+      if (!Array.isArray(existing)) existing = [];
+      let removedPhoto: any = null;
+      const nextPhotos = existing.filter(p => {
+        if (p && p.id === photoId) {
+          removedPhoto = p;
+          return false;
+        }
+        return true;
+      });
+      await conn.query('UPDATE `solar_project_stages` SET `photos_json` = ? WHERE `id` = ?', [
+        JSON.stringify(nextPhotos),
+        stageRows[0].id
+      ]);
+      await conn.commit();
+      return { removedPhoto, photos: nextPhotos };
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   public async updateProjectProgress(
@@ -5387,9 +5502,59 @@ class MySqlDatabaseManager {
     return true;
   }
 
-  // ==========================================================
-  // CRUD: PURCHASE ORDERS
-  // ==========================================================
+  private mapVendorBillsFromRow(r: any): {
+    vendorBills: any[];
+    vendorBillUrl: string;
+    vendorBillName: string;
+    vendorBillMimeType: string;
+    vendorBillSize: number;
+    vendorBillUploadedAt: string;
+  } {
+    let bills: any[] = [];
+    if (r?.vendor_bills_json) {
+      try {
+        const parsed = JSON.parse(r.vendor_bills_json);
+        if (Array.isArray(parsed)) {
+          bills = parsed
+            .filter((b: any) => b && b.fileUrl)
+            .map((b: any) => ({
+              id: String(b.id || `bill-${Date.now()}`),
+              fileName: String(b.fileName || 'vendor-bill'),
+              fileUrl: String(b.fileUrl),
+              filePath: String(b.filePath || ''),
+              mimeType: String(b.mimeType || 'application/pdf'),
+              fileSize: Number(b.fileSize || 0),
+              uploadedAt: String(b.uploadedAt || new Date().toISOString()),
+              uploadedBy: String(b.uploadedBy || '')
+            }));
+        }
+      } catch {
+        bills = [];
+      }
+    }
+    if (bills.length === 0 && r?.vendor_bill_url) {
+      bills.push({
+        id: `bill-primary-${String(r.id || 'po').replace(/[^a-zA-Z0-9_-]/g, '')}`,
+        fileName: String(r.vendor_bill_name || 'Vendor Bill'),
+        fileUrl: String(r.vendor_bill_url),
+        filePath: '',
+        mimeType: String(r.vendor_bill_mime || 'application/pdf'),
+        fileSize: Number(r.vendor_bill_size || 0),
+        uploadedAt: String(r.vendor_bill_uploaded_at || r.updated_at || new Date().toISOString()),
+        uploadedBy: ''
+      });
+    }
+    const primary = bills[0] || null;
+    return {
+      vendorBills: bills,
+      vendorBillUrl: primary ? primary.fileUrl : String(r?.vendor_bill_url || ''),
+      vendorBillName: primary ? primary.fileName : String(r?.vendor_bill_name || ''),
+      vendorBillMimeType: primary ? primary.mimeType : String(r?.vendor_bill_mime || ''),
+      vendorBillSize: primary ? Number(primary.fileSize || 0) : Number(r?.vendor_bill_size || 0),
+      vendorBillUploadedAt: primary ? primary.uploadedAt : String(r?.vendor_bill_uploaded_at || '')
+    };
+  }
+
   public async getPurchaseOrders(): Promise<any[]> {
     if (!this.isConnected) return this.getFallbackItems('purchase_orders');
     this.assertDbConnected();
@@ -5412,6 +5577,7 @@ class MySqlDatabaseManager {
           ? Math.max(0, Number(r.balance_amount))
           : (String(r.payment_status || '').toUpperCase() === 'PAID' ? 0 : Math.max(0, totalAmount - returnedAmount - netPaid))
       );
+      const billMeta = this.mapVendorBillsFromRow(r);
       return {
         id: r.id,
         purchaseNumber: r.po_number,
@@ -5446,6 +5612,12 @@ class MySqlDatabaseManager {
         items: r.items_json ? JSON.parse(r.items_json) : [],
         deliveryReceipts: receipts,
         receipts,
+        vendorBills: billMeta.vendorBills,
+        vendorBillUrl: billMeta.vendorBillUrl,
+        vendorBillName: billMeta.vendorBillName,
+        vendorBillMimeType: billMeta.vendorBillMimeType,
+        vendorBillSize: billMeta.vendorBillSize,
+        vendorBillUploadedAt: billMeta.vendorBillUploadedAt,
         notes: r.notes || '',
         createdAt: r.created_at,
         updatedAt: r.updated_at || r.created_at
@@ -5503,6 +5675,32 @@ class MySqlDatabaseManager {
     const receiptsJson = typeof rawReceipts === 'string' ? rawReceipts : JSON.stringify(rawReceipts);
     const notes = item.notes ?? existing?.notes ?? '';
 
+    let vendorBills: any[] = [];
+    if (Array.isArray(item.vendorBills)) {
+      vendorBills = item.vendorBills.filter((b: any) => b && b.fileUrl);
+    } else if (existing) {
+      vendorBills = this.mapVendorBillsFromRow(existing).vendorBills;
+    }
+    if (vendorBills.length === 0 && item.vendorBillUrl) {
+      vendorBills.push({
+        id: `bill-primary-${String(id).replace(/[^a-zA-Z0-9_-]/g, '')}`,
+        fileName: String(item.vendorBillName || 'Vendor Bill'),
+        fileUrl: String(item.vendorBillUrl),
+        filePath: '',
+        mimeType: String(item.vendorBillMimeType || 'application/pdf'),
+        fileSize: Number(item.vendorBillSize || 0),
+        uploadedAt: String(item.vendorBillUploadedAt || new Date().toISOString()),
+        uploadedBy: String(actor?.name || '')
+      });
+    }
+    const primaryBill = vendorBills[0] || null;
+    const vendorBillsJson = JSON.stringify(vendorBills);
+    const vendorBillUrl = primaryBill ? String(primaryBill.fileUrl) : (Array.isArray(item.vendorBills) ? '' : String(existing?.vendor_bill_url || ''));
+    const vendorBillName = primaryBill ? String(primaryBill.fileName) : (Array.isArray(item.vendorBills) ? '' : String(existing?.vendor_bill_name || ''));
+    const vendorBillMime = primaryBill ? String(primaryBill.mimeType) : (Array.isArray(item.vendorBills) ? '' : String(existing?.vendor_bill_mime || ''));
+    const vendorBillSize = primaryBill ? Number(primaryBill.fileSize || 0) : (Array.isArray(item.vendorBills) ? 0 : Number(existing?.vendor_bill_size || 0));
+    const vendorBillUploadedAt = primaryBill ? String(primaryBill.uploadedAt || '') : (Array.isArray(item.vendorBills) ? '' : String(existing?.vendor_bill_uploaded_at || ''));
+
     const sql = `
       INSERT INTO \`solar_purchase_orders\` (
         \`id\`, \`po_number\`, \`vendor_id\`, \`vendor_name\`, \`po_date\`,
@@ -5511,8 +5709,10 @@ class MySqlDatabaseManager {
         \`invoice_reference\`, \`stock_updated\`, \`received_date\`,
         \`items_json\`, \`subtotal\`, \`gst_amount\`, \`total_amount\`,
         \`paid_amount\`, \`returned_amount\`, \`refunded_amount\`, \`balance_amount\`, \`bank_account_id\`,
-        \`status\`, \`payment_status\`, \`receipts_json\`, \`notes\`
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`status\`, \`payment_status\`, \`receipts_json\`,
+        \`vendor_bills_json\`, \`vendor_bill_url\`, \`vendor_bill_name\`, \`vendor_bill_mime\`, \`vendor_bill_size\`, \`vendor_bill_uploaded_at\`,
+        \`notes\`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         \`po_number\` = VALUES(\`po_number\`), \`vendor_id\` = VALUES(\`vendor_id\`),
         \`vendor_name\` = VALUES(\`vendor_name\`), \`po_date\` = VALUES(\`po_date\`),
@@ -5527,7 +5727,14 @@ class MySqlDatabaseManager {
         \`refunded_amount\` = VALUES(\`refunded_amount\`), \`balance_amount\` = VALUES(\`balance_amount\`),
         \`bank_account_id\` = VALUES(\`bank_account_id\`),
         \`status\` = VALUES(\`status\`), \`payment_status\` = VALUES(\`payment_status\`),
-        \`receipts_json\` = VALUES(\`receipts_json\`), \`notes\` = VALUES(\`notes\`)
+        \`receipts_json\` = VALUES(\`receipts_json\`),
+        \`vendor_bills_json\` = VALUES(\`vendor_bills_json\`),
+        \`vendor_bill_url\` = VALUES(\`vendor_bill_url\`),
+        \`vendor_bill_name\` = VALUES(\`vendor_bill_name\`),
+        \`vendor_bill_mime\` = VALUES(\`vendor_bill_mime\`),
+        \`vendor_bill_size\` = VALUES(\`vendor_bill_size\`),
+        \`vendor_bill_uploaded_at\` = VALUES(\`vendor_bill_uploaded_at\`),
+        \`notes\` = VALUES(\`notes\`)
     `;
     await this.pool!.query(sql, [
       id, poNumber, vendorId, vendorName, poDate,
@@ -5536,7 +5743,9 @@ class MySqlDatabaseManager {
       invoiceReference, stockUpdated, receivedDate,
       itemsJson, subtotal, gstAmount, totalAmount,
       storedPaid, returnedAmount, refundedAmount, balanceAmount, bankAccountId,
-      status, paymentStatus, receiptsJson, notes
+      status, paymentStatus, receiptsJson,
+      vendorBillsJson, vendorBillUrl, vendorBillName, vendorBillMime, vendorBillSize, vendorBillUploadedAt,
+      notes
     ]);
 
     if (initialPayToRecord > 0.01) {
@@ -5599,6 +5808,12 @@ class MySqlDatabaseManager {
       paymentStatus,
       deliveryReceipts: receiptsArr,
       receipts: receiptsArr,
+      vendorBills,
+      vendorBillUrl,
+      vendorBillName,
+      vendorBillMimeType: vendorBillMime,
+      vendorBillSize,
+      vendorBillUploadedAt,
       notes,
       createdAt: item.createdAt || existing?.created_at || new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -5609,6 +5824,75 @@ class MySqlDatabaseManager {
     else items.unshift(saved);
     this.setFallbackItems('purchase_orders', items);
     return saved;
+  }
+
+  public async attachBillToPurchaseOrder(poId: string, bill: any): Promise<any[]> {
+    this.assertDbConnected();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? LIMIT 1 FOR UPDATE', [poId]);
+      if (!rows || rows.length === 0) {
+        await conn.commit();
+        return [bill];
+      }
+      const existingBills = this.mapVendorBillsFromRow(rows[0]).vendorBills;
+      const allBills = [...existingBills, bill];
+      const primary = allBills[0];
+      await conn.query(
+        'UPDATE `solar_purchase_orders` SET `vendor_bills_json` = ?, `vendor_bill_url` = ?, `vendor_bill_name` = ?, `vendor_bill_mime` = ?, `vendor_bill_size` = ?, `vendor_bill_uploaded_at` = ? WHERE `id` = ?',
+        [JSON.stringify(allBills), primary.fileUrl, primary.fileName, primary.mimeType, Number(primary.fileSize || 0), primary.uploadedAt, poId]
+      );
+      await conn.commit();
+      return allBills;
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  public async removeBillFromPurchaseOrder(poId: string, billId: string): Promise<{ removedBill: any | null; vendorBills: any[] }> {
+    this.assertDbConnected();
+    const conn = await this.pool!.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? LIMIT 1 FOR UPDATE', [poId]);
+      if (!rows || rows.length === 0) {
+        await conn.commit();
+        return { removedBill: null, vendorBills: [] };
+      }
+      const existingBills = this.mapVendorBillsFromRow(rows[0]).vendorBills;
+      let removedBill: any = null;
+      const nextBills = existingBills.filter(b => {
+        if (b.id === billId) {
+          removedBill = b;
+          return false;
+        }
+        return true;
+      });
+      const primary = nextBills[0] || null;
+      await conn.query(
+        'UPDATE `solar_purchase_orders` SET `vendor_bills_json` = ?, `vendor_bill_url` = ?, `vendor_bill_name` = ?, `vendor_bill_mime` = ?, `vendor_bill_size` = ?, `vendor_bill_uploaded_at` = ? WHERE `id` = ?',
+        [
+          JSON.stringify(nextBills),
+          primary ? primary.fileUrl : '',
+          primary ? primary.fileName : '',
+          primary ? primary.mimeType : '',
+          primary ? Number(primary.fileSize || 0) : 0,
+          primary ? primary.uploadedAt : '',
+          poId
+        ]
+      );
+      await conn.commit();
+      return { removedBill, vendorBills: nextBills };
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   public async deletePurchaseOrder(id: string): Promise<boolean> {
@@ -5632,6 +5916,19 @@ class MySqlDatabaseManager {
         await accountingService.recalculateAccountBalances(this.pool!).catch(() => {});
       }
       await this.pool!.query('DELETE FROM `solar_acc_vendor_bills` WHERE `id` = ?', [vbRows[0].id]).catch(() => {});
+    }
+    const exPo = await this.getExistingRow('solar_purchase_orders', id).catch(() => null);
+    if (exPo) {
+      const billInfo = this.mapVendorBillsFromRow(exPo);
+      for (const b of billInfo.vendorBills) {
+        if (b?.filePath) {
+          const uploadsBase = path.resolve(process.cwd(), 'uploads');
+          const resolved = path.resolve(uploadsBase, b.filePath);
+          if (resolved.startsWith(uploadsBase + path.sep) && fs.existsSync(resolved)) {
+            try { fs.unlinkSync(resolved); } catch {}
+          }
+        }
+      }
     }
     await this.pool!.query('DELETE FROM `solar_purchase_orders` WHERE `id` = ?', [id]);
     const items = this.getFallbackItems('purchase_orders').filter(p => p.id !== id);

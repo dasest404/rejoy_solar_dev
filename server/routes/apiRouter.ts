@@ -1211,6 +1211,222 @@ apiRouter.patch(['/projects/:id/stages/:stageKey', '/projects/:id/stages/:stageK
   }
 });
 
+function validateAndDecodeUploadNode(
+  rawFileName: string,
+  fileData: string,
+  mode: 'image' | 'bill'
+): { buffer: Buffer; ext: string; mimeType: string; safeFileName: string; fileSize: number } {
+  if (!rawFileName || !fileData || typeof fileData !== 'string') {
+    throw Object.assign(new Error('Valid file name and file payload are required.'), { statusCode: 400 });
+  }
+  const base64Data = fileData.includes(',') ? fileData.split(',')[1] : fileData;
+  const buffer = Buffer.from(base64Data.replace(/\s+/g, ''), 'base64');
+  if (buffer.length === 0) {
+    throw Object.assign(new Error('Invalid or empty file payload.'), { statusCode: 400 });
+  }
+  if (buffer.length > 10 * 1024 * 1024) {
+    throw Object.assign(new Error('Uploaded file exceeds the 10 MB size limit.'), { statusCode: 400 });
+  }
+
+  let safeFileName = path.basename(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+  if (!safeFileName || safeFileName === '.' || safeFileName === '..') {
+    safeFileName = 'attachment';
+  }
+  const ext = path.extname(safeFileName).toLowerCase().replace('.', '');
+
+  let detectedExt: string | null = null;
+  let detectedMime: string | null = null;
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    detectedExt = 'jpg';
+    detectedMime = 'image/jpeg';
+  } else if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    detectedExt = 'png';
+    detectedMime = 'image/png';
+  } else if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    detectedExt = 'webp';
+    detectedMime = 'image/webp';
+  } else if (/^\s*%PDF-/.test(buffer.subarray(0, 16).toString('latin1'))) {
+    detectedExt = 'pdf';
+    detectedMime = 'application/pdf';
+  }
+
+  if (mode === 'image') {
+    const allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+    if (!detectedExt || !['jpg', 'png', 'webp'].includes(detectedExt)) {
+      throw Object.assign(new Error('Unsupported or invalid image file. Only JPG, JPEG, PNG, and WebP images are allowed.'), { statusCode: 400 });
+    }
+    if (ext && !allowedExts.includes(ext)) {
+      throw Object.assign(new Error('Unsupported file extension. Only JPG, JPEG, PNG, and WebP images are allowed.'), { statusCode: 400 });
+    }
+  } else {
+    const allowedExts = ['pdf', 'jpg', 'jpeg', 'png'];
+    if (!detectedExt || !['pdf', 'jpg', 'png'].includes(detectedExt)) {
+      throw Object.assign(new Error('Unsupported file format. Only valid PDF, JPG, JPEG, or PNG vendor bills are allowed.'), { statusCode: 400 });
+    }
+    if (ext && !allowedExts.includes(ext)) {
+      throw Object.assign(new Error('Unsupported file extension. Only PDF, JPG, JPEG, and PNG files are allowed.'), { statusCode: 400 });
+    }
+  }
+
+  if (!ext) safeFileName += `.${detectedExt}`;
+  return {
+    buffer,
+    ext: detectedExt,
+    mimeType: detectedMime,
+    safeFileName,
+    fileSize: buffer.length
+  };
+}
+
+// POST /api/projects/:id/stages/:stageKey/photos - Persistent Stage Workflow Image Upload
+apiRouter.post(['/projects/:id/stages/:stageKey/photos', '/projects/:id/stages/:stageKey/photos/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to project stages and photos.' });
+    }
+
+    const { id: projectId, stageKey } = req.params;
+    const { fileName, fileData, photoData, caption, gpsCoordinates } = req.body || {};
+    const decoded = validateAndDecodeUploadNode(
+      String(fileName || 'stage-photo.jpg'),
+      String(fileData || photoData || ''),
+      'image'
+    );
+
+    const safeProjId = path.basename(projectId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeStageKey = path.basename(stageKey).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const photoId = `photo-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const diskFileName = `${photoId}.${decoded.ext}`;
+
+    const uploadsBase = path.resolve(process.cwd(), 'uploads');
+    const stageDir = path.resolve(uploadsBase, 'projects', safeProjId, safeStageKey);
+    if (!stageDir.startsWith(uploadsBase + path.sep)) {
+      return res.status(400).json({ success: false, error: 'Invalid upload directory path.' });
+    }
+    fs.mkdirSync(stageDir, { recursive: true });
+    const fullPath = path.resolve(stageDir, diskFileName);
+    fs.writeFileSync(fullPath, decoded.buffer);
+
+    const relativePath = `projects/${safeProjId}/${safeStageKey}/${diskFileName}`;
+    const fileUrl = `/api/uploads/projects/${encodeURIComponent(safeProjId)}/${encodeURIComponent(safeStageKey)}/${encodeURIComponent(diskFileName)}`;
+
+    const newPhoto = {
+      id: photoId,
+      url: fileUrl,
+      fileName: decoded.safeFileName,
+      filePath: relativePath,
+      mimeType: decoded.mimeType,
+      fileSize: decoded.fileSize,
+      caption: String(caption || '').trim() || decoded.safeFileName.replace(/\.[^/.]+$/, '') || 'Site Photo',
+      uploadedBy: actor?.name || 'Field Engineer',
+      uploadedAt: new Date().toISOString(),
+      gpsCoordinates: String(gpsCoordinates || '').trim()
+    };
+
+    const result = await dbManager.addStagePhotoToProject(projectId, stageKey, newPhoto);
+    if (!result) {
+      try { if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath); } catch {}
+      return res.status(404).json({ success: false, error: 'Project not found in MySQL.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Stage workflow image uploaded and saved to MySQL.',
+      photo: result.photo,
+      photos: result.photos
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to upload stage photo');
+  }
+});
+
+// DELETE /api/projects/:id/stages/:stageKey/photos/:photoId
+apiRouter.delete(['/projects/:id/stages/:stageKey/photos/:photoId', '/projects/:id/stages/:stageKey/photos/:photoId/'], async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required.' });
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers have read-only access to project stages and photos.' });
+    }
+    const { id: projectId, stageKey, photoId } = req.params;
+    const result = await dbManager.removeStagePhotoFromProject(projectId, stageKey, photoId);
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Stage not found.' });
+    }
+    if (result.removedPhoto?.filePath) {
+      const uploadsBase = path.resolve(process.cwd(), 'uploads');
+      const fp = path.resolve(uploadsBase, result.removedPhoto.filePath);
+      if (fp.startsWith(uploadsBase + path.sep) && fs.existsSync(fp)) {
+        try { fs.unlinkSync(fp); } catch {}
+      }
+    }
+    res.json({ success: true, photos: result.photos, message: 'Stage photo removed from server and MySQL.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete stage photo');
+  }
+});
+
+// Authenticated streaming endpoint for project stage workflow images
+apiRouter.get('/uploads/projects/:projectId/:stageKey/:filename', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required.' });
+
+    const { projectId, stageKey, filename } = req.params;
+    if (projectId.includes('..') || stageKey.includes('..') || filename.includes('..')) {
+      return res.status(400).json({ success: false, error: 'Invalid file path access request.' });
+    }
+
+    const safeProjId = path.basename(projectId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeStageKey = path.basename(stageKey).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeName = path.basename(filename);
+
+    if (isCustomerUser(actor)) {
+      const projects = await dbManager.getProjects();
+      const proj = projects.find((p: any) => p.id === projectId || p.id === safeProjId);
+      const linkedCustId = String(actor.linkedEntityId || actor.customerId || '').trim();
+      const actorEmail = String(actor.email || '').trim().toLowerCase();
+      let owns = Boolean(proj && linkedCustId && proj.customerId === linkedCustId);
+      if (!owns && proj && actorEmail) {
+        const custs = await dbManager.getCustomers();
+        const c = custs.find((x: any) => x.id === proj.customerId);
+        if (c && String(c.email || '').trim().toLowerCase() === actorEmail) owns = true;
+      }
+      if (!owns) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You do not have permission to view this project photo.' });
+      }
+    }
+
+    const uploadsBase = path.resolve(process.cwd(), 'uploads');
+    const fullPath = path.resolve(uploadsBase, 'projects', safeProjId, safeStageKey, safeName);
+    if (!fullPath.startsWith(uploadsBase + path.sep) || !fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      return res.status(404).json({ success: false, error: 'Stage photo not found on server.' });
+    }
+
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${safeName.replace(/"/g, '')}"`);
+    res.sendFile(fullPath);
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to deliver stage photo');
+  }
+});
+
 // Dedicated Project Progress Update API
 apiRouter.put(['/projects/:id/progress', '/projects/:id/progress/'], async (req: Request, res: Response) => {
   try {
@@ -1905,6 +2121,121 @@ apiRouter.put('/purchase-orders/:id', async (req: Request, res: Response) => {
     res.json({ success: true, data: saved });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update purchase order');
+  }
+});
+
+apiRouter.post('/purchase-orders/:id/bills', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot upload vendor bills.' });
+
+    const { id: poId } = req.params;
+    const { fileName, fileData } = req.body || {};
+    const decoded = validateAndDecodeUploadNode(
+      String(fileName || 'vendor-bill.pdf'),
+      String(fileData || ''),
+      'bill'
+    );
+
+    const safePoId = path.basename(poId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const billId = `bill-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const diskFileName = `${billId}_${decoded.safeFileName}`;
+
+    const uploadsBase = path.resolve(process.cwd(), 'uploads');
+    const billsDir = path.resolve(uploadsBase, 'purchase-bills', safePoId);
+    if (!billsDir.startsWith(uploadsBase + path.sep)) {
+      return res.status(400).json({ success: false, error: 'Invalid upload directory path.' });
+    }
+    fs.mkdirSync(billsDir, { recursive: true });
+    const fullPath = path.resolve(billsDir, diskFileName);
+    fs.writeFileSync(fullPath, decoded.buffer);
+
+    const relativePath = `purchase-bills/${safePoId}/${diskFileName}`;
+    const fileUrl = `/api/uploads/purchase-bills/${encodeURIComponent(safePoId)}/${encodeURIComponent(diskFileName)}`;
+
+    const billRecord = {
+      id: billId,
+      fileName: decoded.safeFileName,
+      fileUrl,
+      filePath: relativePath,
+      mimeType: decoded.mimeType,
+      fileSize: decoded.fileSize,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: actor?.name || 'Purchase Manager'
+    };
+
+    const vendorBills = await dbManager.attachBillToPurchaseOrder(poId, billRecord);
+    res.json({
+      success: true,
+      message: 'Vendor bill uploaded and attached successfully.',
+      bill: billRecord,
+      vendorBills
+    });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to upload vendor bill');
+  }
+});
+
+apiRouter.delete('/purchase-orders/:id/bills/:billId', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
+    if (isCustomerUser(actor)) return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot delete vendor bills.' });
+
+    const { id: poId, billId } = req.params;
+    const { removedBill, vendorBills } = await dbManager.removeBillFromPurchaseOrder(poId, billId);
+    const uploadsBase = path.resolve(process.cwd(), 'uploads');
+    if (removedBill?.filePath) {
+      const fp = path.resolve(uploadsBase, removedBill.filePath);
+      if (fp.startsWith(uploadsBase + path.sep) && fs.existsSync(fp)) {
+        try { fs.unlinkSync(fp); } catch {}
+      }
+    } else {
+      const safePoId = path.basename(poId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const dir = path.resolve(uploadsBase, 'purchase-bills', safePoId);
+      const safePrefix = billId.replace(/[^a-zA-Z0-9_-]/g, '');
+      if (dir.startsWith(uploadsBase + path.sep) && fs.existsSync(dir) && safePrefix) {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.startsWith(`${safePrefix}_`)) {
+            try { fs.unlinkSync(path.resolve(dir, f)); } catch {}
+          }
+        }
+      }
+    }
+    res.json({ success: true, vendorBills, message: 'Vendor bill deleted.' });
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to delete vendor bill');
+  }
+});
+
+// Authenticated streaming endpoint for Purchase Order Vendor Bills
+apiRouter.get('/uploads/purchase-bills/:poId/:filename', async (req: Request, res: Response) => {
+  try {
+    const actor = (req as any).user;
+    if (!actor) return res.status(401).json({ success: false, error: 'Authentication required.' });
+    if (isCustomerUser(actor)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers cannot access vendor purchase bills.' });
+    }
+
+    const { poId, filename } = req.params;
+    if (poId.includes('..') || filename.includes('..')) {
+      return res.status(400).json({ success: false, error: 'Invalid file path access request.' });
+    }
+
+    const safePoId = path.basename(poId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeName = path.basename(filename);
+    const uploadsBase = path.resolve(process.cwd(), 'uploads');
+    const fullPath = path.resolve(uploadsBase, 'purchase-bills', safePoId, safeName);
+    if (!fullPath.startsWith(uploadsBase + path.sep) || !fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      return res.status(404).json({ success: false, error: 'Vendor bill not found on server.' });
+    }
+
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${safeName.replace(/"/g, '')}"`);
+    res.sendFile(fullPath);
+  } catch (err: any) {
+    sendApiError(res, err, 'Failed to deliver vendor bill');
   }
 });
 

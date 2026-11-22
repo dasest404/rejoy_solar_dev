@@ -1916,6 +1916,130 @@ class ApiClient {
     const data = await this.parseJsonResponse(res, 'Failed to sync ERP vouchers into General Ledger');
     return data.data;
   }
+
+  // --- Stage Workflow Photos & Vendor Bill Attachments ---
+  resolveMediaUrl(url: string): string {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('data:') || raw.startsWith('blob:') || /^https?:\/\//i.test(raw)) {
+      return raw;
+    }
+    if (raw.startsWith('/api/') && this.baseUrl !== '/api') {
+      return `${this.baseUrl}${raw.slice(4)}`;
+    }
+    return raw;
+  }
+
+  async fetchAuthorizedBlobUrl(url: string): Promise<{ blobUrl: string; mimeType: string }> {
+    const resolved = this.resolveMediaUrl(url);
+    if (!resolved) {
+      throw new Error('Attachment URL is empty.');
+    }
+    if (resolved.startsWith('data:') || resolved.startsWith('blob:')) {
+      const mimeMatch = resolved.match(/^data:([^;]+);/);
+      return {
+        blobUrl: resolved,
+        mimeType: mimeMatch ? mimeMatch[1] : 'application/octet-stream'
+      };
+    }
+
+    const res = await this.request(resolved, { method: 'GET' });
+    if (!res.ok) {
+      let msg = `Failed to load attachment (HTTP ${res.status})`;
+      try {
+        const errData = await res.json();
+        msg = errData?.error || errData?.message || msg;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const blob = await res.blob();
+    const mimeType = blob.type || res.headers.get('Content-Type') || 'application/octet-stream';
+    const blobUrl = URL.createObjectURL(blob);
+    return { blobUrl, mimeType };
+  }
+
+  async uploadStagePhoto(
+    projectId: string,
+    stageKey: string,
+    payload: {
+      fileName: string;
+      fileData: string;
+      caption?: string;
+      gpsCoordinates?: string;
+    }
+  ): Promise<{ photo: any; photos: any[] }> {
+    const res = await this.request(
+      `${this.baseUrl}/projects/${encodeURIComponent(projectId)}/stages/${encodeURIComponent(stageKey)}/photos`,
+      {
+        method: 'POST',
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      }
+    );
+    const data = await this.parseJsonResponse(res, 'Failed to upload stage workflow photo');
+    return {
+      photo: data.photo,
+      photos: Array.isArray(data.photos) ? data.photos : []
+    };
+  }
+
+  async deleteStagePhoto(
+    projectId: string,
+    stageKey: string,
+    photoId: string
+  ): Promise<{ photos: any[] }> {
+    const res = await this.request(
+      `${this.baseUrl}/projects/${encodeURIComponent(projectId)}/stages/${encodeURIComponent(stageKey)}/photos/${encodeURIComponent(photoId)}`,
+      {
+        method: 'DELETE',
+        headers: this.getAuthHeaders()
+      }
+    );
+    const data = await this.parseJsonResponse(res, 'Failed to delete stage workflow photo');
+    return {
+      photos: Array.isArray(data.photos) ? data.photos : []
+    };
+  }
+
+  async uploadPurchaseOrderBill(
+    poId: string,
+    payload: {
+      fileName: string;
+      fileData: string;
+    }
+  ): Promise<{ bill: any; vendorBills: any[] }> {
+    const res = await this.request(
+      `${this.baseUrl}/purchase-orders/${encodeURIComponent(poId)}/bills`,
+      {
+        method: 'POST',
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      }
+    );
+    const data = await this.parseJsonResponse(res, 'Failed to upload vendor bill');
+    return {
+      bill: data.bill,
+      vendorBills: Array.isArray(data.vendorBills) ? data.vendorBills : []
+    };
+  }
+
+  async deletePurchaseOrderBill(
+    poId: string,
+    billId: string
+  ): Promise<{ vendorBills: any[] }> {
+    const res = await this.request(
+      `${this.baseUrl}/purchase-orders/${encodeURIComponent(poId)}/bills/${encodeURIComponent(billId)}`,
+      {
+        method: 'DELETE',
+        headers: this.getAuthHeaders()
+      }
+    );
+    const data = await this.parseJsonResponse(res, 'Failed to delete vendor bill');
+    return {
+      vendorBills: Array.isArray(data.vendorBills) ? data.vendorBills : []
+    };
+  }
 }
 
 export interface EmailSettingsInfo {

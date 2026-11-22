@@ -136,6 +136,10 @@ export interface ChecklistItem {
 export interface PhotoAttachment {
   id: string;
   url: string;
+  fileName?: string;
+  filePath?: string;
+  mimeType?: string;
+  fileSize?: number;
   caption: string;
   type?: 'BEFORE' | 'DURING' | 'AFTER' | 'DOCUMENT';
   uploadedAt: string;
@@ -1026,6 +1030,17 @@ export interface PurchaseDeliveryReceipt {
 
 export type PurchaseStatus = 'DRAFT' | 'ORDERED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
 
+export interface VendorBillAttachment {
+  id: string;
+  fileName: string;
+  fileUrl: string;
+  filePath?: string;
+  mimeType: string;
+  fileSize: number;
+  uploadedAt: string;
+  uploadedBy?: string;
+}
+
 export interface PurchaseOrder {
   id: string;
   purchaseNumber: string;
@@ -1052,6 +1067,12 @@ export interface PurchaseOrder {
   bankAccountName?: string;
   paymentDueDate?: string;
   invoiceReference?: string;
+  vendorBills?: VendorBillAttachment[];
+  vendorBillUrl?: string;
+  vendorBillName?: string;
+  vendorBillMimeType?: string;
+  vendorBillSize?: number;
+  vendorBillUploadedAt?: string;
   notes?: string;
   stockUpdated: boolean;
   deliveryReceipts?: PurchaseDeliveryReceipt[];

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { PurchaseOrder } from '../../../types/solar';
+import { PurchaseOrder, VendorBillAttachment } from '../../../types/solar';
+import { VendorBillAttachmentsSection } from './VendorBillAttachmentsSection';
 import {
   FileText,
   X,
@@ -50,6 +51,20 @@ export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps>
   const fulfillmentPercent = totalOrdered > 0 ? Math.round((totalReceived / totalOrdered) * 100) : 0;
 
   const receipts = order.deliveryReceipts || [];
+  const attachedBills: VendorBillAttachment[] = Array.isArray(order.vendorBills) && order.vendorBills.length > 0
+    ? order.vendorBills
+    : order.vendorBillUrl
+    ? [
+        {
+          id: `bill-${order.id}-primary`,
+          fileName: order.vendorBillName || 'Vendor Bill',
+          fileUrl: order.vendorBillUrl,
+          mimeType: order.vendorBillMimeType || 'application/pdf',
+          fileSize: Number(order.vendorBillSize || 0),
+          uploadedAt: order.vendorBillUploadedAt || order.updatedAt || order.createdAt || ''
+        }
+      ]
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
@@ -398,6 +413,12 @@ export const PurchaseOrderSummaryModal: React.FC<PurchaseOrderSummaryModalProps>
                   <p className="text-slate-600 leading-relaxed">{order.notes}</p>
                 </div>
               )}
+
+              <VendorBillAttachmentsSection
+                poId={order.id}
+                bills={attachedBills}
+                readOnly
+              />
             </div>
           )}
 

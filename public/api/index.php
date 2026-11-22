@@ -264,6 +264,12 @@ function ensureRequiredTables($pdo) {
             'refunded_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
             'balance_amount' => 'DECIMAL(14,2) DEFAULT 0.00',
             'bank_account_id' => "VARCHAR(64) DEFAULT ''",
+            'vendor_bills_json' => 'LONGTEXT DEFAULT NULL',
+            'vendor_bill_url' => 'TEXT DEFAULT NULL',
+            'vendor_bill_name' => "VARCHAR(255) DEFAULT ''",
+            'vendor_bill_mime' => "VARCHAR(128) DEFAULT ''",
+            'vendor_bill_size' => 'BIGINT DEFAULT 0',
+            'vendor_bill_uploaded_at' => "VARCHAR(64) DEFAULT ''",
             'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
         ],
         'solar_boms' => [
@@ -1219,6 +1225,216 @@ function isCustomerUserPhp($user) {
     return $acct === 'CUSTOMER' || in_array($role, ['customer', 'client'], true);
 }
 
+function getUploadRootCandidatesPhp() {
+    $candidates = [];
+    $webRoot = dirname(__DIR__);
+    if (!empty($webRoot)) {
+        $candidates[] = rtrim($webRoot, '/\\') . '/uploads';
+    }
+    $parentRoot = dirname(__DIR__, 2);
+    if (!empty($parentRoot) && $parentRoot !== $webRoot) {
+        $candidates[] = rtrim($parentRoot, '/\\') . '/rejoy_uploads';
+    }
+    $tmpRoot = sys_get_temp_dir();
+    if (!empty($tmpRoot)) {
+        $candidates[] = rtrim($tmpRoot, '/\\') . '/rejoy_solar_uploads';
+    }
+    return array_values(array_unique($candidates));
+}
+
+function resolveUploadsRootPhp() {
+    foreach (getUploadRootCandidatesPhp() as $cand) {
+        if (!is_dir($cand)) {
+            @mkdir($cand, 0755, true);
+        }
+        if (is_dir($cand) && is_writable($cand)) {
+            $htPath = $cand . '/.htaccess';
+            if (!file_exists($htPath)) {
+                @file_put_contents($htPath, "Options -Indexes\n<FilesMatch \"\\.(php|phtml|php3|php4|php5|php7|php8|phar)$\">\n  <IfModule mod_authz_core.c>\n    Require all denied\n  </IfModule>\n  <IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n  </IfModule>\n</FilesMatch>\n");
+            }
+            return $cand;
+        }
+    }
+    throw new Exception('No writable upload directory available on server.', 500);
+}
+
+function resolveUploadFilePathPhp($relativeSubPath) {
+    $cleanSub = ltrim(str_replace('\\', '/', (string)$relativeSubPath), '/');
+    if ($cleanSub === '' || strpos($cleanSub, '..') !== false || strpos($cleanSub, "\0") !== false) {
+        return null;
+    }
+    foreach (getUploadRootCandidatesPhp() as $root) {
+        $realRoot = @realpath($root);
+        if (!$realRoot) continue;
+        $candidate = $realRoot . '/' . $cleanSub;
+        $realFile = @realpath($candidate);
+        if ($realFile && is_file($realFile) && str_starts_with($realFile, rtrim($realRoot, '/\\') . DIRECTORY_SEPARATOR)) {
+            return $realFile;
+        }
+    }
+    return null;
+}
+
+function validateAndDecodeUploadedPayloadPhp($fileName, $fileData, $mode = 'image') {
+    $rawName = trim((string)$fileName);
+    $buffer = null;
+
+    if (empty($fileData) && !empty($_FILES['file']['tmp_name']) && is_uploaded_file($_FILES['file']['tmp_name'])) {
+        $rawName = $rawName !== '' ? $rawName : trim((string)($_FILES['file']['name'] ?? 'upload'));
+        $readBuf = @file_get_contents($_FILES['file']['tmp_name']);
+        if ($readBuf !== false) {
+            $buffer = $readBuf;
+        }
+    } elseif (is_string($fileData) && trim($fileData) !== '') {
+        $base64Data = strpos($fileData, ',') !== false ? explode(',', $fileData, 2)[1] : $fileData;
+        $decoded = base64_decode(preg_replace('/\s+/', '', $base64Data), true);
+        if ($decoded !== false) {
+            $buffer = $decoded;
+        }
+    }
+
+    if ($rawName === '' || $buffer === null || strlen($buffer) === 0) {
+        throw new Exception('Valid file name and non-empty file payload are required.', 400);
+    }
+
+    $maxBytes = 10 * 1024 * 1024; // 10 MB limit
+    if (strlen($buffer) > $maxBytes) {
+        throw new Exception('Uploaded file exceeds the 10 MB size limit.', 400);
+    }
+
+    $safeFileName = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($rawName));
+    if ($safeFileName === '' || $safeFileName === '.' || $safeFileName === '..') {
+        $safeFileName = 'attachment';
+    }
+    $ext = strtolower(pathinfo($safeFileName, PATHINFO_EXTENSION));
+
+    $head = substr($buffer, 0, 16);
+    $detectedExt = null;
+    $detectedMime = null;
+
+    if (strlen($buffer) >= 3 && substr($buffer, 0, 3) === "\xFF\xD8\xFF") {
+        $detectedExt = 'jpg';
+        $detectedMime = 'image/jpeg';
+    } elseif (strlen($buffer) >= 8 && substr($buffer, 0, 8) === "\x89PNG\r\n\x1a\n") {
+        $detectedExt = 'png';
+        $detectedMime = 'image/png';
+    } elseif (strlen($buffer) >= 12 && substr($buffer, 0, 4) === 'RIFF' && substr($buffer, 8, 4) === 'WEBP') {
+        $detectedExt = 'webp';
+        $detectedMime = 'image/webp';
+    } elseif (preg_match('/^\s*%PDF-/', $head)) {
+        $detectedExt = 'pdf';
+        $detectedMime = 'application/pdf';
+    }
+
+    if ($mode === 'image') {
+        $allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+        if (!$detectedExt || !in_array($detectedExt, ['jpg', 'png', 'webp'], true)) {
+            throw new Exception('Unsupported or invalid image file. Only JPG, JPEG, PNG, and WebP images are allowed.', 400);
+        }
+        if ($ext !== '' && !in_array($ext, $allowedExts, true)) {
+            throw new Exception('Unsupported file extension. Only JPG, JPEG, PNG, and WebP images are allowed.', 400);
+        }
+        if (function_exists('getimagesizefromstring') && $detectedExt !== 'webp') {
+            $imgInfo = @getimagesizefromstring($buffer);
+            if ($imgInfo === false) {
+                throw new Exception('Corrupted or invalid image file content.', 400);
+            }
+        }
+    } else {
+        $allowedExts = ['pdf', 'jpg', 'jpeg', 'png'];
+        if (!$detectedExt || !in_array($detectedExt, ['pdf', 'jpg', 'png'], true)) {
+            throw new Exception('Unsupported file format. Only valid PDF, JPG, JPEG, or PNG vendor bills are allowed.', 400);
+        }
+        if ($ext !== '' && !in_array($ext, $allowedExts, true)) {
+            throw new Exception('Unsupported file extension. Only PDF, JPG, JPEG, and PNG files are allowed.', 400);
+        }
+        if ($detectedExt !== 'pdf' && function_exists('getimagesizefromstring')) {
+            $imgInfo = @getimagesizefromstring($buffer);
+            if ($imgInfo === false) {
+                throw new Exception('Corrupted or invalid vendor bill image.', 400);
+            }
+        }
+    }
+
+    if ($ext === '') {
+        $safeFileName .= '.' . $detectedExt;
+    }
+
+    return [
+        'buffer' => $buffer,
+        'ext' => $detectedExt,
+        'mimeType' => $detectedMime,
+        'safeFileName' => $safeFileName,
+        'fileSize' => strlen($buffer)
+    ];
+}
+
+function mapVendorBillsFromPoRowPhp($r) {
+    $bills = [];
+    if (!empty($r['vendor_bills_json'])) {
+        $decoded = json_decode((string)$r['vendor_bills_json'], true);
+        if (is_array($decoded)) {
+            foreach ($decoded as $b) {
+                if (is_array($b) && !empty($b['fileUrl'])) {
+                    $bills[] = [
+                        'id' => (string)($b['id'] ?? ('bill-' . md5((string)$b['fileUrl']))),
+                        'fileName' => (string)($b['fileName'] ?? 'vendor-bill'),
+                        'fileUrl' => (string)$b['fileUrl'],
+                        'filePath' => (string)($b['filePath'] ?? ''),
+                        'mimeType' => (string)($b['mimeType'] ?? 'application/pdf'),
+                        'fileSize' => intval($b['fileSize'] ?? 0),
+                        'uploadedAt' => (string)($b['uploadedAt'] ?? date('c')),
+                        'uploadedBy' => (string)($b['uploadedBy'] ?? '')
+                    ];
+                }
+            }
+        }
+    }
+    if (empty($bills) && !empty($r['vendor_bill_url'])) {
+        $bills[] = [
+            'id' => 'bill-primary-' . preg_replace('/[^a-zA-Z0-9_-]/', '', (string)($r['id'] ?? 'po')),
+            'fileName' => (string)($r['vendor_bill_name'] ?? 'Vendor Bill'),
+            'fileUrl' => (string)$r['vendor_bill_url'],
+            'filePath' => '',
+            'mimeType' => (string)($r['vendor_bill_mime'] ?? 'application/pdf'),
+            'fileSize' => intval($r['vendor_bill_size'] ?? 0),
+            'uploadedAt' => (string)($r['vendor_bill_uploaded_at'] ?? ($r['updated_at'] ?? date('c'))),
+            'uploadedBy' => ''
+        ];
+    }
+    $primary = $bills[0] ?? null;
+    return [
+        'vendorBills' => $bills,
+        'vendorBillUrl' => $primary ? $primary['fileUrl'] : (string)($r['vendor_bill_url'] ?? ''),
+        'vendorBillName' => $primary ? $primary['fileName'] : (string)($r['vendor_bill_name'] ?? ''),
+        'vendorBillMimeType' => $primary ? $primary['mimeType'] : (string)($r['vendor_bill_mime'] ?? ''),
+        'vendorBillSize' => $primary ? intval($primary['fileSize']) : intval($r['vendor_bill_size'] ?? 0),
+        'vendorBillUploadedAt' => $primary ? $primary['uploadedAt'] : (string)($r['vendor_bill_uploaded_at'] ?? '')
+    ];
+}
+
+function userCanAccessProjectPhp($pdo, $actor, $projectId) {
+    if (!isCustomerUserPhp($actor)) return true;
+    $pStmt = $pdo->prepare('SELECT `customer_id`, `customer_name` FROM `solar_projects` WHERE `id` = ? LIMIT 1');
+    $pStmt->execute([$projectId]);
+    $proj = $pStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$proj) return false;
+    $linkedCustId = trim((string)($actor['linkedEntityId'] ?? ($actor['linked_entity_id'] ?? ($actor['customerId'] ?? ''))));
+    if ($linkedCustId !== '' && $linkedCustId === trim((string)($proj['customer_id'] ?? ''))) {
+        return true;
+    }
+    $actorEmail = strtolower(trim((string)($actor['email'] ?? '')));
+    if ($actorEmail !== '' && !empty($proj['customer_id'])) {
+        $cStmt = $pdo->prepare('SELECT `id`, `email` FROM `solar_customers` WHERE `id` = ? LIMIT 1');
+        $cStmt->execute([$proj['customer_id']]);
+        $cust = $cStmt->fetch(PDO::FETCH_ASSOC);
+        if ($cust && strtolower(trim((string)($cust['email'] ?? ''))) === $actorEmail) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 7. Normalize Path & Method (Guard against Apache/LiteSpeed PATH_INFO='/' overwriting REQUEST_URI)
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
@@ -1507,9 +1723,15 @@ function saveProjectToDb($pdo, $item) {
                 `approved_by` = VALUES(`approved_by`),
                 `rejection_reason` = VALUES(`rejection_reason`)
         ");
+        $lookupStageStmt = $pdo->prepare('SELECT `id` FROM `solar_project_stages` WHERE `project_id` = ? AND `stage_key` = ? LIMIT 1');
         foreach ($item['stages'] as $s) {
-            $sId = $s['id'] ?? ($item['id'] . '-' . ($s['stageKey'] ?? $s['key'] ?? 'stage'));
             $stageKey = $s['stageKey'] ?? $s['key'] ?? 'stage';
+            $sId = !empty($s['id']) ? $s['id'] : null;
+            if (empty($sId)) {
+                $lookupStageStmt->execute([$item['id'], $stageKey]);
+                $existingStageRowId = $lookupStageStmt->fetchColumn();
+                $sId = $existingStageRowId ? (string)$existingStageRowId : ($item['id'] . '-' . $stageKey);
+            }
             $sTitle = $s['title'] ?? $s['name'] ?? 'Stage';
             $sOrder = intval($s['order'] ?? $s['stage_order'] ?? 1);
             $sDept = $s['department'] ?? 'Operations';
@@ -2316,6 +2538,36 @@ function savePurchaseOrderToDb($pdo, $item, $actor = null) {
     $receiptsJson = is_string($receipts) ? $receipts : json_encode($receipts);
     $notes = $item['notes'] ?? ($ex['notes'] ?? '');
 
+    if (array_key_exists('vendorBills', $item) && is_array($item['vendorBills'])) {
+        $vendorBills = array_values(array_filter($item['vendorBills'], function($b) {
+            return is_array($b) && !empty($b['fileUrl']);
+        }));
+    } elseif (!empty($ex['vendor_bills_json'])) {
+        $vendorBills = json_decode((string)$ex['vendor_bills_json'], true);
+        if (!is_array($vendorBills)) $vendorBills = [];
+    } else {
+        $vendorBills = [];
+    }
+    if (empty($vendorBills) && !empty($item['vendorBillUrl'])) {
+        $vendorBills[] = [
+            'id' => 'bill-primary-' . preg_replace('/[^a-zA-Z0-9_-]/', '', $id),
+            'fileName' => (string)($item['vendorBillName'] ?? 'Vendor Bill'),
+            'fileUrl' => (string)$item['vendorBillUrl'],
+            'filePath' => '',
+            'mimeType' => (string)($item['vendorBillMimeType'] ?? 'application/pdf'),
+            'fileSize' => intval($item['vendorBillSize'] ?? 0),
+            'uploadedAt' => (string)($item['vendorBillUploadedAt'] ?? date('c')),
+            'uploadedBy' => (string)($actor['name'] ?? '')
+        ];
+    }
+    $primaryBill = $vendorBills[0] ?? null;
+    $vendorBillsJson = json_encode($vendorBills);
+    $vendorBillUrl = $primaryBill ? (string)$primaryBill['fileUrl'] : (array_key_exists('vendorBills', $item) ? '' : (string)($ex['vendor_bill_url'] ?? ''));
+    $vendorBillName = $primaryBill ? (string)$primaryBill['fileName'] : (array_key_exists('vendorBills', $item) ? '' : (string)($ex['vendor_bill_name'] ?? ''));
+    $vendorBillMime = $primaryBill ? (string)$primaryBill['mimeType'] : (array_key_exists('vendorBills', $item) ? '' : (string)($ex['vendor_bill_mime'] ?? ''));
+    $vendorBillSize = $primaryBill ? intval($primaryBill['fileSize'] ?? 0) : (array_key_exists('vendorBills', $item) ? 0 : intval($ex['vendor_bill_size'] ?? 0));
+    $vendorBillUploadedAt = $primaryBill ? (string)($primaryBill['uploadedAt'] ?? '') : (array_key_exists('vendorBills', $item) ? '' : (string)($ex['vendor_bill_uploaded_at'] ?? ''));
+
     $stmt = $pdo->prepare("
         INSERT INTO `solar_purchase_orders` (
             `id`, `po_number`, `vendor_id`, `vendor_name`, `po_date`,
@@ -2324,8 +2576,10 @@ function savePurchaseOrderToDb($pdo, $item, $actor = null) {
             `invoice_reference`, `stock_updated`, `received_date`,
             `items_json`, `subtotal`, `gst_amount`, `total_amount`,
             `paid_amount`, `returned_amount`, `refunded_amount`, `balance_amount`, `bank_account_id`,
-            `status`, `payment_status`, `receipts_json`, `notes`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `status`, `payment_status`, `receipts_json`,
+            `vendor_bills_json`, `vendor_bill_url`, `vendor_bill_name`, `vendor_bill_mime`, `vendor_bill_size`, `vendor_bill_uploaded_at`,
+            `notes`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             `po_number` = VALUES(`po_number`),
             `vendor_id` = VALUES(`vendor_id`),
@@ -2352,6 +2606,12 @@ function savePurchaseOrderToDb($pdo, $item, $actor = null) {
             `payment_status` = VALUES(`payment_status`),
             `items_json` = VALUES(`items_json`),
             `receipts_json` = VALUES(`receipts_json`),
+            `vendor_bills_json` = VALUES(`vendor_bills_json`),
+            `vendor_bill_url` = VALUES(`vendor_bill_url`),
+            `vendor_bill_name` = VALUES(`vendor_bill_name`),
+            `vendor_bill_mime` = VALUES(`vendor_bill_mime`),
+            `vendor_bill_size` = VALUES(`vendor_bill_size`),
+            `vendor_bill_uploaded_at` = VALUES(`vendor_bill_uploaded_at`),
             `notes` = VALUES(`notes`)
     ");
     $stmt->execute([
@@ -2361,7 +2621,9 @@ function savePurchaseOrderToDb($pdo, $item, $actor = null) {
         $invoiceRef, $stockUpdated, $receivedDate,
         $itemsJson, $subtotal, $gstAmount, $totalAmount,
         $storedPaid, $returnedAmount, $refundedAmount, $balanceAmount, $bankAccountId,
-        $status, $paymentStatus, $receiptsJson, $notes
+        $status, $paymentStatus, $receiptsJson,
+        $vendorBillsJson, $vendorBillUrl, $vendorBillName, $vendorBillMime, $vendorBillSize, $vendorBillUploadedAt,
+        $notes
     ]);
 
     if ($initialPayToRecord > 0.01) {
@@ -2421,6 +2683,12 @@ function savePurchaseOrderToDb($pdo, $item, $actor = null) {
         'paymentStatus' => $paymentStatus,
         'deliveryReceipts' => $receiptsArr,
         'receipts' => $receiptsArr,
+        'vendorBills' => $vendorBills,
+        'vendorBillUrl' => $vendorBillUrl,
+        'vendorBillName' => $vendorBillName,
+        'vendorBillMimeType' => $vendorBillMime,
+        'vendorBillSize' => $vendorBillSize,
+        'vendorBillUploadedAt' => $vendorBillUploadedAt,
         'notes' => $notes,
         'createdAt' => $item['createdAt'] ?? ($ex['created_at'] ?? date('c')),
         'updatedAt' => date('c')
@@ -5036,6 +5304,18 @@ function deleteItemFromDb($pdo, $collection, $id, $actor = null) {
         } catch (Exception $e) {
             if ($e->getCode() === 400) throw $e;
         }
+        try {
+            $exPo = fetchExistingRowPhp($pdo, 'solar_purchase_orders', $id);
+            if ($exPo) {
+                $billInfo = mapVendorBillsFromPoRowPhp($exPo);
+                foreach ($billInfo['vendorBills'] as $vbItem) {
+                    if (!empty($vbItem['filePath'])) {
+                        $fp = resolveUploadFilePathPhp($vbItem['filePath']);
+                        if ($fp && file_exists($fp)) @unlink($fp);
+                    }
+                }
+            }
+        } catch (Exception $e) {}
         $pdo->prepare('DELETE FROM `solar_purchase_orders` WHERE `id` = ?')->execute([$id]);
         return true;
     }
@@ -8926,6 +9206,7 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 ? round(max(0.0, floatval($r['balance_amount'])), 2)
                 : round(max(0.0, $total - $returned - $netPaid), 2);
             $bankId = (string)($r['bank_account_id'] ?? '');
+            $billMeta = mapVendorBillsFromPoRowPhp($r);
             return [
                 'id' => $r['id'],
                 'purchaseNumber' => $r['po_number'],
@@ -8960,6 +9241,12 @@ if ($method === 'GET' && in_array($cleanPath, ['/bootstrap', '/bootstrap/'])) {
                 'items' => json_decode($r['items_json'] ?? '[]', true) ?: [],
                 'deliveryReceipts' => $receipts,
                 'receipts' => $receipts,
+                'vendorBills' => $billMeta['vendorBills'],
+                'vendorBillUrl' => $billMeta['vendorBillUrl'],
+                'vendorBillName' => $billMeta['vendorBillName'],
+                'vendorBillMimeType' => $billMeta['vendorBillMimeType'],
+                'vendorBillSize' => $billMeta['vendorBillSize'],
+                'vendorBillUploadedAt' => $billMeta['vendorBillUploadedAt'],
                 'notes' => $r['notes'] ?? '',
                 'createdAt' => $r['created_at'],
                 'updatedAt' => $r['updated_at'] ?? $r['created_at']
@@ -12705,6 +12992,287 @@ if (preg_match('#^/projects/([^/]+)/(?:control-center|overview)/?$#', $cleanPath
     }
 }
 
+// POST /api/projects/{id}/stages/{stageKey}/photos - Persistent Stage Workflow Image Upload
+if ($method === 'POST' && preg_match('#^/projects/([^/]+)/stages/([^/]+)/photos/?$#', $cleanPath, $matches)) {
+    $projId = urldecode($matches[1]);
+    $stageKey = urldecode($matches[2]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to project stages and photos.']);
+        exit;
+    }
+
+    try {
+        $decoded = validateAndDecodeUploadedPayloadPhp(
+            $body['fileName'] ?? 'stage-photo.jpg',
+            $body['fileData'] ?? ($body['photoData'] ?? ''),
+            'image'
+        );
+
+        $pCheck = $pdo->prepare('SELECT `id`, `title` FROM `solar_projects` WHERE `id` = ? LIMIT 1');
+        $pCheck->execute([$projId]);
+        $projRow = $pCheck->fetch(PDO::FETCH_ASSOC);
+        if (!$projRow) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => 'Project not found in MySQL.', 'message' => 'Project not found in MySQL.']);
+            exit;
+        }
+
+        $safeProjId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($projId));
+        $safeStageKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($stageKey));
+        $photoId = 'photo-' . round(microtime(true) * 1000) . '-' . substr(bin2hex(random_bytes(3)), 0, 5);
+        $diskFileName = $photoId . '.' . $decoded['ext'];
+
+        $uploadsRoot = resolveUploadsRootPhp();
+        $stageDir = $uploadsRoot . '/projects/' . $safeProjId . '/' . $safeStageKey;
+        if (!is_dir($stageDir)) {
+            @mkdir($stageDir, 0755, true);
+        }
+        if (!is_dir($stageDir) || !is_writable($stageDir)) {
+            throw new Exception('Project stage photo directory is not writable on server.', 500);
+        }
+
+        $fullPath = $stageDir . '/' . $diskFileName;
+        if (@file_put_contents($fullPath, $decoded['buffer']) === false) {
+            throw new Exception('Failed to save stage photo file on disk.', 500);
+        }
+
+        $relativePath = 'projects/' . $safeProjId . '/' . $safeStageKey . '/' . $diskFileName;
+        $fileUrl = '/api/uploads/projects/' . rawurlencode($safeProjId) . '/' . rawurlencode($safeStageKey) . '/' . rawurlencode($diskFileName);
+        $caption = trim((string)($body['caption'] ?? ''));
+        if ($caption === '') {
+            $caption = preg_replace('/\.[^.]+$/', '', $decoded['safeFileName']) ?: 'Site Photo';
+        }
+        $gpsCoords = trim((string)($body['gpsCoordinates'] ?? ''));
+        $uploadedBy = trim((string)($actor['name'] ?? ($body['uploadedBy'] ?? 'Field Engineer')));
+
+        $newPhoto = [
+            'id' => $photoId,
+            'url' => $fileUrl,
+            'fileName' => $decoded['safeFileName'],
+            'filePath' => $relativePath,
+            'mimeType' => $decoded['mimeType'],
+            'fileSize' => $decoded['fileSize'],
+            'caption' => $caption,
+            'uploadedBy' => $uploadedBy,
+            'uploadedAt' => date('c'),
+            'gpsCoordinates' => $gpsCoords
+        ];
+
+        $pdo->beginTransaction();
+        $sStmt = $pdo->prepare('SELECT `id`, `photos_json`, `title` FROM `solar_project_stages` WHERE `project_id` = ? AND (`stage_key` = ? OR `id` = ?) LIMIT 1 FOR UPDATE');
+        $sStmt->execute([$projId, $stageKey, $stageKey]);
+        $stageRow = $sStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$stageRow) {
+            $sId = $projId . '-' . $safeStageKey;
+            $photos = [$newPhoto];
+            $insStage = $pdo->prepare("
+                INSERT INTO `solar_project_stages` (
+                    `id`, `project_id`, `stage_key`, `title`, `stage_order`,
+                    `department`, `assigned_role`, `status`, `priority`,
+                    `checklist_json`, `photos_json`, `documents_json`
+                ) VALUES (?, ?, ?, ?, 1, 'Operations', 'Technician', 'IN PROGRESS', 'MEDIUM', '[]', ?, '[]')
+            ");
+            $insStage->execute([$sId, $projId, $stageKey, ucwords(str_replace('_', ' ', $stageKey)), json_encode($photos)]);
+        } else {
+            $existingPhotos = json_decode((string)($stageRow['photos_json'] ?? '[]'), true);
+            if (!is_array($existingPhotos)) $existingPhotos = [];
+            $existingPhotos[] = $newPhoto;
+            $photos = $existingPhotos;
+            $updStage = $pdo->prepare('UPDATE `solar_project_stages` SET `photos_json` = ? WHERE `id` = ?');
+            $updStage->execute([json_encode($photos), $stageRow['id']]);
+        }
+        $pdo->commit();
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Stage workflow image uploaded and saved to MySQL.',
+            'photo' => $newPhoto,
+            'photos' => $photos
+        ]);
+        exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $exCode = intval($e->getCode());
+        $code = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+        http_response_code($code);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// DELETE /api/projects/{id}/stages/{stageKey}/photos/{photoId}
+if ($method === 'DELETE' && preg_match('#^/projects/([^/]+)/stages/([^/]+)/photos/([^/]+)/?$#', $cleanPath, $matches)) {
+    $projId = urldecode($matches[1]);
+    $stageKey = urldecode($matches[2]);
+    $photoId = urldecode($matches[3]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to project stages and photos.']);
+        exit;
+    }
+
+    try {
+        $pdo->beginTransaction();
+        $sStmt = $pdo->prepare('SELECT `id`, `photos_json` FROM `solar_project_stages` WHERE `project_id` = ? AND (`stage_key` = ? OR `id` = ?) LIMIT 1 FOR UPDATE');
+        $sStmt->execute([$projId, $stageKey, $stageKey]);
+        $stageRow = $sStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$stageRow) {
+            $pdo->rollBack();
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => 'Stage not found.']);
+            exit;
+        }
+        $existingPhotos = json_decode((string)($stageRow['photos_json'] ?? '[]'), true);
+        if (!is_array($existingPhotos)) $existingPhotos = [];
+        $nextPhotos = [];
+        foreach ($existingPhotos as $p) {
+            if (($p['id'] ?? '') === $photoId) {
+                if (!empty($p['filePath'])) {
+                    $fp = resolveUploadFilePathPhp($p['filePath']);
+                    if ($fp && file_exists($fp)) @unlink($fp);
+                }
+                continue;
+            }
+            $nextPhotos[] = $p;
+        }
+        $pdo->prepare('UPDATE `solar_project_stages` SET `photos_json` = ? WHERE `id` = ?')
+            ->execute([json_encode($nextPhotos), $stageRow['id']]);
+        $pdo->commit();
+
+        http_response_code(200);
+        echo json_encode(['success' => true, 'photos' => $nextPhotos, 'message' => 'Stage photo removed from server and MySQL.']);
+        exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// PUT|PATCH /api/projects/{id}/stages/{stageKey} - Dedicated Project Stage Update API
+if (($method === 'PUT' || $method === 'PATCH') && preg_match('#^/projects/([^/]+)/stages/([^/]+)/?$#', $cleanPath, $matches)) {
+    $projId = urldecode($matches[1]);
+    $stageKey = urldecode($matches[2]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers have read-only access to project stages and progress.']);
+        exit;
+    }
+
+    try {
+        $list = getProjectsListPhp($pdo, $projId);
+        if (empty($list)) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => "Project \"$projId\" not found."]);
+            exit;
+        }
+        $project = $list[0];
+        $stages = $project['stages'] ?? [];
+        $stageIndex = -1;
+        foreach ($stages as $idx => $st) {
+            if (($st['stageKey'] ?? '') === $stageKey || ($st['id'] ?? '') === $stageKey) {
+                $stageIndex = $idx;
+                break;
+            }
+        }
+        if ($stageIndex === -1) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => "Stage \"$stageKey\" not found in project \"$projId\"."]);
+            exit;
+        }
+
+        $currentStage = $stages[$stageIndex];
+        $updatedStage = array_merge($currentStage, $body);
+        $nextStatus = $body['status'] ?? null;
+        $today = date('Y-m-d');
+
+        if ($nextStatus === 'COMPLETED' || $nextStatus === 'APPROVED') {
+            for ($i = 0; $i < $stageIndex; $i++) {
+                $priorStatus = $stages[$i]['status'] ?? 'NOT STARTED';
+                if ($priorStatus !== 'COMPLETED' && $priorStatus !== 'APPROVED') {
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Cannot complete stage before prior stages are completed.']);
+                    exit;
+                }
+            }
+            $updatedStage['completedDate'] = !empty($updatedStage['completedDate']) ? $updatedStage['completedDate'] : $today;
+            $updatedStage['actualEndDate'] = !empty($updatedStage['actualEndDate']) ? $updatedStage['actualEndDate'] : $today;
+            if ($nextStatus === 'APPROVED') {
+                $updatedStage['approvedBy'] = $actor['name'] ?? 'Administrator';
+                $updatedStage['approvedAt'] = $today;
+            }
+            if ($stageIndex + 1 < count($stages) && ($stages[$stageIndex + 1]['status'] ?? 'NOT STARTED') === 'NOT STARTED') {
+                $stages[$stageIndex + 1]['status'] = 'IN PROGRESS';
+                $stages[$stageIndex + 1]['startDate'] = $today;
+                $project['currentStageKey'] = $stages[$stageIndex + 1]['stageKey'];
+            }
+        } elseif ($nextStatus === 'IN PROGRESS') {
+            $project['currentStageKey'] = $currentStage['stageKey'];
+            for ($j = $stageIndex + 1; $j < count($stages); $j++) {
+                $stJ = $stages[$j]['status'] ?? 'NOT STARTED';
+                if (in_array($stJ, ['IN PROGRESS', 'COMPLETED', 'APPROVED'], true)) {
+                    $stages[$j]['status'] = 'NOT STARTED';
+                    $stages[$j]['actualEndDate'] = null;
+                    $stages[$j]['completedDate'] = null;
+                    $stages[$j]['approvedBy'] = '';
+                }
+            }
+        }
+
+        $stages[$stageIndex] = $updatedStage;
+        $totalStages = count($stages);
+        $completedStages = 0;
+        $hasDelayed = false;
+        foreach ($stages as $s) {
+            if (in_array($s['status'] ?? '', ['COMPLETED', 'APPROVED'], true)) $completedStages++;
+            if (in_array($s['status'] ?? '', ['OVERDUE', 'BLOCKED'], true)) $hasDelayed = true;
+        }
+        $pct = $totalStages > 0 ? intval(round(($completedStages / $totalStages) * 100)) : 0;
+        $project['completionPercentage'] = $pct;
+        $project['progressPercentage'] = $pct;
+        if ($totalStages > 0 && $completedStages === $totalStages) {
+            $project['status'] = 'COMPLETED';
+        } elseif ($hasDelayed) {
+            $project['status'] = 'DELAYED';
+        } elseif ($completedStages === 0) {
+            $project['status'] = 'SURVEY';
+        } elseif ($completedStages < 4) {
+            $project['status'] = 'DESIGN & APPROVALS';
+        } elseif ($completedStages < 10) {
+            $project['status'] = 'CIVIL & STRUCTURE';
+        } else {
+            $project['status'] = 'INSTALLATION';
+        }
+        $project['stages'] = $stages;
+
+        $pdo->beginTransaction();
+        $saved = saveProjectToDb($pdo, $project);
+        $pdo->commit();
+
+        http_response_code(200);
+        echo json_encode(['success' => true, 'data' => $saved, 'message' => "Stage \"$stageKey\" updated successfully in MySQL."]);
+        exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
 // GET|PUT|POST|DELETE /api/projects/{id}
 if (preg_match('#^/projects/([^/]+)/?$#', $cleanPath, $matches)) {
     $projId = urldecode($matches[1]);
@@ -12910,6 +13478,7 @@ if (in_array($cleanPath, ['/purchase-orders', '/purchase-orders/'], true)) {
                 ? round(max(0.0, floatval($r['balance_amount'])), 2)
                 : round(max(0.0, $total - $returned - $netPaid), 2);
             $bankId = (string)($r['bank_account_id'] ?? '');
+            $billMeta = mapVendorBillsFromPoRowPhp($r);
             return [
                 'id' => $r['id'],
                 'purchaseNumber' => $r['po_number'],
@@ -12944,6 +13513,12 @@ if (in_array($cleanPath, ['/purchase-orders', '/purchase-orders/'], true)) {
                 'items' => json_decode($r['items_json'] ?? '[]', true) ?: [],
                 'deliveryReceipts' => $receipts,
                 'receipts' => $receipts,
+                'vendorBills' => $billMeta['vendorBills'],
+                'vendorBillUrl' => $billMeta['vendorBillUrl'],
+                'vendorBillName' => $billMeta['vendorBillName'],
+                'vendorBillMimeType' => $billMeta['vendorBillMimeType'],
+                'vendorBillSize' => $billMeta['vendorBillSize'],
+                'vendorBillUploadedAt' => $billMeta['vendorBillUploadedAt'],
                 'notes' => $r['notes'] ?? '',
                 'createdAt' => $r['created_at'],
                 'updatedAt' => $r['updated_at'] ?? $r['created_at']
@@ -12966,6 +13541,266 @@ if (in_array($cleanPath, ['/purchase-orders', '/purchase-orders/'], true)) {
         echo json_encode(['success' => true, 'data' => $saved]);
         exit;
     }
+}
+
+// POST /api/purchase-orders/{id}/bills - Upload Vendor Bill (PDF/JPG/JPEG/PNG)
+if ($method === 'POST' && preg_match('#^/purchase-orders/([^/]+)/bills/?$#', $cleanPath, $matches)) {
+    $poId = urldecode($matches[1]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot upload vendor bills.']);
+        exit;
+    }
+
+    try {
+        $decoded = validateAndDecodeUploadedPayloadPhp(
+            $body['fileName'] ?? 'vendor-bill.pdf',
+            $body['fileData'] ?? '',
+            'bill'
+        );
+
+        $safePoId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($poId));
+        $billId = 'bill-' . round(microtime(true) * 1000) . '-' . substr(bin2hex(random_bytes(3)), 0, 5);
+        $diskFileName = $billId . '_' . $decoded['safeFileName'];
+
+        $uploadsRoot = resolveUploadsRootPhp();
+        $poBillsDir = $uploadsRoot . '/purchase-bills/' . $safePoId;
+        if (!is_dir($poBillsDir)) {
+            @mkdir($poBillsDir, 0755, true);
+        }
+        if (!is_dir($poBillsDir) || !is_writable($poBillsDir)) {
+            throw new Exception('Vendor bill upload directory is not writable on server.', 500);
+        }
+
+        $fullPath = $poBillsDir . '/' . $diskFileName;
+        if (@file_put_contents($fullPath, $decoded['buffer']) === false) {
+            throw new Exception('Failed to save vendor bill file to server disk.', 500);
+        }
+
+        $relativePath = 'purchase-bills/' . $safePoId . '/' . $diskFileName;
+        $fileUrl = '/api/uploads/purchase-bills/' . rawurlencode($safePoId) . '/' . rawurlencode($diskFileName);
+        $uploadedAt = date('c');
+        $uploadedBy = trim((string)($actor['name'] ?? 'Purchase Manager'));
+
+        $billRecord = [
+            'id' => $billId,
+            'fileName' => $decoded['safeFileName'],
+            'fileUrl' => $fileUrl,
+            'filePath' => $relativePath,
+            'mimeType' => $decoded['mimeType'],
+            'fileSize' => $decoded['fileSize'],
+            'uploadedAt' => $uploadedAt,
+            'uploadedBy' => $uploadedBy
+        ];
+
+        $allBills = [$billRecord];
+        $pdo->beginTransaction();
+        $chkStmt = $pdo->prepare('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? LIMIT 1 FOR UPDATE');
+        $chkStmt->execute([$poId]);
+        $exPo = $chkStmt->fetch(PDO::FETCH_ASSOC);
+        if ($exPo) {
+            $existingInfo = mapVendorBillsFromPoRowPhp($exPo);
+            $allBills = array_merge($existingInfo['vendorBills'], [$billRecord]);
+            $primary = $allBills[0];
+            $upd = $pdo->prepare('
+                UPDATE `solar_purchase_orders`
+                SET `vendor_bills_json` = ?, `vendor_bill_url` = ?, `vendor_bill_name` = ?, `vendor_bill_mime` = ?, `vendor_bill_size` = ?, `vendor_bill_uploaded_at` = ?
+                WHERE `id` = ?
+            ');
+            $upd->execute([
+                json_encode($allBills),
+                $primary['fileUrl'],
+                $primary['fileName'],
+                $primary['mimeType'],
+                intval($primary['fileSize']),
+                $primary['uploadedAt'],
+                $poId
+            ]);
+        }
+        $pdo->commit();
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Vendor bill uploaded and attached successfully.',
+            'bill' => $billRecord,
+            'vendorBills' => $allBills
+        ]);
+        exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $exCode = intval($e->getCode());
+        $code = ($exCode >= 400 && $exCode < 600) ? $exCode : 500;
+        http_response_code($code);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// DELETE /api/purchase-orders/{id}/bills/{billId}
+if ($method === 'DELETE' && preg_match('#^/purchase-orders/([^/]+)/bills/([^/]+)/?$#', $cleanPath, $matches)) {
+    $poId = urldecode($matches[1]);
+    $billId = urldecode($matches[2]);
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot delete vendor bills.']);
+        exit;
+    }
+
+    try {
+        $safePoId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($poId));
+        $pdo->beginTransaction();
+        $chkStmt = $pdo->prepare('SELECT * FROM `solar_purchase_orders` WHERE `id` = ? LIMIT 1 FOR UPDATE');
+        $chkStmt->execute([$poId]);
+        $exPo = $chkStmt->fetch(PDO::FETCH_ASSOC);
+
+        $nextBills = [];
+        if ($exPo) {
+            $existingInfo = mapVendorBillsFromPoRowPhp($exPo);
+            foreach ($existingInfo['vendorBills'] as $b) {
+                if (($b['id'] ?? '') === $billId) {
+                    if (!empty($b['filePath'])) {
+                        $fp = resolveUploadFilePathPhp($b['filePath']);
+                        if ($fp && file_exists($fp)) @unlink($fp);
+                    }
+                    continue;
+                }
+                $nextBills[] = $b;
+            }
+            $primary = $nextBills[0] ?? null;
+            $pdo->prepare('
+                UPDATE `solar_purchase_orders`
+                SET `vendor_bills_json` = ?, `vendor_bill_url` = ?, `vendor_bill_name` = ?, `vendor_bill_mime` = ?, `vendor_bill_size` = ?, `vendor_bill_uploaded_at` = ?
+                WHERE `id` = ?
+            ')->execute([
+                json_encode($nextBills),
+                $primary ? $primary['fileUrl'] : '',
+                $primary ? $primary['fileName'] : '',
+                $primary ? $primary['mimeType'] : '',
+                $primary ? intval($primary['fileSize']) : 0,
+                $primary ? $primary['uploadedAt'] : '',
+                $poId
+            ]);
+        } else {
+            // Draft PO bill cleanup before PO is saved
+            foreach (getUploadRootCandidatesPhp() as $root) {
+                $dir = rtrim($root, '/\\') . '/purchase-bills/' . $safePoId;
+                if (is_dir($dir)) {
+                    $safeBillPrefix = preg_replace('/[^a-zA-Z0-9_-]/', '', $billId);
+                    if ($safeBillPrefix !== '') {
+                        foreach (glob($dir . '/' . $safeBillPrefix . '_*') ?: [] as $matchFile) {
+                            if (is_file($matchFile)) @unlink($matchFile);
+                        }
+                    }
+                }
+            }
+        }
+        $pdo->commit();
+
+        http_response_code(200);
+        echo json_encode(['success' => true, 'vendorBills' => $nextBills, 'message' => 'Vendor bill deleted.']);
+        exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// GET /api/uploads/projects/{projectId}/{stageKey}/{filename} - Authenticated Stage Image Streamer
+if ($method === 'GET' && preg_match('#^/uploads/projects/([^/]+)/([^/]+)/([^/]+)/?$#', $cleanPath, $matches)) {
+    $rawProj = urldecode($matches[1]);
+    $rawStage = urldecode($matches[2]);
+    $rawFile = urldecode($matches[3]);
+    if (strpos($rawProj, '..') !== false || strpos($rawStage, '..') !== false || strpos($rawFile, '..') !== false) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid file path access request.']);
+        exit;
+    }
+
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    $safeProjId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($rawProj));
+    $safeStageKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($rawStage));
+    $safeName = basename($rawFile);
+
+    if (!userCanAccessProjectPhp($pdo, $actor, $rawProj) && !userCanAccessProjectPhp($pdo, $actor, $safeProjId)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: You do not have permission to view this project photo.']);
+        exit;
+    }
+
+    $fullPath = resolveUploadFilePathPhp('projects/' . $safeProjId . '/' . $safeStageKey . '/' . $safeName);
+    if (!$fullPath) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'Stage photo not found on server.']);
+        exit;
+    }
+
+    $ext = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
+    $mimeMap = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'];
+    $mime = $mimeMap[$ext] ?? 'application/octet-stream';
+    $disposition = !empty($_GET['download']) ? 'attachment' : 'inline';
+
+    header_remove('Content-Type');
+    header('Content-Type: ' . $mime);
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($fullPath));
+    header('Content-Disposition: ' . $disposition . '; filename="' . str_replace('"', '', $safeName) . '"');
+    header('Cache-Control: private, max-age=3600');
+    readfile($fullPath);
+    exit;
+}
+
+// GET /api/uploads/purchase-bills/{poId}/{filename} - Authenticated Vendor Bill Streamer
+if ($method === 'GET' && preg_match('#^/uploads/purchase-bills/([^/]+)/([^/]+)/?$#', $cleanPath, $matches)) {
+    $rawPo = urldecode($matches[1]);
+    $rawFile = urldecode($matches[2]);
+    if (strpos($rawPo, '..') !== false || strpos($rawFile, '..') !== false) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid file path access request.']);
+        exit;
+    }
+
+    $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden: Customers cannot access vendor purchase bills.']);
+        exit;
+    }
+
+    $safePoId = preg_replace('/[^a-zA-Z0-9_-]/', '_', basename($rawPo));
+    $safeName = basename($rawFile);
+    $fullPath = resolveUploadFilePathPhp('purchase-bills/' . $safePoId . '/' . $safeName);
+    if (!$fullPath) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'Vendor bill not found on server.']);
+        exit;
+    }
+
+    $ext = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
+    $mimeMap = ['pdf' => 'application/pdf', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png'];
+    $mime = $mimeMap[$ext] ?? 'application/octet-stream';
+    $disposition = !empty($_GET['download']) ? 'attachment' : 'inline';
+
+    header_remove('Content-Type');
+    header('Content-Type: ' . $mime);
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($fullPath));
+    header('Content-Disposition: ' . $disposition . '; filename="' . str_replace('"', '', $safeName) . '"');
+    header('Cache-Control: private, max-age=3600');
+    readfile($fullPath);
+    exit;
 }
 
 // POST /api/purchase-orders/{id}/payments
