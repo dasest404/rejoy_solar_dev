@@ -236,7 +236,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           if (isMounted) {
             saveUserProfile(verifiedProfile, verifyRes.token || undefined);
-            storageService.hydrateFromBackend().catch((syncErr) => {
+            await storageService.hydrateFromBackend().catch((syncErr) => {
               console.error('[Auth] Initial MySQL bootstrap sync failed:', syncErr);
             });
           }
@@ -265,7 +265,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = async (email: string, pass: string): Promise<void> => {
-    setLoading(true);
     try {
       const cleanEmail = email.trim().toLowerCase();
       const cleanPass = pass.trim();
@@ -310,8 +309,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
     } catch (err: any) {
       throw new Error(err.message || 'Authentication failed. Please verify credentials.');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -324,7 +321,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     designation?: string,
     phone: string = ''
   ): Promise<void> => {
-    setLoading(true);
     try {
       const cleanEmail = email.trim().toLowerCase();
       const cleanPass = pass.trim();
@@ -389,8 +385,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
     } catch (err: any) {
       throw new Error(err?.message || 'Registration failed.');
-    } finally {
-      setLoading(false);
     }
   };
 

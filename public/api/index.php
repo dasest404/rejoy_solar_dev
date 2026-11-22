@@ -1212,6 +1212,13 @@ function requireAdminOrHrUserPhp($pdo) {
     return $user;
 }
 
+function isCustomerUserPhp($user) {
+    if (!$user || !is_array($user)) return false;
+    $acct = strtoupper(trim((string)($user['accountType'] ?? ($user['account_type'] ?? ''))));
+    $role = strtolower(trim((string)($user['role'] ?? '')));
+    return $acct === 'CUSTOMER' || in_array($role, ['customer', 'client'], true);
+}
+
 // 7. Normalize Path & Method (Guard against Apache/LiteSpeed PATH_INFO='/' overwriting REQUEST_URI)
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
@@ -5716,8 +5723,8 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
             $credMatches = !empty($storedHash) && (password_verify($password, $storedHash) || hash_equals($storedHash, $password));
 
             if ($credMatches) {
-                // If stored password was plaintext, securely upgrade to bcrypt hash
-                if (!str_starts_with($storedHash, '$2')) {
+                // If stored password was plaintext, securely upgrade to bcrypt hash (preserve existing bcrypt/argon2 hashes)
+                if (!str_starts_with($storedHash, '$2') && !str_starts_with($storedHash, '$argon2')) {
                     $newHash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
                     $up = $pdo->prepare('UPDATE `solar_auth_credentials` SET `password_hash` = ?, `password_changed_at` = NOW() WHERE `id` = ?');
                     $up->execute([$newHash, $cred['id']]);
@@ -5737,7 +5744,7 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
                     $stmtC = $pdo->prepare('SELECT * FROM `solar_customers` WHERE `id` = ? OR `id` = ? OR LOWER(email) = ? LIMIT 1');
                     $stmtC->execute([$rawCustLookup, $linkedEntityId, $email]);
                     $c = $stmtC->fetch(PDO::FETCH_ASSOC);
-                    if ($c && in_array(strtoupper((string)($c['status'] ?? 'ACTIVE')), ['DISABLED', 'INACTIVE'], true)) {
+                    if ($c && in_array(strtoupper(trim((string)($c['status'] ?? 'ACTIVE'))), ['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'], true)) {
                         http_response_code(403);
                         echo json_encode(['success' => false, 'message' => 'Account has been disabled. Please contact system administrator.']);
                         exit;
@@ -5925,7 +5932,7 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
                     if ($eDisabled) {
                         $disabledAccountMsg = 'Account has been disabled. Please contact system administrator.';
                     } else {
-                        if (!str_starts_with($ePass, '$2')) {
+                        if (!str_starts_with($ePass, '$2') && !str_starts_with($ePass, '$argon2')) {
                             $ePass = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
                         }
                         $isFw = (bool)($emp['is_field_worker'] ?? false) || in_array($emp['system_role'] ?? '', [
@@ -5966,10 +5973,10 @@ if ($method === 'POST' && in_array($cleanPath, ['/auth/login', '/auth/login/']))
                 $cMatches = !empty($cHash) && (password_verify($password, $cHash) || hash_equals($cHash, $password));
                 if ($cMatches) {
                     $cStat = strtoupper(trim((string)($cust['status'] ?? 'ACTIVE')));
-                    if (in_array($cStat, ['DISABLED', 'INACTIVE'], true)) {
+                    if (in_array($cStat, ['DISABLED', 'INACTIVE', 'TERMINATED', 'SUSPENDED'], true)) {
                         $disabledAccountMsg = 'Account has been disabled. Please contact system administrator.';
                     } else {
-                        if (!str_starts_with($cHash, '$2')) {
+                        if (!str_starts_with($cHash, '$2') && !str_starts_with($cHash, '$argon2')) {
                             $cHash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]);
                             try {
                                 $pdo->prepare('UPDATE `solar_customers` SET `password` = ? WHERE `id` = ?')->execute([$cHash, $cust['id']]);
@@ -6296,6 +6303,7 @@ if ($method === 'POST' && in_array($cleanPath, ['/users', '/users/'])) {
 if ($method === 'PUT' && preg_match('#^/users/([^/]+)/password/?$#', $cleanPath, $matches)) {
     $userId = urldecode($matches[1]);
     $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
     $actor = requireAdminUserPhp($pdo);
     $newPass = trim($body['password'] ?? '');
     if (empty($newPass) || strlen($newPass) < 6) {
@@ -6320,6 +6328,7 @@ if ($method === 'PUT' && preg_match('#^/users/([^/]+)/password/?$#', $cleanPath,
 if ($method === 'PUT' && preg_match('#^/users/([^/]+)/?$#', $cleanPath, $matches)) {
     $userId = urldecode($matches[1]);
     $pdo = getDbConnection($dbConfig);
+    ensureRequiredTables($pdo);
     $actor = requireAdminUserPhp($pdo);
     $body['id'] = $userId;
     try {
@@ -11768,12 +11777,6 @@ if (preg_match('#^/holidays/([^/]+)/?$#', $cleanPath, $matches)) {
 // ==========================================================
 // EMPLOYEE LEAVE MANAGEMENT HELPERS & ROUTES
 // ==========================================================
-function isCustomerUserPhp($user) {
-    if (!$user) return false;
-    $acct = strtoupper(trim((string)($user['accountType'] ?? ($user['account_type'] ?? ''))));
-    $role = strtoupper(trim((string)($user['role'] ?? '')));
-    return $acct === 'CUSTOMER' || $role === 'CUSTOMER' || $role === 'CLIENT';
-}
 
 function mapLeaveRowPhp($r) {
     return [
@@ -12392,12 +12395,6 @@ if (preg_match('#^/expenses/([^/]+)/?$#', $cleanPath, $matches)) {
 }
 
 // Helpers: Projects, Control Center & Payments REST mapping
-function isCustomerUserPhp($user) {
-    if (!$user || !is_array($user)) return false;
-    $acc = strtoupper(trim((string)($user['accountType'] ?? ($user['account_type'] ?? ''))));
-    $role = strtolower(trim((string)($user['role'] ?? '')));
-    return $acc === 'CUSTOMER' || in_array($role, ['customer', 'client'], true);
-}
 
 function getProjectsListPhp($pdo, $projectIdFilter = null) {
     $stagesByProject = [];
