@@ -31,6 +31,7 @@ import { formatINR, numberToIndianWords } from '../../utils/indianNumberWords';
 import { generateQuotationPdf, WATERMARK_TEXT } from '../../utils/quotationPdfGenerator';
 import { useApp } from '../../context/AppContext';
 import { storageService } from '../../services/storage';
+import { PrintPortal, triggerSafeWindowPrint } from '../common/PrintPortal';
 
 interface QuotationPdfPreviewModalProps {
   quotation: Quotation;
@@ -70,7 +71,7 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
   };
 
   const handlePrint = () => {
-    window.print();
+    void triggerSafeWindowPrint(['/logo-dark.png']);
   };
 
   const handleDownload = () => {
@@ -88,19 +89,19 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
   const capacityKw = quotation.capacityKw || 5;
   const systemType = quotation.systemType || 'On-Grid';
   const basePrice = quotation.baseProjectPrice || quotation.baseAmount || 293848;
-  const eqPct = quotation.gstEquipmentPercent || 70;
-  const eqRate = quotation.gstEquipmentRate || 5;
-  const srvPct = quotation.gstServicesPercent || 30;
-  const srvRate = quotation.gstServicesRate || 18;
+  const eqPct = quotation.gstEquipmentPercent ?? 70;
+  const eqRate = quotation.gstEquipmentRate ?? 5;
+  const srvPct = quotation.gstServicesPercent ?? 30;
+  const srvRate = quotation.gstServicesRate ?? 18;
   const eqTax = Math.round((basePrice * (eqPct / 100) * eqRate) / 100);
   const srvTax = Math.round((basePrice * (srvPct / 100) * srvRate) / 100);
-  const totalGst = quotation.gstAmount || quotation.taxAmount || eqTax + srvTax;
-  const totalProjectCost = quotation.totalProjectCost || quotation.totalAmount || basePrice + totalGst;
-  const centralSubsidy = quotation.centralSubsidy || 0;
-  const stateSubsidy = quotation.stateSubsidy || 0;
-  const totalSubsidy = quotation.totalSubsidy || (centralSubsidy + stateSubsidy);
-  const finalInvestment = quotation.finalProjectInvestment || (totalProjectCost - totalSubsidy);
-  const costPerKw = quotation.costPerKw || Math.round(basePrice / Math.max(1, capacityKw));
+  const totalGst = quotation.gstAmount ?? quotation.taxAmount ?? eqTax + srvTax;
+  const totalProjectCost = quotation.totalProjectCost ?? quotation.totalAmount ?? basePrice + totalGst;
+  const centralSubsidy = quotation.centralSubsidy ?? 0;
+  const stateSubsidy = quotation.stateSubsidy ?? 0;
+  const totalSubsidy = quotation.totalSubsidy ?? (centralSubsidy + stateSubsidy);
+  const finalInvestment = quotation.finalProjectInvestment ?? Math.max(0, totalProjectCost - totalSubsidy);
+  const costPerKw = quotation.costPerKw ?? Math.round(basePrice / Math.max(1, capacityKw));
 
   const dailyUnits = (capacityKw * 4.2).toFixed(1);
   const annualUnits = Math.round(capacityKw * 1460);
@@ -175,145 +176,23 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
     );
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-md overflow-hidden animate-in fade-in duration-200">
-      {/* Top Toolbar (Hidden during Print) */}
-      <div className="print:hidden flex items-center justify-between px-4 sm:px-6 py-2.5 bg-slate-900 border-b border-slate-800 text-white select-none z-20 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg border border-amber-500/30">
-            <Sun className="w-5 h-5 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-white tracking-wide">
-                Quotation Preview: {quotation.quotationNumber}
-              </h2>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                {capacityKw} kW {systemType.toUpperCase()}
-              </span>
-            </div>
-            <p className="text-xs text-slate-400">
-              {quotation.customerName} {quotation.companyName ? `• ${quotation.companyName}` : ''}
-            </p>
-          </div>
-        </div>
+  const getPageClassName = (mode: 'preview' | 'print', flexible: boolean = false) => {
+    if (mode === 'print') {
+      return `quotation-print-page${flexible ? ' quotation-print-page-flexible' : ''}`;
+    }
+    return `w-[210mm] min-h-[297mm] ${flexible ? 'overflow-visible' : 'max-h-[297mm] overflow-hidden'} bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs`;
+  };
 
-        {/* 10-Page Jump Quick Buttons */}
-        <div className="hidden xl:flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs">
-          {[
-            { page: 1, label: '1. Cover' },
-            { page: 2, label: '2. Benefits' },
-            { page: 3, label: '3. Working' },
-            { page: 4, label: '4. Specs' },
-            { page: 5, label: '5. BOM' },
-            { page: 6, label: '6. Cost' },
-            { page: 7, label: '7. ROI' },
-            { page: 8, label: '8. Structure' },
-            { page: 9, label: '9. Terms' },
-            { page: 10, label: '10. Warranties' }
-          ].map(p => (
-            <button
-              key={p.page}
-              onClick={() => scrollToPage(p.page)}
-              className="px-2 py-1 text-slate-300 hover:text-white hover:bg-slate-700/80 rounded-lg transition-colors font-medium text-[11px]"
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Action Controls */}
-        <div className="flex items-center gap-2">
-          {/* Zoom Controls */}
-          <div className="hidden sm:flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700/60 text-xs">
-            <button
-              onClick={() => setZoom(z => Math.max(60, z - 10))}
-              className="p-1 text-slate-400 hover:text-white"
-              title="Zoom Out"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <span className="w-10 text-center font-bold text-[11px] text-slate-200">{zoom}%</span>
-            <button
-              onClick={() => setZoom(z => Math.min(130, z + 10))}
-              className="p-1 text-slate-400 hover:text-white"
-              title="Zoom In"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setZoom(100)}
-              className="p-1 text-slate-400 hover:text-white ml-1"
-              title="Reset Zoom"
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {onShareWhatsApp && (
-            <button
-              onClick={() => onShareWhatsApp(quotation)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xs transition-colors"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">WhatsApp</span>
-            </button>
-          )}
-
-          <button
-            onClick={handleEmailQuote}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-xs transition-colors"
-            title="Email Quotation via Gmail"
-          >
-            <Mail className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Email Quote</span>
-          </button>
-
-          <button
-            onClick={handleDownload}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl shadow-xs transition-colors"
-            title="Download PDF document"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download PDF</span>
-          </button>
-
-          <button
-            onClick={handlePrint}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors"
-            title="Print Quotation"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Print</span>
-          </button>
-
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors ml-1"
-            title="Close Preview"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Main Document Scroll View */}
+  const renderQuotationPages = (mode: 'preview' | 'print') => (
+    <>
+      {/* ==========================================
+          PAGE 1: COVER & FORMAL PROPOSAL
+          ========================================== */}
       <div
-        ref={containerRef}
-        className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-950/60 print:p-0 print:m-0 print:bg-white print:overflow-visible"
+        id={mode === 'preview' ? 'quotation-page-1' : undefined}
+        className={getPageClassName(mode)}
       >
-        <div
-          style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}
-          className="transition-transform duration-150 ease-out print:transform-none"
-        >
-          {/* ==========================================
-              PAGE 1: COVER & FORMAL PROPOSAL
-              ========================================== */}
-          <div
-            id="quotation-page-1"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
-          >
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
+        <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
 
             <div className="relative z-10">
@@ -443,8 +322,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 2: KEY BENEFITS & ENVIRONMENTAL IMPACT
               ========================================== */}
           <div
-            id="quotation-page-2"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-2' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -542,8 +421,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 3: SYSTEM OPERATING PRINCIPLE
               ========================================== */}
           <div
-            id="quotation-page-3"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-3' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -645,8 +524,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 4: DETAILED TECHNICAL SPECIFICATIONS
               ========================================== */}
           <div
-            id="quotation-page-4"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-4' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -701,8 +580,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 5: BILL OF MATERIALS (BOM) & SERVICES
               ========================================== */}
           <div
-            id="quotation-page-5"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-5' : undefined}
+            className={getPageClassName(mode, true)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -788,8 +667,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 6: COMMERCIAL PROPOSAL & FINANCIALS
               ========================================== */}
           <div
-            id="quotation-page-6"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-6' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -924,8 +803,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 7: 25-YEAR GENERATION & FINANCIAL ROI
               ========================================== */}
           <div
-            id="quotation-page-7"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-7' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -1022,8 +901,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
                     {/* Yr 3 Payback */}
                     <rect x="115" y="62" width="22" height="13" fill="#059669" rx="2" />
                     <text x="126" y="59" fill="#059669" fontSize="6.5" fontWeight="bold" textAnchor="middle">₹1.1L</text>
-                    <rect x="106" y="47" width="40" height="9" fill="#d97706" rx="2" />
-                    <text x="126" y="54" fill="#ffffff" fontSize="5" fontWeight="bold" textAnchor="middle">★ PAYBACK</text>
+                    <rect x="106" y="41" width="40" height="9" fill="#d97706" rx="2" />
+                    <text x="126" y="47.5" fill="#ffffff" fontSize="5" fontWeight="bold" textAnchor="middle">★ PAYBACK</text>
                     <text x="126" y="85" fill="#64748b" fontSize="6.5" textAnchor="middle">Yr 3</text>
 
                     {/* Yr 5 */}
@@ -1114,8 +993,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 8: ELEVATED STRUCTURE & 3D MODEL
               ========================================== */}
           <div
-            id="quotation-page-8"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-8' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -1128,7 +1007,7 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               </h2>
 
               {/* 3D Blueprint Canvas */}
-              <div className="h-64 bg-slate-950 rounded-2xl p-4 relative overflow-hidden border border-slate-800 shadow-inner">
+              <div className="min-h-64 bg-slate-950 rounded-2xl p-4 relative overflow-hidden border border-slate-800 shadow-inner">
                 {/* Blueprint Grid Lines */}
                 <div
                   className="absolute inset-0 opacity-15"
@@ -1139,7 +1018,7 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
                 />
 
                 {/* Vector Structural Graphics */}
-                <div className="relative h-full flex flex-col justify-between z-10">
+                <div className="relative flex flex-col justify-between gap-2 z-10">
                   <div className="space-y-1">
                     <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/20 text-amber-400 border border-amber-500/30">
                       ENGINEERED ELEVATED ROOFTOP MOUNTING STRUCTURE
@@ -1150,8 +1029,20 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
                   </div>
 
                   {/* SVG Blueprint Illustration */}
-                  <div className="flex-1 flex items-center justify-center my-2">
-                    <svg viewBox="0 0 500 160" className="w-full h-full max-h-40">
+                  <div className="flex items-center justify-center my-1">
+                    <svg viewBox="0 0 500 160" className="w-full h-auto max-h-36">
+                      <defs>
+                        <marker
+                          id={`blueprint-arrow-${mode}`}
+                          markerWidth="6"
+                          markerHeight="6"
+                          refX="3"
+                          refY="3"
+                          orient="auto-start-reverse"
+                        >
+                          <path d="M 0 0 L 6 3 L 0 6 z" fill="#fbbf24" />
+                        </marker>
+                      </defs>
                       {/* Ground line */}
                       <line x1="30" y1="140" x2="470" y2="140" stroke="#475569" strokeWidth="2" strokeDasharray="4 4" />
                       <text x="40" y="152" fill="#64748b" fontSize="8" fontFamily="sans-serif">ROOFTOP RCC SLAB (ZERO PUNCTURE CHEMICAL ANCHORS)</text>
@@ -1182,7 +1073,16 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
                       <polygon points="340,33 420,23 420,9 340,19" fill="#1e3a8a" stroke="#93c5fd" strokeWidth="1.5" />
 
                       {/* Dimension Arrow for Clearance */}
-                      <line x1="50" y1="130" x2="50" y2="75" stroke="#fbbf24" strokeWidth="1" markerEnd="url(#arrow)" />
+                      <line
+                        x1="50"
+                        y1="130"
+                        x2="50"
+                        y2="75"
+                        stroke="#fbbf24"
+                        strokeWidth="1.2"
+                        markerStart={`url(#blueprint-arrow-${mode})`}
+                        markerEnd={`url(#blueprint-arrow-${mode})`}
+                      />
                       <text x="35" y="105" fill="#fde047" fontSize="7" fontWeight="bold">7 - 8 FT</text>
                     </svg>
                   </div>
@@ -1248,8 +1148,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 9: TERMS, CONDITIONS & MILESTONES
               ========================================== */}
           <div
-            id="quotation-page-9"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-9' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -1331,8 +1231,8 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
               PAGE 10: WARRANTIES, BANKING & ACCEPTANCE
               ========================================== */}
           <div
-            id="quotation-page-10"
-            className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white text-slate-900 shadow-2xl mx-auto mb-10 p-[14mm] relative flex flex-col justify-between box-border rounded-xs print:shadow-none print:m-0 print:mb-0 print:rounded-none print:break-after-page print:page-break-after-always overflow-hidden"
+            id={mode === 'preview' ? 'quotation-page-10' : undefined}
+            className={getPageClassName(mode)}
           >
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-500 z-10" />
             {renderWatermark()}
@@ -1437,8 +1337,151 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
 
             {renderPageFooter(10)}
           </div>
+    </>
+  );
+
+  return (
+    <>
+      <div className="print:hidden fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-md overflow-hidden animate-in fade-in duration-200">
+        {/* Top Toolbar (Hidden during Print) */}
+        <div className="flex items-center justify-between px-4 sm:px-6 py-2.5 bg-slate-900 border-b border-slate-800 text-white select-none z-20 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg border border-amber-500/30">
+              <Sun className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold text-white tracking-wide">
+                  Quotation Preview: {quotation.quotationNumber}
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  {capacityKw} kW {systemType.toUpperCase()}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                {quotation.customerName} {quotation.companyName ? `• ${quotation.companyName}` : ''}
+              </p>
+            </div>
+          </div>
+
+          {/* 10-Page Jump Quick Buttons */}
+          <div className="hidden xl:flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs">
+            {[
+              { page: 1, label: '1. Cover' },
+              { page: 2, label: '2. Benefits' },
+              { page: 3, label: '3. Working' },
+              { page: 4, label: '4. Specs' },
+              { page: 5, label: '5. BOM' },
+              { page: 6, label: '6. Cost' },
+              { page: 7, label: '7. ROI' },
+              { page: 8, label: '8. Structure' },
+              { page: 9, label: '9. Terms' },
+              { page: 10, label: '10. Warranties' }
+            ].map(p => (
+              <button
+                key={p.page}
+                onClick={() => scrollToPage(p.page)}
+                className="px-2 py-1 text-slate-300 hover:text-white hover:bg-slate-700/80 rounded-lg transition-colors font-medium text-[11px]"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Action Controls */}
+          <div className="flex items-center gap-2">
+            {/* Zoom Controls */}
+            <div className="hidden sm:flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700/60 text-xs">
+              <button
+                onClick={() => setZoom(z => Math.max(60, z - 10))}
+                className="p-1 text-slate-400 hover:text-white"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <span className="w-10 text-center font-bold text-[11px] text-slate-200">{zoom}%</span>
+              <button
+                onClick={() => setZoom(z => Math.min(130, z + 10))}
+                className="p-1 text-slate-400 hover:text-white"
+                title="Zoom In"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setZoom(100)}
+                className="p-1 text-slate-400 hover:text-white ml-1"
+                title="Reset Zoom"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {onShareWhatsApp && (
+              <button
+                onClick={() => onShareWhatsApp(quotation)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xs transition-colors"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">WhatsApp</span>
+              </button>
+            )}
+
+            <button
+              onClick={handleEmailQuote}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-xs transition-colors"
+              title="Email Quotation via Gmail"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Email Quote</span>
+            </button>
+
+            <button
+              onClick={handleDownload}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl shadow-xs transition-colors"
+              title="Download PDF document"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download PDF</span>
+            </button>
+
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors"
+              title="Print Quotation"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Print</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors ml-1"
+              title="Close Preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Main Document Scroll View */}
+        <div
+          ref={containerRef}
+          className="flex-1 overflow-auto p-4 sm:p-8 bg-slate-950/60"
+        >
+          <div
+            style={{ zoom: zoom / 100 }}
+            className="w-fit min-w-full mx-auto transition-all duration-150 ease-out"
+          >
+            {renderQuotationPages('preview')}
+          </div>
         </div>
       </div>
-    </div>
+
+      <PrintPortal active={isOpen}>
+        <div className="quotation-print-doc">
+          {renderQuotationPages('print')}
+        </div>
+      </PrintPortal>
+    </>
   );
 };

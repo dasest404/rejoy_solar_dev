@@ -534,21 +534,21 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   const getCategoryBadgeColor = (category?: string) => {
     switch (category) {
       case 'Panels':
-        return 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800';
+        return 'bg-amber-100 text-amber-800 border-amber-300';
       case 'Inverter':
-        return 'bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 border-blue-300 dark:border-blue-800';
+        return 'bg-blue-100 text-blue-800 border-blue-300';
       case 'Structure':
-        return 'bg-cyan-100 dark:bg-cyan-900/40 text-cyan-800 dark:text-cyan-300 border-cyan-300 dark:border-cyan-800';
+        return 'bg-cyan-100 text-cyan-800 border-cyan-300';
       case 'Electrical':
-        return 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800';
+        return 'bg-emerald-100 text-emerald-800 border-emerald-300';
       case 'Net Metering':
-        return 'bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300 border-purple-300 dark:border-purple-800';
+        return 'bg-purple-100 text-purple-800 border-purple-300';
       case 'Civil Work':
-        return 'bg-orange-100 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300 border-orange-300 dark:border-orange-800';
+        return 'bg-orange-100 text-orange-800 border-orange-300';
       case 'Installation':
-        return 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800';
+        return 'bg-indigo-100 text-indigo-800 border-indigo-300';
       default:
-        return 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700';
+        return 'bg-slate-100 text-slate-700 border-slate-300';
     }
   };
 
@@ -672,7 +672,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-0 sm:p-3 md:p-6 overflow-hidden animate-in fade-in duration-150">
-      <div className="bg-white dark:bg-slate-900 w-full sm:max-w-5xl md:max-w-6xl h-full sm:h-auto max-h-[100dvh] sm:max-h-[92vh] rounded-none sm:rounded-2xl shadow-2xl border-0 sm:border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+      <div className="bg-white text-slate-900 w-full sm:max-w-5xl md:max-w-6xl h-full sm:h-auto max-h-[100dvh] sm:max-h-[92vh] rounded-none sm:rounded-2xl shadow-2xl border-0 sm:border border-slate-200 flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-3.5 sm:px-6 py-3 sm:py-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800 shrink-0 gap-2">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
@@ -710,7 +710,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-2 bg-slate-100 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 shrink-0 overflow-x-auto text-xs font-semibold scrollbar-none">
+        <div className="flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-2 bg-slate-100 border-b border-slate-200 shrink-0 overflow-x-auto text-xs font-semibold scrollbar-none">
           {[
             { id: 'details', label: '1. Specs & Client', mobileLabel: '1. Specs', icon: Building2 },
             { id: 'bom', label: `2. Dynamic BOM (${items.length})`, mobileLabel: `2. BOM (${items.length})`, icon: Layers },
@@ -726,7 +726,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                 className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-xl whitespace-nowrap shrink-0 transition-all ${
                   isActive
                     ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-700/50'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5 shrink-0" />
@@ -738,43 +738,43 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
         </div>
 
         {/* Form Body Scrollable Area */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 space-y-4 sm:space-y-6 overscroll-contain">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 space-y-4 sm:space-y-6 overscroll-contain bg-white">
           {/* TAB 1: CLIENT & SYSTEM DETAILS */}
           {activeTab === 'details' && (
             <div className="space-y-6 animate-in fade-in duration-150">
               {/* Proposal Identifiers */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400 mb-3 flex items-center gap-1.5">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 mb-3 flex items-center gap-1.5">
                   <FileText className="w-4 h-4" />
                   <span>Proposal Identifiers & Status</span>
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Quotation Number *
                     </label>
                     <input
                       type="text"
                       value={quotationNumber}
                       onChange={e => setQuotationNumber(e.target.value)}
-                      className="w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Date of Issue *
                     </label>
                     <input
                       type="date"
                       value={quotationDate}
                       onChange={e => setQuotationDate(e.target.value)}
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Validity Period (Days)
                     </label>
                     <input
@@ -783,18 +783,18 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       max={90}
                       value={validityDays}
                       onChange={e => setValidityDays(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Quotation Status
                     </label>
                     <select
                       value={status}
                       onChange={e => setStatus(e.target.value as any)}
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     >
                       <option value="DRAFT">DRAFT</option>
                       <option value="SENT">SENT</option>
@@ -807,9 +807,9 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               </div>
 
               {/* Customer Information */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400 flex items-center gap-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
                     <Building2 className="w-4 h-4" />
                     <span>Client / Customer Details</span>
                   </h3>
@@ -820,7 +820,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       <select
                         value={customerId}
                         onChange={e => handleSelectCustomer(e.target.value)}
-                        className="flex-1 sm:flex-initial px-2.5 py-1 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-semibold max-w-full sm:max-w-xs truncate"
+                        className="flex-1 sm:flex-initial px-2.5 py-1 text-xs rounded-xl border border-slate-300 bg-white text-slate-800 font-semibold max-w-full sm:max-w-xs truncate focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                       >
                         <option value="">-- Select Registered Client --</option>
                         {customers.map(c => (
@@ -835,7 +835,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Customer / Contact Person Name *
                     </label>
                     <input
@@ -843,12 +843,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={customerName}
                       onChange={e => setCustomerName(e.target.value)}
                       placeholder="e.g. Shri Rameshwar Patel"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Company / Enterprise Name
                     </label>
                     <input
@@ -856,12 +856,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={companyName}
                       onChange={e => setCompanyName(e.target.value)}
                       placeholder="e.g. Patel Agro Industries"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Phone Number
                     </label>
                     <input
@@ -869,12 +869,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={customerPhone}
                       onChange={e => setCustomerPhone(e.target.value)}
                       placeholder="+91 98795 44321"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Email Address
                     </label>
                     <input
@@ -882,12 +882,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={customerEmail}
                       onChange={e => setCustomerEmail(e.target.value)}
                       placeholder="client@example.com"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Site Address
                     </label>
                     <input
@@ -895,12 +895,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={siteAddress}
                       onChange={e => setSiteAddress(e.target.value)}
                       placeholder="Plot No, Industrial Area"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       City & State
                     </label>
                     <input
@@ -908,12 +908,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={city}
                       onChange={e => setCity(e.target.value)}
                       placeholder="Raipur, Chhattisgarh"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Client GSTIN
                     </label>
                     <input
@@ -921,21 +921,21 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={customerGst}
                       onChange={e => setCustomerGst(e.target.value)}
                       placeholder="22AAAAA0000A1Z5"
-                      className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
                 </div>
               </div>
 
               {/* Technical Specifications */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400 mb-3 flex items-center gap-1.5">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 mb-3 flex items-center gap-1.5">
                   <Sparkles className="w-4 h-4" />
                   <span>Solar Plant Technical Configuration</span>
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Plant Capacity (kW) *
                     </label>
                     <input
@@ -944,18 +944,18 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       min="1"
                       value={capacityKw}
                       onChange={e => setCapacityKw(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       System Topology
                     </label>
                     <select
                       value={systemType}
                       onChange={e => setSystemType(e.target.value as any)}
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     >
                       <option value="On-Grid">On-Grid (Grid-Tied with Net Metering)</option>
                       <option value="Off-Grid">Off-Grid (With Battery Storage)</option>
@@ -964,7 +964,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Solar PV Module Spec
                     </label>
                     <input
@@ -972,12 +972,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={panelType}
                       onChange={e => setPanelType(e.target.value)}
                       placeholder="DCR Bifacial Mono PERC"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Module Make & Wattage
                     </label>
                     <input
@@ -985,12 +985,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={panelBrand}
                       onChange={e => setPanelBrand(e.target.value)}
                       placeholder="Waaree 545W"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Inverter Make & Specification
                     </label>
                     <input
@@ -998,12 +998,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={inverterBrand}
                       onChange={e => setInverterBrand(e.target.value)}
                       placeholder="Waaree 5KW 3PH Grid Tie"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Mounting Structure Architecture
                     </label>
                     <input
@@ -1011,7 +1011,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       value={structureType}
                       onChange={e => setStructureType(e.target.value)}
                       placeholder="Elevated Rooftop HDG / Pre-GI Structure"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     />
                   </div>
                 </div>
@@ -1024,15 +1024,15 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             <div className="space-y-4 animate-in fade-in duration-150">
               {/* Feedback Banner */}
               {bomFeedback && (
-                <div className="px-4 py-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl text-xs font-semibold text-amber-900 dark:text-amber-200 flex items-center justify-between shadow-xs">
+                <div className="px-4 py-2.5 bg-amber-50 border border-amber-300 rounded-xl text-xs font-semibold text-amber-900 flex items-center justify-between shadow-xs">
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0" />
                     <span>{bomFeedback}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setBomFeedback(null)}
-                    className="text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200 text-xs font-bold"
+                    className="text-amber-700 hover:text-amber-900 text-xs font-bold"
                   >
                     Dismiss
                   </button>
@@ -1040,13 +1040,13 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               )}
 
               {/* Top Controls Bar */}
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    <h3 className="text-sm font-bold text-slate-900">
                       Dynamic Bill of Materials (BOM) & Technical Sizing
                     </h3>
-                    <span className="px-2 py-0.5 text-[11px] font-bold rounded-full bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                    <span className="px-2 py-0.5 text-[11px] font-bold rounded-full bg-slate-200 text-slate-800">
                       {items.length} Items
                     </span>
                   </div>
@@ -1077,7 +1077,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       }}
                       defaultValue=""
                       aria-label="Quick Add from Inventory"
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 max-w-[170px] sm:max-w-[190px] truncate"
+                      className="px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-xl text-slate-700 max-w-[170px] sm:max-w-[190px] truncate focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                     >
                       <option value="" disabled>+ Quick Add Product...</option>
                       {availableProducts.map(p => (
@@ -1091,7 +1091,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   <button
                     type="button"
                     onClick={() => handleAddItem('Other')}
-                    className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors shrink-0"
+                    className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-white hover:bg-slate-100 text-slate-800 rounded-xl border border-slate-300 flex items-center gap-1 transition-colors shrink-0"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Add Blank Item</span>
@@ -1102,9 +1102,9 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                     type="button"
                     onClick={handleAutoScaleForCapacity}
                     title="Recalculate panel quantity and inverter specs to match system capacity"
-                    className="px-2.5 sm:px-3 py-1.5 text-xs font-bold bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-amber-800 rounded-xl flex items-center gap-1.5 transition-colors shrink-0"
+                    className="px-2.5 sm:px-3 py-1.5 text-xs font-bold bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-900 border border-amber-300 rounded-xl flex items-center gap-1.5 transition-colors shrink-0"
                   >
-                    <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                    <Zap className="w-3.5 h-3.5 text-amber-600" />
                     <span>Scale {capacityKw} kW</span>
                   </button>
 
@@ -1116,7 +1116,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       }
                     }}
                     defaultValue=""
-                    className="px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 max-w-[150px] sm:max-w-[180px] truncate"
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-xl text-slate-700 max-w-[150px] sm:max-w-[180px] truncate focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                   >
                     <option value="" disabled>Load Preset BOM...</option>
                     {BOM_PRESET_TEMPLATES.map(tpl => (
@@ -1130,7 +1130,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                     type="button"
                     onClick={handleCopyBomToClipboard}
                     title="Copy BOM table as formatted text"
-                    className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-colors shrink-0"
+                    className="p-1.5 text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-xl transition-colors shrink-0"
                   >
                     {copiedBom ? <Check className="w-4 h-4 text-emerald-500" /> : <ClipboardCopy className="w-4 h-4" />}
                   </button>
@@ -1143,7 +1143,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         setItems([]);
                       }
                     }}
-                    className="px-2.5 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl border border-red-200 dark:border-red-900/50 transition-colors shrink-0"
+                    className="px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl border border-red-200 transition-colors shrink-0"
                   >
                     Clear
                   </button>
@@ -1291,8 +1291,8 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         onClick={() => setBomCategoryFilter(cat)}
                         className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-colors ${
                           isActive
-                            ? 'bg-slate-900 text-white border-slate-900 dark:bg-amber-500 dark:text-slate-950 dark:border-amber-500'
-                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                         }`}
                       >
                         <span>{cat}</span>
@@ -1309,7 +1309,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                     value={bomSearchQuery}
                     onChange={e => setBomSearchQuery(e.target.value)}
                     placeholder="Search BOM items..."
-                    className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500"
+                    className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                   />
                   {bomSearchQuery && (
                     <button
@@ -1325,9 +1325,9 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
 
               {/* Items Table / Empty View */}
               {items.length === 0 ? (
-                <div className="text-center py-12 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-8">
+                <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-300 p-8">
                   <Layers className="w-10 h-10 text-slate-400 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No BOM Items in Quotation</p>
+                  <p className="text-sm font-semibold text-slate-700">No BOM Items in Quotation</p>
                   <p className="text-xs text-slate-500 mt-1">
                     Select a preset template or add components from warehouse inventory.
                   </p>
@@ -1342,16 +1342,16 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsInventoryPickerOpen(true)}
-                      className="px-4 py-2 text-xs font-bold bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-white rounded-xl shadow-xs"
+                      className="px-4 py-2 text-xs font-bold bg-white border border-slate-300 text-slate-800 rounded-xl shadow-xs"
                     >
                       Pick from Inventory
                     </button>
                   </div>
                 </div>
               ) : filteredItems.length === 0 ? (
-                <div className="text-center py-8 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
+                <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-200 p-6">
                   <Filter className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">No items match current filter or search</p>
+                  <p className="text-xs font-semibold text-slate-700">No items match current filter or search</p>
                   <button
                     type="button"
                     onClick={() => {
@@ -1375,7 +1375,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   </datalist>
 
                   {/* 1. DESKTOP / TABLET DATA TABLE VIEW (hidden on mobile) */}
-                  <div className="hidden md:block border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs">
+                  <div className="hidden md:block border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs border-collapse">
                         <thead className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
@@ -1389,11 +1389,11 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                             <th className="py-2.5 px-2 text-center w-16">Actions</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
+                        <tbody className="divide-y divide-slate-100 bg-white">
                           {filteredItems.map(item => {
                             const realIdx = items.findIndex(it => it.id === item.id);
                             return (
-                              <tr key={item.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
+                              <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                                 {/* Index & Order Movers */}
                                 <td className="py-2 px-2 text-center">
                                   <div className="flex items-center justify-center gap-0.5">
@@ -1406,7 +1406,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                         disabled={realIdx === 0}
                                         onClick={() => handleMoveItem(realIdx, 'up')}
                                         title="Move item up"
-                                        className="text-slate-400 hover:text-slate-800 dark:hover:text-white disabled:opacity-20 transition-colors"
+                                        className="text-slate-400 hover:text-slate-800 disabled:opacity-20 transition-colors"
                                       >
                                         <ChevronUp className="w-3 h-3" />
                                       </button>
@@ -1415,7 +1415,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                         disabled={realIdx === items.length - 1}
                                         onClick={() => handleMoveItem(realIdx, 'down')}
                                         title="Move item down"
-                                        className="text-slate-400 hover:text-slate-800 dark:hover:text-white disabled:opacity-20 transition-colors"
+                                        className="text-slate-400 hover:text-slate-800 disabled:opacity-20 transition-colors"
                                       >
                                         <ChevronDown className="w-3 h-3" />
                                       </button>
@@ -1448,7 +1448,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                         }
                                       }}
                                       placeholder="Component / Material name (type to search inventory)"
-                                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-1 focus:ring-amber-500"
+                                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                                     />
                                     {item.category && item.category !== 'Other' && (
                                       <span
@@ -1460,7 +1460,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                     {item.inventoryRef && (
                                       <span
                                         title="Linked to warehouse product catalog"
-                                        className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 shrink-0"
+                                        className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-emerald-100 text-emerald-700 border border-emerald-300 shrink-0"
                                       >
                                         Warehouse
                                       </span>
@@ -1471,7 +1471,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                     value={item.specification || ''}
                                     onChange={e => handleUpdateItem(item.id, 'specification', e.target.value)}
                                     placeholder="Detailed technical specification (optional)"
-                                    className="w-full mt-1 px-2.5 py-0.5 text-[10px] text-slate-500 rounded border border-transparent hover:border-slate-200 dark:hover:border-slate-700 bg-transparent focus:bg-white dark:focus:bg-slate-800 focus:border-amber-500"
+                                    className="w-full mt-1 px-2.5 py-0.5 text-[10px] text-slate-600 placeholder:text-slate-400 rounded border border-transparent hover:border-slate-200 bg-white focus:outline-none focus:border-amber-500"
                                   />
                                 </td>
 
@@ -1482,7 +1482,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                     min={1}
                                     value={item.quantity}
                                     onChange={e => handleUpdateItem(item.id, 'quantity', Number(e.target.value))}
-                                    className="w-14 px-1 py-1 text-xs text-center font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-1 focus:ring-amber-500"
+                                    className="w-14 px-1 py-1 text-xs text-center font-bold rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                                   />
                                 </td>
 
@@ -1491,7 +1491,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                   <select
                                     value={item.unit}
                                     onChange={e => handleUpdateItem(item.id, 'unit', e.target.value)}
-                                    className="w-full px-1 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                                    className="w-full px-1 py-1 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                                   >
                                     <option value="Nos">Nos</option>
                                     <option value="No">No</option>
@@ -1511,12 +1511,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                     min={0}
                                     value={item.rate}
                                     onChange={e => handleUpdateItem(item.id, 'rate', Number(e.target.value))}
-                                    className="w-24 px-2 py-1 text-xs text-right font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-1 focus:ring-amber-500"
+                                    className="w-24 px-2 py-1 text-xs text-right font-semibold rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                                   />
                                 </td>
 
                                 {/* Amount */}
-                                <td className="py-2 px-3 text-right font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                                <td className="py-2 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
                                   {formatINR(item.amount)}
                                 </td>
 
@@ -1527,7 +1527,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                       type="button"
                                       onClick={() => handleDuplicateItem(item.id)}
                                       title="Duplicate line item"
-                                      className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-md transition-colors"
+                                      className="p-1 text-slate-400 hover:text-slate-700 rounded-md transition-colors"
                                     >
                                       <Copy className="w-3.5 h-3.5" />
                                     </button>
@@ -1545,15 +1545,15 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                             );
                           })}
                         </tbody>
-                        <tfoot className="bg-amber-50 dark:bg-amber-950/30 border-t-2 border-amber-300 dark:border-amber-800/60 font-bold text-xs">
+                        <tfoot className="bg-amber-50 border-t-2 border-amber-300 font-bold text-xs">
                           <tr>
-                            <td colSpan={5} className="py-2.5 px-3 text-right text-amber-900 dark:text-amber-300 uppercase tracking-wider">
+                            <td colSpan={5} className="py-2.5 px-3 text-right text-amber-900 uppercase tracking-wider">
                               Total Material Cost (BOM Subtotal):
                             </td>
-                            <td className="py-2.5 px-3 text-right text-amber-900 dark:text-amber-200 font-black text-sm whitespace-nowrap">
+                            <td className="py-2.5 px-3 text-right text-amber-900 font-black text-sm whitespace-nowrap">
                               {formatINR(bomSubtotal)}
                             </td>
-                            <td className="py-2.5 px-2 text-center text-[10px] text-amber-700 dark:text-amber-400">
+                            <td className="py-2.5 px-2 text-center text-[10px] text-amber-700">
                               {items.length} items
                             </td>
                           </tr>
@@ -1569,12 +1569,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       return (
                         <div
                           key={item.id}
-                          className="p-3 bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700/80 shadow-xs space-y-2.5"
+                          className="p-3 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-2.5"
                         >
                           {/* Card Header: Index, Badge & Quick Reorder / Actions */}
-                          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-700/60">
+                          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="w-5 h-5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-bold flex items-center justify-center shrink-0">
+                              <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-600 text-[11px] font-bold flex items-center justify-center shrink-0">
                                 {realIdx + 1}
                               </span>
                               {item.category && item.category !== 'Other' && (
@@ -1583,7 +1583,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 </span>
                               )}
                               {item.inventoryRef && (
-                                <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 shrink-0">
+                                <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-emerald-100 text-emerald-700 border border-emerald-300 shrink-0">
                                   Warehouse Stock
                                 </span>
                               )}
@@ -1595,7 +1595,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 disabled={realIdx === 0}
                                 onClick={() => handleMoveItem(realIdx, 'up')}
                                 title="Move up"
-                                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 rounded"
+                                className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-20 rounded"
                               >
                                 <ChevronUp className="w-4 h-4" />
                               </button>
@@ -1604,7 +1604,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 disabled={realIdx === items.length - 1}
                                 onClick={() => handleMoveItem(realIdx, 'down')}
                                 title="Move down"
-                                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 rounded"
+                                className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-20 rounded"
                               >
                                 <ChevronDown className="w-4 h-4" />
                               </button>
@@ -1612,7 +1612,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 type="button"
                                 onClick={() => handleDuplicateItem(item.id)}
                                 title="Duplicate item"
-                                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded"
+                                className="p-1 text-slate-400 hover:text-slate-700 rounded"
                               >
                                 <Copy className="w-4 h-4" />
                               </button>
@@ -1629,7 +1629,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
 
                           {/* Component / Product Name */}
                           <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-1">
                               Component / Product Name
                             </label>
                             <input
@@ -1654,7 +1654,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 }
                               }}
                               placeholder="Component name (type to search inventory)"
-                              className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:ring-1 focus:ring-amber-500"
+                              className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </div>
 
@@ -1665,14 +1665,14 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                               value={item.specification || ''}
                               onChange={e => handleUpdateItem(item.id, 'specification', e.target.value)}
                               placeholder="Technical specifications (optional)..."
-                              className="w-full px-2.5 py-1 text-[11px] rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-300 focus:bg-white dark:focus:bg-slate-900 focus:ring-1 focus:ring-amber-500"
+                              className="w-full px-2.5 py-1 text-[11px] rounded-lg border border-slate-200 bg-white text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </div>
 
                           {/* Quantities, Unit & Rate Inputs */}
                           <div className="grid grid-cols-3 gap-2 pt-1 items-end">
                             <div>
-                              <label className="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-0.5">
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                                 Qty
                               </label>
                               <input
@@ -1680,18 +1680,18 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 min={1}
                                 value={item.quantity}
                                 onChange={e => handleUpdateItem(item.id, 'quantity', Number(e.target.value))}
-                                className="w-full px-2 py-1.5 text-xs text-center font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:ring-1 focus:ring-amber-500"
+                                className="w-full px-2 py-1.5 text-xs text-center font-bold rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                               />
                             </div>
 
                             <div>
-                              <label className="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-0.5">
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                                 Unit
                               </label>
                               <select
                                 value={item.unit}
                                 onChange={e => handleUpdateItem(item.id, 'unit', e.target.value)}
-                                className="w-full px-1.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+                                className="w-full px-1.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                               >
                                 <option value="Nos">Nos</option>
                                 <option value="No">No</option>
@@ -1705,7 +1705,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                             </div>
 
                             <div>
-                              <label className="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-0.5">
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                                 Rate (₹)
                               </label>
                               <input
@@ -1713,15 +1713,15 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 min={0}
                                 value={item.rate}
                                 onChange={e => handleUpdateItem(item.id, 'rate', Number(e.target.value))}
-                                className="w-full px-2 py-1.5 text-xs text-right font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:ring-1 focus:ring-amber-500"
+                                className="w-full px-2 py-1.5 text-xs text-right font-semibold rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                               />
                             </div>
                           </div>
 
                           {/* Line Total */}
-                          <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700/60 text-xs">
-                            <span className="text-slate-500 dark:text-slate-400 font-medium">Line Amount:</span>
-                            <span className="font-black text-amber-700 dark:text-amber-300 text-sm">
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                            <span className="text-slate-500 font-medium">Line Amount:</span>
+                            <span className="font-black text-amber-700 text-sm">
                               {formatINR(item.amount)}
                             </span>
                           </div>
@@ -1730,16 +1730,16 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                     })}
 
                     {/* Mobile Summary Card */}
-                    <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-2xl border border-amber-300 dark:border-amber-800/60 flex items-center justify-between">
+                    <div className="p-3 bg-amber-50 rounded-2xl border border-amber-300 flex items-center justify-between">
                       <div>
-                        <div className="text-[11px] font-bold text-amber-900 dark:text-amber-300 uppercase tracking-wide">
+                        <div className="text-[11px] font-bold text-amber-900 uppercase tracking-wide">
                           Total Material Cost
                         </div>
-                        <div className="text-[10px] text-amber-700 dark:text-amber-400">
+                        <div className="text-[10px] text-amber-700">
                           {items.length} items configured
                         </div>
                       </div>
-                      <div className="text-base font-black text-amber-950 dark:text-amber-200">
+                      <div className="text-base font-black text-amber-950">
                         {formatINR(bomSubtotal)}
                       </div>
                     </div>
@@ -1754,20 +1754,20 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             <div className="space-y-6 animate-in fade-in duration-150">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Left Column: Direct EPC Charges */}
-                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400 flex items-center gap-1.5">
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
                     <DollarSign className="w-4 h-4" />
                     <span>Direct Charges & Project Base Price</span>
                   </h3>
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-slate-600 dark:text-slate-400">BOM Material Subtotal</span>
-                      <span className="font-bold text-slate-900 dark:text-white">{formatINR(bomSubtotal)}</span>
+                      <span className="font-semibold text-slate-600">BOM Material Subtotal</span>
+                      <span className="font-bold text-slate-900">{formatINR(bomSubtotal)}</span>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Installation & Commissioning Charges (₹)
                       </label>
                       <input
@@ -1775,12 +1775,13 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         min={0}
                         value={installationCharges}
                         onChange={e => setInstallationCharges(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                        placeholder="0"
+                        className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Transportation & Logistics Charges (₹)
                       </label>
                       <input
@@ -1788,12 +1789,13 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         min={0}
                         value={transportationCharges}
                         onChange={e => setTransportationCharges(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                        placeholder="0"
+                        className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Other Incidental Charges (₹)
                       </label>
                       <input
@@ -1801,12 +1803,13 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         min={0}
                         value={otherCharges}
                         onChange={e => setOtherCharges(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                        placeholder="0"
+                        className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Special EPC Discount (₹)
                       </label>
                       <input
@@ -1814,84 +1817,105 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         min={0}
                         value={discountAmount}
                         onChange={e => setDiscountAmount(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-xs font-bold text-red-600 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:ring-2 focus:ring-amber-500"
+                        placeholder="0"
+                        className="w-full px-3 py-2 text-xs font-bold text-red-600 rounded-xl border border-slate-300 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                       />
                     </div>
 
-                    <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs font-bold">
-                      <span className="text-slate-700 dark:text-slate-300">Base Project Price (Excl. GST):</span>
-                      <span className="text-amber-800 dark:text-amber-400 text-sm font-black">{formatINR(baseProjectPrice)}</span>
+                    <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-xs font-bold">
+                      <span className="text-slate-700">Base Project Price (Excl. GST):</span>
+                      <span className="text-amber-800 text-sm font-black">{formatINR(baseProjectPrice)}</span>
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="flex items-center justify-between text-[11px] text-slate-600">
                       <span>Effective Cost Per kW:</span>
-                      <span className="font-semibold text-slate-800 dark:text-slate-200">{formatINR(costPerKw)} / kW</span>
+                      <span className="font-semibold text-slate-800">{formatINR(costPerKw)} / kW</span>
                     </div>
                   </div>
                 </div>
 
                 {/* Right Column: Dynamic GST Configuration & Subsidies */}
-                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400 flex items-center gap-1.5">
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4" />
                     <span>Dynamic GST & PM Surya Ghar Subsidy</span>
                   </h3>
 
                   {/* GST Split Scheme */}
-                  <div className="space-y-3 p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                    <span className="font-bold text-slate-800 dark:text-slate-200 block text-[11px] uppercase">
+                  <div className="space-y-3 p-3.5 bg-white rounded-xl border border-slate-200 text-xs shadow-xs">
+                    <span className="font-bold text-slate-800 block text-[11px] uppercase tracking-wide">
                       Composite Solar GST Configuration
                     </span>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-[10px] text-slate-500">Equipment Share (%)</label>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Equipment Share (%)
+                        </label>
                         <input
                           type="number"
+                          min={0}
+                          max={100}
                           value={gstEquipmentPercent}
                           onChange={e => setGstEquipmentPercent(Number(e.target.value))}
-                          className="w-full px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-600 bg-transparent font-bold"
+                          placeholder="70"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] text-slate-500">Equipment GST Rate (%)</label>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Equipment GST Rate (%)
+                        </label>
                         <input
                           type="number"
+                          min={0}
+                          max={100}
                           value={gstEquipmentRate}
                           onChange={e => setGstEquipmentRate(Number(e.target.value))}
-                          className="w-full px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-600 bg-transparent font-bold"
+                          placeholder="5"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] text-slate-500">Services Share (%)</label>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Services Share (%)
+                        </label>
                         <input
                           type="number"
+                          min={0}
+                          max={100}
                           value={gstServicesPercent}
                           onChange={e => setGstServicesPercent(Number(e.target.value))}
-                          className="w-full px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-600 bg-transparent font-bold"
+                          placeholder="30"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] text-slate-500">Services GST Rate (%)</label>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Services GST Rate (%)
+                        </label>
                         <input
                           type="number"
+                          min={0}
+                          max={100}
                           value={gstServicesRate}
                           onChange={e => setGstServicesRate(Number(e.target.value))}
-                          className="w-full px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-600 bg-transparent font-bold"
+                          placeholder="18"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                         />
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700 space-y-1 text-[11px]">
-                      <div className="flex justify-between text-slate-500">
+                    <div className="pt-2 border-t border-slate-100 space-y-1 text-[11px]">
+                      <div className="flex justify-between text-slate-600">
                         <span>Equipment Tax ({gstEquipmentPercent}% @ {gstEquipmentRate}%):</span>
-                        <span className="font-semibold">{formatINR(eqTax)}</span>
+                        <span className="font-semibold text-slate-800">{formatINR(eqTax)}</span>
                       </div>
-                      <div className="flex justify-between text-slate-500">
+                      <div className="flex justify-between text-slate-600">
                         <span>Services Tax ({gstServicesPercent}% @ {gstServicesRate}%):</span>
-                        <span className="font-semibold">{formatINR(srvTax)}</span>
+                        <span className="font-semibold text-slate-800">{formatINR(srvTax)}</span>
                       </div>
-                      <div className="flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <div className="flex justify-between font-bold text-slate-900 pt-1">
                         <span>Total GST Amount:</span>
                         <span>{formatINR(totalGst)}</span>
                       </div>
@@ -1899,33 +1923,41 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   </div>
 
                   {/* Subsidies */}
-                  <div className="space-y-3 p-3 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-xl border border-emerald-200 dark:border-emerald-900/50 text-xs">
-                    <span className="font-bold text-emerald-800 dark:text-emerald-300 block text-[11px] uppercase">
+                  <div className="space-y-3 p-3.5 bg-emerald-50/70 rounded-xl border border-emerald-200 text-xs">
+                    <span className="font-bold text-emerald-800 block text-[11px] uppercase tracking-wide">
                       Subsidies & Direct Financial Assistance
                     </span>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-[10px] text-slate-600 dark:text-slate-400">Central Subsidy (PM Surya Ghar)</label>
+                        <label className="block text-[11px] font-semibold text-emerald-900/80 mb-1">
+                          Central Subsidy (PM Surya Ghar)
+                        </label>
                         <input
                           type="number"
+                          min={0}
                           value={centralSubsidy}
                           onChange={e => setCentralSubsidy(Number(e.target.value))}
-                          className="w-full px-2 py-1 text-xs rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-800 font-bold text-emerald-700"
+                          placeholder="0"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-emerald-300 bg-white text-emerald-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] text-slate-600 dark:text-slate-400">Chhattisgarh State Subsidy</label>
+                        <label className="block text-[11px] font-semibold text-emerald-900/80 mb-1">
+                          Chhattisgarh State Subsidy
+                        </label>
                         <input
                           type="number"
+                          min={0}
                           value={stateSubsidy}
                           onChange={e => setStateSubsidy(Number(e.target.value))}
-                          className="w-full px-2 py-1 text-xs rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-800 font-bold text-emerald-700"
+                          placeholder="0"
+                          className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-emerald-300 bg-white text-emerald-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
                         />
                       </div>
                     </div>
 
-                    <div className="flex justify-between font-bold text-emerald-800 dark:text-emerald-300 text-xs pt-1 border-t border-emerald-200 dark:border-emerald-900/40">
+                    <div className="flex justify-between font-bold text-emerald-900 text-xs pt-1.5 border-t border-emerald-200">
                       <span>Total Subsidy Assistance:</span>
                       <span>{formatINR(totalSubsidy)}</span>
                     </div>
@@ -1934,18 +1966,18 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               </div>
 
               {/* Financial Executive Summary Box */}
-              <div className="p-5 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-slate-800 dark:to-slate-800/90 rounded-2xl border-2 border-amber-300 dark:border-amber-700">
+              <div className="p-5 bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-300">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Project Cost (With GST)</span>
-                    <span className="text-xl font-black text-slate-900 dark:text-white">{formatINR(totalProjectCost)}</span>
-                    <p className="text-[10px] text-slate-500 mt-1">{amountInWords}</p>
+                    <span className="text-[10px] uppercase font-bold text-slate-600 block">Total Project Cost (With GST)</span>
+                    <span className="text-xl font-black text-slate-900">{formatINR(totalProjectCost)}</span>
+                    <p className="text-[10px] text-slate-600 mt-1">{amountInWords}</p>
                   </div>
 
                   <div>
-                    <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 block">Total Applicable Subsidy</span>
-                    <span className="text-xl font-black text-emerald-700 dark:text-emerald-400">- {formatINR(totalSubsidy)}</span>
-                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400/80 mt-1">PM Surya Ghar + Chhattisgarh Policy</p>
+                    <span className="text-[10px] uppercase font-bold text-emerald-700 block">Total Applicable Subsidy</span>
+                    <span className="text-xl font-black text-emerald-700">- {formatINR(totalSubsidy)}</span>
+                    <p className="text-[10px] text-emerald-700 mt-1">PM Surya Ghar + Chhattisgarh Policy</p>
                   </div>
 
                   <div className="p-3 bg-amber-500 text-slate-950 rounded-xl shadow-xs">
@@ -1963,7 +1995,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             <div className="space-y-6 animate-in fade-in duration-150">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  <h3 className="text-sm font-bold text-slate-900">
                     Milestone Payment Schedule
                   </h3>
                   <p className="text-xs text-slate-500">
@@ -1974,8 +2006,8 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
                     isMilestoneValid
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800'
-                      : 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-red-50 text-red-700 border-red-200'
                   }`}>
                     Total: {milestoneTotalPercentage}% {isMilestoneValid ? '✓' : '(Must be 100%)'}
                   </span>
@@ -1983,7 +2015,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setMilestones(DEFAULT_PAYMENT_MILESTONES)}
-                    className="px-3 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl transition-colors"
+                    className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors"
                   >
                     Reset to 10/70/18/2
                   </button>
@@ -1991,7 +2023,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               </div>
 
               {!isMilestoneValid && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-xl text-xs text-red-700 dark:text-red-400 flex items-center gap-2">
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0" />
                   <span>
                     Validation Error: The milestone percentages currently total <strong>{milestoneTotalPercentage}%</strong>. Please adjust values until they equal exactly <strong>100%</strong> before saving.
@@ -1999,7 +2031,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                 </div>
               )}
 
-              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs">
+              <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse min-w-[520px]">
                     <thead className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
@@ -2011,16 +2043,16 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                         <th className="py-2.5 px-3 text-right w-36">Amount (₹)</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    <tbody className="divide-y divide-slate-100 bg-white">
                       {milestones.map((m, idx) => (
-                        <tr key={m.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <tr key={m.id} className="hover:bg-slate-50/70">
                           <td className="py-2.5 px-3 text-center font-bold text-slate-400">Stage 0{idx + 1}</td>
                           <td className="py-2.5 px-3">
                             <input
                               type="text"
                               value={m.title}
                               onChange={e => handleUpdateMilestone(m.id, 'title', e.target.value)}
-                              className="w-full px-2 py-1 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              className="w-full px-2 py-1 text-xs font-bold rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </td>
                           <td className="py-2.5 px-3">
@@ -2028,7 +2060,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                               type="text"
                               value={m.description || ''}
                               onChange={e => handleUpdateMilestone(m.id, 'description', e.target.value)}
-                              className="w-full px-2 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              className="w-full px-2 py-1 text-xs rounded-lg border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </td>
                           <td className="py-2.5 px-3 text-center">
@@ -2038,24 +2070,24 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                               max={100}
                               value={m.percentage}
                               onChange={e => handleUpdateMilestone(m.id, 'percentage', Number(e.target.value))}
-                              className="w-20 px-2 py-1 text-xs text-center font-bold text-amber-800 dark:text-amber-400 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
+                              className="w-20 px-2 py-1 text-xs text-center font-bold text-amber-800 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </td>
-                          <td className="py-2.5 px-3 text-right font-black text-slate-900 dark:text-white">
+                          <td className="py-2.5 px-3 text-right font-black text-slate-900">
                             {formatINR(m.amount)}
                           </td>
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot className="bg-slate-100 dark:bg-slate-800 font-bold text-xs border-t border-slate-200 dark:border-slate-700">
+                    <tfoot className="bg-slate-100 font-bold text-xs border-t border-slate-200">
                       <tr>
-                        <td colSpan={3} className="py-2.5 px-3 text-right uppercase tracking-wider">
+                        <td colSpan={3} className="py-2.5 px-3 text-right uppercase tracking-wider text-slate-700">
                           Total Contractual Payment:
                         </td>
-                        <td className="py-2.5 px-3 text-center font-black text-amber-800 dark:text-amber-400">
+                        <td className="py-2.5 px-3 text-center font-black text-amber-800">
                           {milestoneTotalPercentage}%
                         </td>
-                        <td className="py-2.5 px-3 text-right text-slate-900 dark:text-white font-black">
+                        <td className="py-2.5 px-3 text-right text-slate-900 font-black">
                           {formatINR(totalProjectCost)}
                         </td>
                       </tr>
@@ -2065,11 +2097,11 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               </div>
 
               {/* Validity & Terms */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
-                <span className="font-bold text-slate-800 dark:text-slate-200 block uppercase text-[11px]">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                <span className="font-bold text-slate-800 block uppercase text-[11px]">
                   Contractual Validity Summary
                 </span>
-                <p className="text-slate-600 dark:text-slate-400">
+                <p className="text-slate-600">
                   This quotation is issued on <strong>{quotationDate}</strong> and remains strictly valid for <strong>{validityDays} days</strong> until <strong>{validTillDate}</strong>. All material rates are guaranteed for this validity window.
                 </p>
               </div>
@@ -2078,18 +2110,18 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
         </div>
 
         {/* Modal Footer Controls */}
-        <div className="px-3.5 sm:px-6 py-3 sm:py-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4 shrink-0">
+        <div className="px-3.5 sm:px-6 py-3 sm:py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4 shrink-0">
           <div className="flex items-center justify-between sm:justify-start gap-3 w-full sm:w-auto">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 sm:px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl transition-colors"
+              className="px-3.5 sm:px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded-xl transition-colors"
             >
               Cancel
             </button>
             <div className="sm:hidden text-right">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Net Payable</span>
-              <span className="text-xs font-black text-amber-600 dark:text-amber-400">{formatINR(finalProjectInvestment)}</span>
+              <span className="text-[10px] text-slate-500 uppercase font-semibold block">Net Payable</span>
+              <span className="text-xs font-black text-amber-700">{formatINR(finalProjectInvestment)}</span>
             </div>
           </div>
 
@@ -2097,7 +2129,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             <button
               type="button"
               onClick={() => handleSubmit(true)}
-              className="flex-1 sm:flex-initial px-3 sm:px-4 py-2 text-xs font-bold bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
+              className="flex-1 sm:flex-initial px-3 sm:px-4 py-2 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
             >
               <Eye className="w-4 h-4 text-amber-400 shrink-0" />
               <span>Save & View PDF</span>
@@ -2117,7 +2149,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
       {/* Warehouse Product Catalog Picker Modal */}
       {isInventoryPickerOpen && (
         <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 md:p-5">
-          <div className="bg-white dark:bg-slate-900 rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-200 dark:border-slate-800 w-full sm:max-w-4xl h-full sm:h-auto max-h-[100dvh] sm:max-h-[88vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
+          <div className="bg-white text-slate-900 rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-200 w-full sm:max-w-4xl h-full sm:h-auto max-h-[100dvh] sm:max-h-[88vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
             {/* Header */}
             <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
@@ -2144,7 +2176,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             </div>
 
             {/* Filter Toolbar */}
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 space-y-3 shrink-0">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 space-y-3 shrink-0">
               <div className="relative">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
@@ -2152,7 +2184,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   value={inventorySearch}
                   onChange={e => setInventorySearch(e.target.value)}
                   placeholder="Search products by SKU, title, brand, or technical specifications..."
-                  className="w-full pl-9 pr-8 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500"
+                  className="w-full pl-9 pr-8 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 />
                 {inventorySearch && (
                   <button
@@ -2193,7 +2225,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       className={`px-3 py-1.5 text-xs font-bold rounded-xl border whitespace-nowrap shrink-0 transition-colors ${
                         isActive
                           ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-xs'
-                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
                       <span>{tab.label}</span>
@@ -2205,7 +2237,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             </div>
 
             {/* Products List */}
-            <div className="p-4 overflow-y-auto space-y-2.5 flex-1 divide-y divide-slate-100 dark:divide-slate-800">
+            <div className="p-4 overflow-y-auto space-y-2.5 flex-1 divide-y divide-slate-100 bg-white">
               {availableProducts
                 .filter(p => {
                   // Category match
@@ -2239,37 +2271,37 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   return (
                     <div
                       key={product.id}
-                      className="pt-2.5 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-800/40 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
+                      className="pt-2.5 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-2xl hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-colors"
                     >
                       <div className="space-y-1 flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-slate-100 text-slate-700 border border-slate-200">
                             {product.sku}
                           </span>
-                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300">
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-amber-100 text-amber-800">
                             {product.category}
                           </span>
                           <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md ${
                             isLowStock
-                              ? 'bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800'
-                              : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                              ? 'bg-red-100 text-red-700 border border-red-200'
+                              : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
                           }`}>
                             Stock: {product.currentStock} {product.unit}
                           </span>
                         </div>
 
-                        <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        <h4 className="text-xs font-bold text-slate-900 truncate">
                           {product.name}
                         </h4>
 
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                          Make: <strong className="text-slate-700 dark:text-slate-300">{product.brand}</strong> &bull; {product.specification}
+                        <p className="text-[11px] text-slate-500 line-clamp-1">
+                          Make: <strong className="text-slate-700">{product.brand}</strong> &bull; {product.specification}
                         </p>
                       </div>
 
-                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
                         <div className="text-left sm:text-right">
-                          <div className="text-xs font-black text-slate-900 dark:text-white">
+                          <div className="text-xs font-black text-slate-900">
                             {formatINR(price)}
                           </div>
                           <div className="text-[10px] text-slate-400">
@@ -2279,14 +2311,14 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
 
                         <div className="flex items-center gap-2">
                           {/* Quantity Stepper */}
-                          <div className="flex items-center border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-800">
+                          <div className="flex items-center border border-slate-300 rounded-xl overflow-hidden bg-white">
                             <button
                               type="button"
                               onClick={() => setInventoryQtyMap(prev => ({
                                 ...prev,
                                 [product.id]: Math.max(1, (prev[product.id] || 1) - 1)
                               }))}
-                              className="px-2 py-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold"
+                              className="px-2 py-1 text-slate-600 hover:bg-slate-100 text-xs font-bold"
                             >
                               -
                             </button>
@@ -2298,7 +2330,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 ...prev,
                                 [product.id]: Math.max(1, Number(e.target.value) || 1)
                               }))}
-                              className="w-12 text-center text-xs font-bold bg-transparent border-0 focus:ring-0 p-0 text-slate-900 dark:text-white"
+                              className="w-12 text-center text-xs font-bold bg-white border-0 focus:ring-0 p-0 text-slate-900"
                             />
                             <button
                               type="button"
@@ -2306,7 +2338,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                                 ...prev,
                                 [product.id]: (prev[product.id] || 1) + 1
                               }))}
-                              className="px-2 py-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold"
+                              className="px-2 py-1 text-slate-600 hover:bg-slate-100 text-xs font-bold"
                             >
                               +
                             </button>
@@ -2328,7 +2360,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-3.5 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
               <span className="text-xs text-slate-500 font-medium">
                 {items.length} total components currently in quotation BOM
               </span>
@@ -2336,7 +2368,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               <button
                 type="button"
                 onClick={() => setIsInventoryPickerOpen(false)}
-                className="px-5 py-2 text-xs font-bold bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-xl transition-colors"
+                className="px-5 py-2 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white rounded-xl transition-colors"
               >
                 Done
               </button>

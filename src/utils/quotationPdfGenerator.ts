@@ -200,19 +200,19 @@ export function generateQuotationPdf(quote: Quotation): jsPDF {
   const capacityKw = quote.capacityKw || 5;
   const systemType = quote.systemType || 'On-Grid';
   const basePrice = quote.baseProjectPrice || quote.baseAmount || 293848;
-  const eqPct = quote.gstEquipmentPercent || 70;
-  const eqRate = quote.gstEquipmentRate || 5;
-  const srvPct = quote.gstServicesPercent || 30;
-  const srvRate = quote.gstServicesRate || 18;
+  const eqPct = quote.gstEquipmentPercent ?? 70;
+  const eqRate = quote.gstEquipmentRate ?? 5;
+  const srvPct = quote.gstServicesPercent ?? 30;
+  const srvRate = quote.gstServicesRate ?? 18;
   const eqTax = Math.round((basePrice * (eqPct / 100) * eqRate) / 100);
   const srvTax = Math.round((basePrice * (srvPct / 100) * srvRate) / 100);
-  const totalGst = quote.gstAmount || quote.taxAmount || (eqTax + srvTax);
-  const totalProjectCost = quote.totalProjectCost || quote.totalAmount || (basePrice + totalGst);
-  const centralSubsidy = quote.centralSubsidy || (capacityKw >= 3 ? 78000 : capacityKw >= 2 ? 60000 : 30000);
-  const stateSubsidy = quote.stateSubsidy || 0;
-  const totalSubsidy = quote.totalSubsidy || (centralSubsidy + stateSubsidy);
-  const finalInvestment = quote.finalProjectInvestment || Math.max(0, totalProjectCost - totalSubsidy);
-  const costPerKw = quote.costPerKw || Math.round(basePrice / Math.max(1, capacityKw));
+  const totalGst = quote.gstAmount ?? quote.taxAmount ?? (eqTax + srvTax);
+  const totalProjectCost = quote.totalProjectCost ?? quote.totalAmount ?? (basePrice + totalGst);
+  const centralSubsidy = quote.centralSubsidy ?? (capacityKw >= 3 ? 78000 : capacityKw >= 2 ? 60000 : 30000);
+  const stateSubsidy = quote.stateSubsidy ?? 0;
+  const totalSubsidy = quote.totalSubsidy ?? (centralSubsidy + stateSubsidy);
+  const finalInvestment = quote.finalProjectInvestment ?? Math.max(0, totalProjectCost - totalSubsidy);
+  const costPerKw = quote.costPerKw ?? Math.round(basePrice / Math.max(1, capacityKw));
 
   // Daily & Lifetime Projections
   const dailyUnits = (capacityKw * 4.2).toFixed(1);
@@ -1007,7 +1007,7 @@ export function generateQuotationPdf(quote: Quotation): jsPDF {
 
   autoTable(doc, {
     startY: curY,
-    margin: { left: margin, right: margin },
+    margin: { top: 22, left: margin, right: margin, bottom: 18 },
     theme: 'grid',
     head: [['S.No', 'Description of Goods', 'Make / Brand', 'Technical Specification', 'Qty', 'Unit', 'Rate (₹)', 'Amount (₹)']],
     body: bomBody,
@@ -1054,7 +1054,14 @@ export function generateQuotationPdf(quote: Quotation): jsPDF {
   // ========================================================
   // VISUAL GRAPHIC: TURNKEY SERVICES & EPC SCOPE
   // ========================================================
-  const scopeY = bomTotalY + 12;
+  let scopeY = bomTotalY + 12;
+  if (scopeY + 95 > pageHeight - 16) {
+    drawFooter(5);
+    doc.addPage();
+    drawWatermark();
+    drawHeader('Scope of Work & Turnkey Services (Cont.)', 5);
+    scopeY = 22;
+  }
   drawSectionTitle('Scope of Engineering, Procurement & Commissioning (EPC)', scopeY);
 
   const turnkeyServices = [
