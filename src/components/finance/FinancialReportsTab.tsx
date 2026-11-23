@@ -150,39 +150,41 @@ export const FinancialReportsTab: React.FC<FinancialReportsTabProps> = ({
 
         <div className="flex flex-wrap items-center gap-2 text-xs w-full lg:w-auto">
           {(reportType === 'PNL' || reportType === 'CASH_FLOW') && (
-            <label className="inline-flex items-center gap-1.5">
-              <span className="text-slate-500">From</span>
+            <label className="inline-flex items-center gap-1.5 w-full sm:w-auto">
+              <span className="text-slate-500 w-10 sm:w-auto">From</span>
               <input
                 type="date"
                 value={startDate}
                 onChange={e => setStartDate(e.target.value)}
-                className="border border-slate-200 rounded-lg px-2.5 py-1.5"
+                className="flex-1 sm:flex-none border border-slate-200 rounded-lg px-2.5 py-1.5"
               />
             </label>
           )}
-          <label className="inline-flex items-center gap-1.5">
-            <span className="text-slate-500">{reportType === 'PNL' || reportType === 'CASH_FLOW' ? 'To' : 'As of'}</span>
+          <label className="inline-flex items-center gap-1.5 w-full sm:w-auto">
+            <span className="text-slate-500 w-10 sm:w-auto">{reportType === 'PNL' || reportType === 'CASH_FLOW' ? 'To' : 'As of'}</span>
             <input
               type="date"
               value={endDate}
               onChange={e => setEndDate(e.target.value)}
-              className="border border-slate-200 rounded-lg px-2.5 py-1.5"
+              className="flex-1 sm:flex-none border border-slate-200 rounded-lg px-2.5 py-1.5"
             />
           </label>
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-lg cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" /> CSV
-          </button>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg cursor-pointer"
-          >
-            <Printer className="w-3.5 h-3.5" /> Print
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              className="flex-1 sm:flex-none justify-center inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-lg cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" /> CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="flex-1 sm:flex-none justify-center inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg cursor-pointer"
+            >
+              <Printer className="w-3.5 h-3.5" /> Print
+            </button>
+          </div>
         </div>
       </div>
 
@@ -332,54 +334,118 @@ export const FinancialReportsTab: React.FC<FinancialReportsTabProps> = ({
 
         {/* 3. CASH FLOW */}
         {reportType === 'CASH_FLOW' && (
-          <div className="overflow-x-auto border border-slate-200 rounded-lg">
-            <div className="min-w-[540px] text-xs divide-y divide-slate-100">
-              <div className="p-3 px-4 bg-slate-50 font-bold grid grid-cols-4 gap-2 text-slate-700">
-                <span>Cash Flow Category</span>
-                <span className="text-right">Inflows (₹)</span>
-                <span className="text-right">Outflows (₹)</span>
-                <span className="text-right">Net Cash Flow (₹)</span>
-              </div>
-              <div className="p-3 px-4 grid grid-cols-4 gap-2">
-                <span className="font-semibold text-slate-800">Operating Activities</span>
-                <span className="text-right font-mono">{formatINR(cf.operatingInflows)}</span>
-                <span className="text-right font-mono">{formatINR(cf.operatingOutflows)}</span>
-                <span className="text-right font-mono font-bold">{formatINR(cf.netOperatingCashFlow, true)}</span>
-              </div>
-              <div className="p-3 px-4 grid grid-cols-4 gap-2">
-                <span className="font-semibold text-slate-800">Investing Activities (Fixed Assets)</span>
-                <span className="text-right font-mono">{formatINR(cf.investingInflows)}</span>
-                <span className="text-right font-mono">{formatINR(cf.investingOutflows)}</span>
-                <span className="text-right font-mono font-bold">{formatINR(cf.netInvestingCashFlow, true)}</span>
-              </div>
-              <div className="p-3 px-4 grid grid-cols-4 gap-2">
-                <span className="font-semibold text-slate-800">Financing Activities (Equity / Loans)</span>
-                <span className="text-right font-mono">{formatINR(cf.financingInflows)}</span>
-                <span className="text-right font-mono">{formatINR(cf.financingOutflows)}</span>
-                <span className="text-right font-mono font-bold">{formatINR(cf.netFinancingCashFlow, true)}</span>
-              </div>
-              <div className="p-3 px-4 grid grid-cols-4 gap-2 bg-slate-50 font-semibold">
+          <>
+            <div className="md:hidden border border-slate-200 rounded-lg divide-y divide-slate-100 text-xs">
+              {[
+                { label: 'Operating Activities', inf: cf.operatingInflows, out: cf.operatingOutflows, net: cf.netOperatingCashFlow },
+                { label: 'Investing Activities (Fixed Assets)', inf: cf.investingInflows, out: cf.investingOutflows, net: cf.netInvestingCashFlow },
+                { label: 'Financing Activities (Equity / Loans)', inf: cf.financingInflows, out: cf.financingOutflows, net: cf.netFinancingCashFlow }
+              ].map(row => (
+                <div key={row.label} className="p-3.5 space-y-1.5">
+                  <div className="flex justify-between gap-2 font-semibold text-slate-900">
+                    <span>{row.label}</span>
+                    <span className="font-mono font-bold shrink-0">{formatINR(row.net, true)}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] font-mono text-slate-500">
+                    <span>Inflows: {formatINR(row.inf)}</span>
+                    <span>Outflows: {formatINR(row.out)}</span>
+                  </div>
+                </div>
+              ))}
+              <div className="p-3.5 flex justify-between gap-2 bg-slate-50 font-semibold">
                 <span>Opening Cash & Bank Balance</span>
-                <span />
-                <span />
-                <span className="text-right font-mono">{formatINR(cf.openingCashBalance)}</span>
+                <span className="font-mono">{formatINR(cf.openingCashBalance)}</span>
               </div>
-              <div className="p-3 px-4 grid grid-cols-4 gap-2 bg-slate-900 text-white font-bold">
+              <div className="p-3.5 flex justify-between gap-2 bg-slate-900 text-white font-bold">
                 <span>Closing Cash & Bank Balance</span>
-                <span />
-                <span />
-                <span className="text-right font-mono">{formatINR(cf.closingCashBalance)}</span>
+                <span className="font-mono">{formatINR(cf.closingCashBalance)}</span>
               </div>
             </div>
-          </div>
+
+            <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-lg">
+              <div className="min-w-[540px] text-xs divide-y divide-slate-100">
+                <div className="p-3 px-4 bg-slate-50 font-bold grid grid-cols-4 gap-2 text-slate-700">
+                  <span>Cash Flow Category</span>
+                  <span className="text-right">Inflows (₹)</span>
+                  <span className="text-right">Outflows (₹)</span>
+                  <span className="text-right">Net Cash Flow (₹)</span>
+                </div>
+                <div className="p-3 px-4 grid grid-cols-4 gap-2">
+                  <span className="font-semibold text-slate-800">Operating Activities</span>
+                  <span className="text-right font-mono">{formatINR(cf.operatingInflows)}</span>
+                  <span className="text-right font-mono">{formatINR(cf.operatingOutflows)}</span>
+                  <span className="text-right font-mono font-bold">{formatINR(cf.netOperatingCashFlow, true)}</span>
+                </div>
+                <div className="p-3 px-4 grid grid-cols-4 gap-2">
+                  <span className="font-semibold text-slate-800">Investing Activities (Fixed Assets)</span>
+                  <span className="text-right font-mono">{formatINR(cf.investingInflows)}</span>
+                  <span className="text-right font-mono">{formatINR(cf.investingOutflows)}</span>
+                  <span className="text-right font-mono font-bold">{formatINR(cf.netInvestingCashFlow, true)}</span>
+                </div>
+                <div className="p-3 px-4 grid grid-cols-4 gap-2">
+                  <span className="font-semibold text-slate-800">Financing Activities (Equity / Loans)</span>
+                  <span className="text-right font-mono">{formatINR(cf.financingInflows)}</span>
+                  <span className="text-right font-mono">{formatINR(cf.financingOutflows)}</span>
+                  <span className="text-right font-mono font-bold">{formatINR(cf.netFinancingCashFlow, true)}</span>
+                </div>
+                <div className="p-3 px-4 grid grid-cols-4 gap-2 bg-slate-50 font-semibold">
+                  <span>Opening Cash & Bank Balance</span>
+                  <span />
+                  <span />
+                  <span className="text-right font-mono">{formatINR(cf.openingCashBalance)}</span>
+                </div>
+                <div className="p-3 px-4 grid grid-cols-4 gap-2 bg-slate-900 text-white font-bold">
+                  <span>Closing Cash & Bank Balance</span>
+                  <span />
+                  <span />
+                  <span className="text-right font-mono">{formatINR(cf.closingCashBalance)}</span>
+                </div>
+              </div>
+            </div>
+          </>
         )}
 
         {/* 4 & 5. AGEING */}
-        {(reportType === 'AR_AGEING' || reportType === 'AP_AGEING') && (
-          <div className="overflow-x-auto">
-            {(() => {
-              const target = reportType === 'AR_AGEING' ? arAgeing : apAgeing;
-              return (
+        {(reportType === 'AR_AGEING' || reportType === 'AP_AGEING') && (() => {
+          const target = reportType === 'AR_AGEING' ? arAgeing : apAgeing;
+          return (
+            <>
+              <div className="md:hidden space-y-2 text-xs">
+                {target.rows.length === 0 ? (
+                  <div className="p-6 text-center text-slate-500 border border-slate-200 rounded-lg">
+                    No open balances in this ageing schedule.
+                  </div>
+                ) : (
+                  <>
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                      {target.rows.map((r, i) => (
+                        <div key={`${r.partyName}-${i}`} className="p-3.5 space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-900">{r.partyName}</div>
+                              <div className="text-[11px] font-mono text-slate-500">{r.docCount} doc(s)</div>
+                            </div>
+                            <div className="font-mono font-bold text-slate-900 shrink-0">{formatINR(r.totalOutstanding)}</div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5 font-mono text-[11px] bg-slate-50 rounded p-2">
+                            <div><span className="block text-slate-400">Current</span>{formatINR(r.current)}</div>
+                            <div><span className="block text-slate-400">1-30d</span>{formatINR(r.days1_30)}</div>
+                            <div><span className="block text-slate-400">31-60d</span><span className="text-amber-700">{formatINR(r.days31_60)}</span></div>
+                            <div><span className="block text-slate-400">61-90d</span><span className="text-rose-600">{formatINR(r.days61_90)}</span></div>
+                            <div className="col-span-2 text-right"><span className="block text-slate-400">90+ Days</span><span className="text-rose-700 font-bold">{formatINR(r.days90Plus)}</span></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg font-bold flex items-center justify-between gap-2">
+                      <span>Total Outstanding ({target.totals.docCount} docs)</span>
+                      <span className="font-mono">{formatINR(target.totals.totalOutstanding)}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full min-w-[740px] text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                     <tr>
@@ -428,10 +494,10 @@ export const FinancialReportsTab: React.FC<FinancialReportsTabProps> = ({
                     </tr>
                   </tfoot>
                 </table>
-              );
-            })()}
-          </div>
-        )}
+              </div>
+            </>
+          );
+        })()}
       </div>
     </div>
   );

@@ -256,7 +256,33 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
             </span>
             <span className="text-slate-500">Latest {workspace.auditLogs.length} events</span>
           </div>
-          <div className="overflow-x-auto">
+
+          <div className="md:hidden divide-y divide-slate-100 text-xs">
+            {workspace.auditLogs.length === 0 ? (
+              <div className="p-6 text-center text-slate-500">No accounting audit events recorded yet.</div>
+            ) : (
+              workspace.auditLogs.map(log => (
+                <div key={log.id} className="p-3.5 space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-semibold text-slate-900">{log.action}</span>
+                      <span className="ml-2 font-mono text-[11px] text-slate-500">{log.module}</span>
+                    </div>
+                    <span className="font-mono text-[11px] text-slate-500 shrink-0">
+                      {formatDateIN(log.createdAt)} {log.createdAt.slice(11, 16)}
+                    </span>
+                  </div>
+                  <div className="text-slate-700">{log.summary}</div>
+                  <div className="flex flex-wrap justify-between gap-2 text-[11px] text-slate-500">
+                    <span>{log.actorName} ({log.actorRole})</span>
+                    <span className="font-mono break-all">{log.entityRef || log.entityId}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>

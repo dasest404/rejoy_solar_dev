@@ -1059,7 +1059,86 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="border border-slate-200 rounded-lg overflow-x-auto">
+              <div className="md:hidden space-y-2.5">
+                {billLines.map((line, idx) => (
+                  <div key={line.id} className="p-3 border border-slate-200 rounded-lg bg-slate-50/50 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-600">Line #{idx + 1}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900">{formatINR(line.totalAmount)}</span>
+                        {billLines.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setBillLines(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-rose-500 hover:text-rose-700 cursor-pointer p-1"
+                            aria-label="Remove line"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-0.5">Item / Service Description *</label>
+                      <input
+                        type="text"
+                        required
+                        value={line.description}
+                        onChange={e => updateBillLine(idx, { description: e.target.value })}
+                        placeholder="Description"
+                        className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 bg-white"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <div>
+                        <label className="block text-[11px] text-slate-500 mb-0.5">HSN/SAC</label>
+                        <input
+                          type="text"
+                          value={line.hsnCode || ''}
+                          onChange={e => updateBillLine(idx, { hsnCode: e.target.value })}
+                          placeholder="HSN"
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 font-mono bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-500 mb-0.5">Qty</label>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={line.quantity}
+                          onChange={e => updateBillLine(idx, { quantity: Number(e.target.value) })}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 text-right font-mono bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-500 mb-0.5">Rate (₹)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.rate}
+                          onChange={e => updateBillLine(idx, { rate: Number(e.target.value) })}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 text-right font-mono bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-500 mb-0.5">GST %</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          value={line.gstRate}
+                          onChange={e => updateBillLine(idx, { gstRate: Number(e.target.value) })}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 text-right font-mono bg-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block border border-slate-200 rounded-lg overflow-x-auto">
                 <table className="w-full min-w-[680px] text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                     <tr>
@@ -1362,32 +1441,50 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
               </div>
 
               {viewBill.items && viewBill.items.length > 0 && (
-                <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                  <table className="w-full min-w-[520px] text-left">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
-                      <tr>
-                        <th className="py-2 px-3">Description</th>
-                        <th className="py-2 px-3">HSN</th>
-                        <th className="py-2 px-3 text-right">Qty</th>
-                        <th className="py-2 px-3 text-right">Rate</th>
-                        <th className="py-2 px-3 text-right">GST</th>
-                        <th className="py-2 px-3 text-right">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {viewBill.items.map(it => (
-                        <tr key={it.id}>
-                          <td className="py-2 px-3 font-medium text-slate-800">{it.description}</td>
-                          <td className="py-2 px-3 font-mono text-slate-500">{it.hsnCode || '—'}</td>
-                          <td className="py-2 px-3 text-right font-mono">{it.quantity}</td>
-                          <td className="py-2 px-3 text-right font-mono">{formatINR(it.rate)}</td>
-                          <td className="py-2 px-3 text-right font-mono">{it.gstRate}%</td>
-                          <td className="py-2 px-3 text-right font-mono font-semibold">{formatINR(it.totalAmount)}</td>
+                <>
+                  <div className="md:hidden divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+                    {viewBill.items.map(it => (
+                      <div key={it.id} className="p-3 space-y-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="font-medium text-slate-800">{it.description}</div>
+                          <div className="font-mono font-semibold text-slate-900 shrink-0">{formatINR(it.totalAmount)}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] font-mono text-slate-500">
+                          {it.hsnCode && <span>HSN {it.hsnCode}</span>}
+                          <span>Qty {it.quantity}</span>
+                          <span>Rate {formatINR(it.rate)}</span>
+                          <span>GST {it.gstRate}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-lg">
+                    <table className="w-full min-w-[520px] text-left">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                        <tr>
+                          <th className="py-2 px-3">Description</th>
+                          <th className="py-2 px-3">HSN</th>
+                          <th className="py-2 px-3 text-right">Qty</th>
+                          <th className="py-2 px-3 text-right">Rate</th>
+                          <th className="py-2 px-3 text-right">GST</th>
+                          <th className="py-2 px-3 text-right">Total</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {viewBill.items.map(it => (
+                          <tr key={it.id}>
+                            <td className="py-2 px-3 font-medium text-slate-800">{it.description}</td>
+                            <td className="py-2 px-3 font-mono text-slate-500">{it.hsnCode || '—'}</td>
+                            <td className="py-2 px-3 text-right font-mono">{it.quantity}</td>
+                            <td className="py-2 px-3 text-right font-mono">{formatINR(it.rate)}</td>
+                            <td className="py-2 px-3 text-right font-mono">{it.gstRate}%</td>
+                            <td className="py-2 px-3 text-right font-mono font-semibold">{formatINR(it.totalAmount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200 font-mono">
@@ -1422,7 +1519,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-slate-100">
                 {canManage && Number(viewBill.paidAmount || 0) === 0 && Number(viewBill.returnedAmount || 0) === 0 && (
                   <button
                     type="button"

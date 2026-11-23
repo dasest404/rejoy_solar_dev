@@ -514,7 +514,43 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
 
       {subTab === 'DEP_LOGS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="md:hidden divide-y divide-slate-100 text-xs">
+            {workspace.assetDepreciationLogs.length === 0 ? (
+              <div className="p-8 text-center text-slate-500">
+                No depreciation runs recorded yet.
+              </div>
+            ) : (
+              workspace.assetDepreciationLogs.map(log => (
+                <div key={log.id} className="p-3.5 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-900 truncate">
+                        {log.assetCode} — {log.assetName}
+                      </div>
+                      <div className="font-mono text-[11px] text-slate-500">
+                        {formatDateIN(log.runDate)} · {log.periodLabel}
+                      </div>
+                    </div>
+                    <span className="font-mono font-bold text-rose-700 tabular-nums shrink-0">
+                      -{formatINR(log.depreciationAmount)}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-slate-50 rounded-lg p-2">
+                    <div>
+                      <span className="block text-slate-400 font-sans">Opening WDV</span>
+                      {formatINR(log.openingBookValue)}
+                    </div>
+                    <div className="text-right">
+                      <span className="block text-slate-400 font-sans">Closing WDV</span>
+                      <span className="font-bold text-slate-900">{formatINR(log.closingBookValue)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>

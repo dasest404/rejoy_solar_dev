@@ -127,6 +127,19 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
     );
   }, [workspace.journals, search]);
 
+  const reversedSourceIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entry of workspace.journals) {
+      if (String(entry.referenceType || '').toUpperCase() === 'REVERSAL' && entry.referenceId) {
+        ids.add(entry.referenceId);
+      }
+      if (entry.status === 'REVERSED') {
+        ids.add(entry.id);
+      }
+    }
+    return ids;
+  }, [workspace.journals]);
+
   const selectedLedgerAccount = useMemo(
     () => workspace.accounts.find(a => a.id === selectedLedgerAccountId) || workspace.accounts[0] || null,
     [workspace.accounts, selectedLedgerAccountId]
@@ -320,26 +333,27 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
   };
 
   const isJournalReversed = (j: JournalEntry) =>
-    j.status === 'REVERSED' || Boolean(j.reversedEntryId) || reversedJournalIds.includes(j.id);
+    j.status === 'REVERSED' ||
+    Boolean(j.reversedEntryId) ||
+    reversedSourceIds.has(j.id) ||
+    reversedJournalIds.includes(j.id);
 
   const canReverseJournal = (j: JournalEntry) =>
     canManage &&
     j.status === 'POSTED' &&
-    j.referenceType !== 'REVERSAL' &&
-    !j.reversedEntryId &&
-    !reversedJournalIds.includes(j.id);
+    String(j.referenceType || '').toUpperCase() !== 'REVERSAL' &&
+    !isJournalReversed(j);
 
   const handleReversePosted = async (id: string) => {
-    if (busyActionId === id || reversedJournalIds.includes(id)) return;
+    if (busyActionId || reversedSourceIds.has(id) || reversedJournalIds.includes(id)) return;
+    setConfirmReverseId(null);
     setBusyActionId(id);
     try {
       await apiClient.reverseJournalEntry(id);
       setReversedJournalIds(prev => (prev.includes(id) ? prev : [...prev, id]));
-      setConfirmReverseId(null);
       await onRefresh();
       showToast('Reversing journal voucher posted.', 'success');
     } catch (err: any) {
-      setConfirmReverseId(null);
       await onRefresh().catch(() => undefined);
       showToast(err?.message || 'Failed to reverse journal', 'error');
     } finally {
@@ -367,7 +381,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0">
       {/* Sub-Navigation & Controls */}
       <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -394,9 +408,9 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto min-w-0">
           {(subTab === 'COA' || subTab === 'JOURNALS') && (
-            <div className="relative flex-1 sm:flex-none">
+            <div className="relative flex-1 sm:flex-none min-w-0">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -795,6 +809,9 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                       {reversed && (
                         <span className="text-[11px] font-medium text-slate-400">Reversed (Locked)</span>
                       )}
+                      {!reversed && String(j.referenceType || '').toUpperCase() === 'REVERSAL' && (
+                        <span className="text-[11px] font-medium text-slate-400">Reversal Voucher</span>
+                      )}
                     </div>
                   </div>
                 );
@@ -937,7 +954,10 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                             )
                           )}
                           {reversed && (
-                            <span className="text-[11px] font-medium text-slate-400">Reversed</span>
+                            <span className="text-[11px] font-medium text-slate-400">Reversed (Locked)</span>
+                          )}
+                          {!reversed && String(j.referenceType || '').toUpperCase() === 'REVERSAL' && (
+                            <span className="text-[11px] font-medium text-slate-400">Reversal Voucher</span>
                           )}
                         </td>
                       </tr>
@@ -1139,32 +1159,36 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
               <>
                 <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
                   {trialBalance.rows.map(r => (
-                    <div key={r.accountId} className="p-3 space-y-1.5 text-xs">
-                      <div className="flex items-center justify-between gap-2">
+                    <div key={r.accountId} className="p-3 space-y-2 text-xs">
+                      <div className="flex items-start justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => openLedgerForAccount(r.accountId)}
-                          className="font-semibold text-slate-900 hover:text-amber-700 text-left cursor-pointer"
+                          className="font-semibold text-slate-900 hover:text-amber-700 text-left cursor-pointer min-w-0"
                         >
                           <span className="font-mono text-slate-500 mr-1.5">{r.code}</span>
                           {r.name}
                         </button>
                         <span className="text-[10px] font-semibold text-slate-500 shrink-0">{r.accountType}</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono tabular-nums pt-1">
+                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono tabular-nums pt-1 border-t border-slate-100">
                         <div>
-                          <span className="text-slate-400 block">Closing Dr</span>
-                          <span className="font-semibold text-slate-900">{r.closingDebit > 0 ? formatINR(r.closingDebit) : '—'}</span>
+                          <span className="text-slate-400 block">Period Dr / Cr</span>
+                          <span className="text-slate-600">
+                            {r.periodDebit > 0 ? formatINR(r.periodDebit) : '—'} / {r.periodCredit > 0 ? formatINR(r.periodCredit) : '—'}
+                          </span>
                         </div>
                         <div className="text-right">
-                          <span className="text-slate-400 block">Closing Cr</span>
-                          <span className="font-semibold text-slate-900">{r.closingCredit > 0 ? formatINR(r.closingCredit) : '—'}</span>
+                          <span className="text-slate-400 block">Closing Dr / Cr</span>
+                          <span className="font-semibold text-slate-900">
+                            {r.closingDebit > 0 ? `Dr ${formatINR(r.closingDebit)}` : r.closingCredit > 0 ? `Cr ${formatINR(r.closingCredit)}` : '—'}
+                          </span>
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-between">
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold flex flex-wrap items-center justify-between gap-2">
                   <span>Total Closing Trial Balance</span>
                   <span className="font-mono tabular-nums text-right">
                     Dr {formatINR(trialBalance.totalDebit)} / Cr {formatINR(trialBalance.totalCredit)}
@@ -1406,7 +1430,118 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 </div>
               </div>
 
-              <div className="border border-slate-200 rounded-lg overflow-x-auto">
+              {/* Mobile Per-Line Journal Cards (< md) */}
+              <div className="md:hidden space-y-3">
+                {journalLines.map((line, idx) => (
+                  <div key={line.id} className="border border-slate-200 rounded-lg p-3 space-y-2.5 bg-slate-50/50 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-700">Line #{idx + 1}</span>
+                      {journalLines.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => setJournalLines(journalLines.filter((_, i) => i !== idx))}
+                          className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-700 font-medium cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" /> Remove
+                        </button>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Ledger Account *</label>
+                      <select
+                        value={line.accountId}
+                        onChange={e => {
+                          const next = [...journalLines];
+                          next[idx] = { ...line, accountId: e.target.value };
+                          setJournalLines(next);
+                        }}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2 bg-white"
+                      >
+                        {workspace.accounts
+                          .slice()
+                          .sort((a, b) => a.code.localeCompare(b.code))
+                          .map(a => (
+                            <option key={a.id} value={a.id}>
+                              {a.code} — {a.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Project (Optional)</label>
+                        <select
+                          value={line.projectId}
+                          onChange={e => {
+                            const next = [...journalLines];
+                            next[idx] = { ...line, projectId: e.target.value };
+                            setJournalLines(next);
+                          }}
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2 bg-white"
+                        >
+                          <option value="">— None —</option>
+                          {projects.map(p => (
+                            <option key={p.id} value={p.id}>
+                              {p.projectCode} · {p.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Party / Memo</label>
+                        <input
+                          type="text"
+                          value={line.description}
+                          onChange={e => {
+                            const next = [...journalLines];
+                            next[idx] = { ...line, description: e.target.value };
+                            setJournalLines(next);
+                          }}
+                          placeholder="Line note"
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2 bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Debit (₹)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.debit}
+                          onChange={e => {
+                            const val = Number(e.target.value || 0);
+                            const next = [...journalLines];
+                            next[idx] = { ...line, debit: val, credit: val > 0 ? 0 : line.credit };
+                            setJournalLines(next);
+                          }}
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2 text-right font-mono bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Credit (₹)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.credit}
+                          onChange={e => {
+                            const val = Number(e.target.value || 0);
+                            const next = [...journalLines];
+                            next[idx] = { ...line, credit: val, debit: val > 0 ? 0 : line.debit };
+                            setJournalLines(next);
+                          }}
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2 text-right font-mono bg-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop Journal Lines Table (>= md) */}
+              <div className="hidden md:block border border-slate-200 rounded-lg overflow-x-auto">
                 <table className="w-full min-w-[680px] text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                     <tr>

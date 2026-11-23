@@ -743,7 +743,54 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="md:hidden divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+              {!reconLedger || reconLedger.rows.length === 0 ? (
+                <div className="py-6 px-3 text-center text-xs text-slate-500">
+                  No ledger transactions in this account up to {formatDateIN(statementDate)}.
+                </div>
+              ) : (
+                reconLedger.rows.map(r => {
+                  const checked = clearedIds.includes(r.lineId);
+                  return (
+                    <label
+                      key={r.lineId}
+                      className={`flex items-start gap-3 p-3 text-xs cursor-pointer ${checked ? 'bg-amber-50/40' : 'hover:bg-slate-50'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={e =>
+                          setClearedIds(prev =>
+                            e.target.checked ? [...prev, r.lineId] : prev.filter(id => id !== r.lineId)
+                          )
+                        }
+                        className="mt-0.5 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <span className="font-mono font-semibold text-slate-900">{r.entryNumber}</span>
+                            <span className="ml-2 font-mono text-[11px] text-slate-500">{formatDateIN(r.entryDate)}</span>
+                          </div>
+                          <div className="font-mono font-bold tabular-nums shrink-0">
+                            {r.debit > 0 ? (
+                              <span className="text-emerald-700">+{formatINR(r.debit)}</span>
+                            ) : r.credit > 0 ? (
+                              <span className="text-rose-700">-{formatINR(r.credit)}</span>
+                            ) : (
+                              '—'
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-slate-700 break-words">{r.narration}</div>
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full min-w-[660px] text-left text-xs">
                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                   <tr>

@@ -199,9 +199,9 @@ export const FinanceView: React.FC = () => {
         </div>
       </div>
 
-      {/* Horizontal Module Navigation Strip */}
-      <div className="bg-white border border-slate-200 rounded-xl px-3 py-2 overflow-x-auto print:hidden">
-        <div className="flex items-center gap-1 min-w-max">
+      {/* Responsive Module Navigation Strip */}
+      <div className="bg-white border border-slate-200 rounded-xl p-2.5 sm:px-3 sm:py-2 print:hidden">
+        <div className="flex flex-wrap items-center gap-1.5">
           {allowedTabs.map(tab => (
             <button
               key={tab.id}

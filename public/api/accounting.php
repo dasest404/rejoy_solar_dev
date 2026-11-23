@@ -48,6 +48,20 @@ function accAddColumnIfMissing($pdo, $table, $col, $def) {
     }
 }
 
+function accGetTableColumnsPhp($pdo, $table) {
+    try {
+        $rows = $pdo->query("SHOW COLUMNS FROM `{$table}`")->fetchAll(PDO::FETCH_ASSOC);
+        if (!$rows) return null;
+        $cols = [];
+        foreach ($rows as $r) {
+            if (isset($r['Field'])) $cols[strtolower((string)$r['Field'])] = true;
+        }
+        return $cols;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
 function ensureAccountingTablesPhp($pdo) {
     static $accReady = false;
     if ($accReady) return;
@@ -2654,10 +2668,27 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
             $id = urldecode($m[1]);
             $pdo->beginTransaction();
             try {
-                $s = $pdo->prepare('SELECT * FROM `solar_acc_journal_entries` WHERE `id` = ? LIMIT 1');
+                $s = $pdo->prepare('SELECT * FROM `solar_acc_journal_entries` WHERE `id` = ? LIMIT 1 FOR UPDATE');
                 $s->execute([$id]);
                 $je = $s->fetch(PDO::FETCH_ASSOC);
-                if (!$je || $je['status'] !== 'POSTED') throw new Exception('Only POSTED journals can be reversed.');
+                if (!$je) throw new Exception('Journal entry not found.', 404);
+                if (($je['status'] ?? '') === 'REVERSED' || !empty($je['reversed_entry_id'])) {
+                    throw new Exception('This journal entry has already been reversed and cannot be reversed again.', 409);
+                }
+                if (strtoupper(trim((string)($je['reference_type'] ?? ''))) === 'REVERSAL') {
+                    throw new Exception('A reversal journal voucher cannot itself be reversed. Post a new correcting journal entry instead.', 409);
+                }
+                if (($je['status'] ?? '') !== 'POSTED') {
+                    throw new Exception('Only POSTED journal entries can be reversed.', 400);
+                }
+                $exRevStmt = $pdo->prepare("SELECT `id`, `entry_number` FROM `solar_acc_journal_entries` WHERE `reference_type` = 'REVERSAL' AND `reference_id` = ? LIMIT 1 FOR UPDATE");
+                $exRevStmt->execute([$id]);
+                $exRev = $exRevStmt->fetch(PDO::FETCH_ASSOC);
+                if ($exRev) {
+                    $revRef = $exRev['entry_number'] ?: $exRev['id'];
+                    throw new Exception("This journal entry has already been reversed by voucher {$revRef}.", 409);
+                }
+
                 $revDate = accTodaySql();
                 accAssertNotLockedPhp($pdo, $revDate);
                 $reason = trim((string)($body['reason'] ?? ''));
@@ -2688,13 +2719,17 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                     'status' => 'POSTED',
                     'lines' => $revLines
                 ], $actor);
-                $pdo->prepare('UPDATE `solar_acc_journal_entries` SET `status`=?,`reversed_entry_id`=? WHERE `id`=?')->execute(['REVERSED', $revId, $id]);
+                $updStmt = $pdo->prepare("UPDATE `solar_acc_journal_entries` SET `status`='REVERSED',`reversed_entry_id`=? WHERE `id`=? AND `status`='POSTED' AND (`reversed_entry_id` IS NULL OR `reversed_entry_id`='')");
+                $updStmt->execute([$revId, $id]);
+                if ($updStmt->rowCount() !== 1) {
+                    throw new Exception('This journal entry has already been reversed and cannot be reversed again.', 409);
+                }
                 accRecalcBalancesPhp($pdo);
                 accLogAuditPhp($pdo, $actor, 'LEDGER', 'REVERSE_JOURNAL', $id, $je['entry_number'], "Reversed {$je['entry_number']} via {$revId}");
                 $pdo->commit();
                 echo json_encode(['success' => true, 'data' => ['originalId' => $id, 'reversalJournalId' => $revId]]);
             } catch (Exception $e) {
-                $pdo->rollBack();
+                if ($pdo->inTransaction()) $pdo->rollBack();
                 throw $e;
             }
             exit;
@@ -3641,89 +3676,183 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
                 foreach ($refs as $r) $posted[$r['reference_type'] . ':' . $r['reference_id']] = true;
 
                 $bd = ['salesInvoices' => 0, 'vendorSalesInvoices' => 0, 'customerReceipts' => 0, 'vendorSalesReceipts' => 0, 'expenses' => 0, 'payslips' => 0];
-                $invs = $pdo->query("SELECT * FROM `solar_sales_invoices` WHERE `payment_status` NOT IN ('DRAFT','CANCELLED')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                foreach ($invs as $inv) {
-                    if (isset($posted['SALES_INVOICE:' . $inv['id']])) continue;
-                    $tot = accRound2(floatval($inv['total_amount']));
-                    $gst = accRound2(floatval($inv['gst_amount']));
-                    if ($tot <= 0) continue;
-                    $rev = accRound2(($tot - $gst) > 0 ? ($tot - $gst) : floatval($inv['subtotal']));
-                    $lines = [
-                        ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => $tot, 'credit' => 0, 'projectId' => $inv['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $inv['customer_id'], 'partyName' => $inv['customer_name']],
-                        ['accountId' => $settings['default_sales_account_id'] ?? 'acc-4010', 'debit' => 0, 'credit' => $rev, 'projectId' => $inv['project_id'] ?? '']
-                    ];
-                    if ($gst > 0) $lines[] = ['accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100', 'debit' => 0, 'credit' => accRound2($tot - $rev)];
-                    accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($inv['invoice_date']), 'referenceType' => 'SALES_INVOICE', 'referenceId' => $inv['id'], 'referenceNumber' => $inv['invoice_number'], 'narration' => "Sales Invoice {$inv['invoice_number']}", 'status' => 'POSTED', 'lines' => $lines], $actor);
-                    $bd['salesInvoices']++;
+
+                // 1. Sales Invoices (non-DRAFT, non-CANCELLED)
+                $invCols = accGetTableColumnsPhp($pdo, 'solar_sales_invoices');
+                if ($invCols) {
+                    $invConds = [];
+                    if (isset($invCols['payment_status'])) {
+                        $invConds[] = "COALESCE(NULLIF(UPPER(`payment_status`), ''), 'UNPAID') NOT IN ('DRAFT','CANCELLED')";
+                    }
+                    if (isset($invCols['status'])) {
+                        $invConds[] = "COALESCE(NULLIF(UPPER(`status`), ''), 'ISSUED') NOT IN ('DRAFT','CANCELLED')";
+                    }
+                    $invWhere = count($invConds) > 0 ? ('WHERE ' . implode(' AND ', $invConds)) : '';
+                    $invs = $pdo->query("SELECT * FROM `solar_sales_invoices` {$invWhere}")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    foreach ($invs as $inv) {
+                        if (isset($posted['SALES_INVOICE:' . $inv['id']])) continue;
+                        $tot = accRound2(floatval($inv['total_amount'] ?? 0));
+                        $gst = accRound2(floatval($inv['gst_amount'] ?? ($inv['tax_amount'] ?? 0)));
+                        if ($tot <= 0) continue;
+                        $rev = accRound2(($tot - $gst) > 0 ? ($tot - $gst) : floatval($inv['subtotal'] ?? 0));
+                        $lines = [
+                            ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'description' => "Sales Invoice {$inv['invoice_number']} - " . ($inv['customer_name'] ?? ''), 'debit' => $tot, 'credit' => 0, 'projectId' => $inv['project_id'] ?? '', 'projectTitle' => $inv['project_title'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $inv['customer_id'] ?? '', 'partyName' => $inv['customer_name'] ?? ''],
+                            ['accountId' => $settings['default_sales_account_id'] ?? 'acc-4010', 'description' => "Solar EPC Revenue - {$inv['invoice_number']}", 'debit' => 0, 'credit' => $rev, 'projectId' => $inv['project_id'] ?? '', 'projectTitle' => $inv['project_title'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $inv['customer_id'] ?? '', 'partyName' => $inv['customer_name'] ?? '']
+                        ];
+                        if (accRound2($tot - $rev) > 0) $lines[] = ['accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100', 'description' => "Output GST - {$inv['invoice_number']}", 'projectId' => $inv['project_id'] ?? '', 'debit' => 0, 'credit' => accRound2($tot - $rev)];
+                        accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($inv['invoice_date'] ?? null), 'referenceType' => 'SALES_INVOICE', 'referenceId' => $inv['id'], 'referenceNumber' => $inv['invoice_number'], 'narration' => "Sales Invoice {$inv['invoice_number']} (" . ($inv['customer_name'] ?? '') . ")", 'status' => 'POSTED', 'lines' => $lines], $actor);
+                        $posted['SALES_INVOICE:' . $inv['id']] = true;
+                        $bd['salesInvoices']++;
+                    }
                 }
 
-                $vsinvs = $pdo->query("SELECT * FROM `solar_vendor_sales_invoices` WHERE `status` NOT IN ('DRAFT','CANCELLED')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                foreach ($vsinvs as $vsi) {
-                    if (isset($posted['VENDOR_SALES_INVOICE:' . $vsi['id']])) continue;
-                    $tot = accRound2(floatval($vsi['total_amount']));
-                    $tax = accRound2(floatval($vsi['tax_amount']));
-                    if ($tot <= 0) continue;
-                    $rev = accRound2(($tot - $tax) > 0 ? ($tot - $tax) : floatval($vsi['subtotal']));
-                    $lines = [
-                        ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => $tot, 'credit' => 0, 'partyType' => 'VENDOR', 'partyId' => $vsi['vendor_id'], 'partyName' => $vsi['vendor_name']],
-                        ['accountId' => 'acc-4030', 'debit' => 0, 'credit' => $rev, 'partyType' => 'VENDOR', 'partyId' => $vsi['vendor_id'], 'partyName' => $vsi['vendor_name']]
-                    ];
-                    if (accRound2($tot - $rev) > 0) $lines[] = ['accountId' => $settings['default_output_gst_account_id'] ?? 'acc-2100', 'debit' => 0, 'credit' => accRound2($tot - $rev)];
-                    accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($vsi['invoice_date']), 'referenceType' => 'VENDOR_SALES_INVOICE', 'referenceId' => $vsi['id'], 'referenceNumber' => $vsi['invoice_number'], 'narration' => "Vendor Sales Invoice {$vsi['invoice_number']} ({$vsi['vendor_name']})", 'status' => 'POSTED', 'lines' => $lines], $actor);
-                    $bd['vendorSalesInvoices']++;
+                // 2. Vendor Sales Invoices (non-DRAFT, non-CANCELLED)
+                $vsiCols = accGetTableColumnsPhp($pdo, 'solar_vendor_sales_invoices');
+                if ($vsiCols) {
+                    $vsiConds = [];
+                    if (isset($vsiCols['status'])) {
+                        $vsiConds[] = "COALESCE(NULLIF(UPPER(`status`), ''), 'ISSUED') NOT IN ('DRAFT','CANCELLED')";
+                    }
+                    if (isset($vsiCols['payment_status'])) {
+                        $vsiConds[] = "COALESCE(NULLIF(UPPER(`payment_status`), ''), 'UNPAID') NOT IN ('DRAFT','CANCELLED')";
+                    }
+                    $vsiWhere = count($vsiConds) > 0 ? ('WHERE ' . implode(' AND ', $vsiConds)) : '';
+                    $vsinvs = $pdo->query("SELECT * FROM `solar_vendor_sales_invoices` {$vsiWhere}")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    foreach ($vsinvs as $vsi) {
+                        if (isset($posted['VENDOR_SALES_INVOICE:' . $vsi['id']])) continue;
+                        $jeId = accEnsureVendorSalesInvoiceJournalTxPhp($pdo, $vsi, $settings, $actor);
+                        if ($jeId) {
+                            $posted['VENDOR_SALES_INVOICE:' . $vsi['id']] = true;
+                            $bd['vendorSalesInvoices']++;
+                        }
+                    }
                 }
 
-                $pays = $pdo->query("SELECT * FROM `solar_payments` WHERE `status`='PAID' AND (`journal_entry_id` IS NULL OR `journal_entry_id`='')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                foreach ($pays as $p) {
-                    if (isset($posted['CUSTOMER_RECEIPT:' . $p['id']])) continue;
-                    $amt = accRound2(floatval($p['amount']));
-                    if ($amt <= 0) continue;
-                    $bankCoa = !empty($p['bank_account_id'])
-                        ? accResolveBankCoaTxPhp($pdo, $p['bank_account_id'], $settings)
-                        : (stripos($p['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
-                    $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($p['paid_date'] ?: $p['due_date']), 'referenceType' => 'CUSTOMER_RECEIPT', 'referenceId' => $p['id'], 'referenceNumber' => $p['receipt_number'], 'narration' => "Receipt {$p['receipt_number']}", 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'debit' => $amt, 'credit' => 0, 'projectId' => $p['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $p['customer_id'] ?? '', 'partyName' => $p['customer_name'] ?? ''], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => 0, 'credit' => $amt, 'projectId' => $p['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $p['customer_id'] ?? '', 'partyName' => $p['customer_name'] ?? '']]], $actor);
-                    $pdo->prepare('UPDATE `solar_payments` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $p['id']]);
-                    $bd['customerReceipts']++;
+                // 3. Customer Receipts (PAID without journal_entry_id)
+                $payCols = accGetTableColumnsPhp($pdo, 'solar_payments');
+                if ($payCols) {
+                    $payConds = [];
+                    if (isset($payCols['status']) && isset($payCols['payment_status'])) {
+                        $payConds[] = "(`status`='PAID' OR `payment_status`='PAID')";
+                    } elseif (isset($payCols['status'])) {
+                        $payConds[] = "`status`='PAID'";
+                    } elseif (isset($payCols['payment_status'])) {
+                        $payConds[] = "`payment_status`='PAID'";
+                    }
+                    if (isset($payCols['journal_entry_id'])) {
+                        $payConds[] = "(`journal_entry_id` IS NULL OR `journal_entry_id`='')";
+                    }
+                    $payWhere = count($payConds) > 0 ? ('WHERE ' . implode(' AND ', $payConds)) : '';
+                    $pays = $pdo->query("SELECT * FROM `solar_payments` {$payWhere}")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    foreach ($pays as $p) {
+                        if (isset($posted['CUSTOMER_RECEIPT:' . $p['id']])) continue;
+                        $amt = accRound2(floatval($p['amount'] ?? 0));
+                        if ($amt <= 0) continue;
+                        $bankCoa = !empty($p['bank_account_id'])
+                            ? accResolveBankCoaTxPhp($pdo, $p['bank_account_id'], $settings)
+                            : (stripos($p['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+                        $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($p['paid_date'] ?: ($p['due_date'] ?? null)), 'referenceType' => 'CUSTOMER_RECEIPT', 'referenceId' => $p['id'], 'referenceNumber' => $p['receipt_number'] ?? $p['id'], 'narration' => "Receipt " . ($p['receipt_number'] ?? $p['id']) . (!empty($p['customer_name']) ? " from {$p['customer_name']}" : ''), 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'description' => $p['payment_mode'] ?? 'Receipt', 'debit' => $amt, 'credit' => 0, 'projectId' => $p['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $p['customer_id'] ?? '', 'partyName' => $p['customer_name'] ?? ''], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'description' => $p['milestone'] ?? 'Customer Receipt', 'debit' => 0, 'credit' => $amt, 'projectId' => $p['project_id'] ?? '', 'partyType' => 'CUSTOMER', 'partyId' => $p['customer_id'] ?? '', 'partyName' => $p['customer_name'] ?? '']]], $actor);
+                        if (isset($payCols['journal_entry_id'])) {
+                            $pdo->prepare('UPDATE `solar_payments` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $p['id']]);
+                        }
+                        $posted['CUSTOMER_RECEIPT:' . $p['id']] = true;
+                        $bd['customerReceipts']++;
+                    }
                 }
 
-                $vsiPays = $pdo->query("SELECT p.*, v.`invoice_number`, v.`vendor_name` FROM `solar_vendor_sales_payments` p LEFT JOIN `solar_vendor_sales_invoices` v ON v.`id` = p.`invoice_id` WHERE (p.`journal_entry_id` IS NULL OR p.`journal_entry_id` = '')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                foreach ($vsiPays as $vp) {
-                    if (isset($posted['VENDOR_SALES_RECEIPT:' . $vp['id']])) continue;
-                    $amt = accRound2(floatval($vp['amount']));
-                    if ($amt <= 0) continue;
-                    $bankCoa = !empty($vp['bank_account_id'])
-                        ? accResolveBankCoaTxPhp($pdo, $vp['bank_account_id'], $settings)
-                        : (stripos($vp['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
-                    $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($vp['payment_date']), 'referenceType' => 'VENDOR_SALES_RECEIPT', 'referenceId' => $vp['id'], 'referenceNumber' => $vp['invoice_number'] ?? $vp['id'], 'narration' => "Vendor Sales Receipt for " . ($vp['invoice_number'] ?? $vp['invoice_id']), 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'debit' => $amt, 'credit' => 0, 'partyType' => 'VENDOR', 'partyId' => $vp['vendor_id'] ?? '', 'partyName' => $vp['vendor_name'] ?? ''], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'debit' => 0, 'credit' => $amt, 'partyType' => 'VENDOR', 'partyId' => $vp['vendor_id'] ?? '', 'partyName' => $vp['vendor_name'] ?? '']]], $actor);
-                    $pdo->prepare('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $vp['id']]);
-                    $bd['vendorSalesReceipts']++;
+                // 4. Vendor Sales Receipts without journal_entry_id
+                $vsPayCols = accGetTableColumnsPhp($pdo, 'solar_vendor_sales_payments');
+                if ($vsPayCols) {
+                    $vsPayWhere = isset($vsPayCols['journal_entry_id'])
+                        ? "WHERE (p.`journal_entry_id` IS NULL OR p.`journal_entry_id` = '')"
+                        : '';
+                    $vsJoin = $vsiCols ? 'LEFT JOIN `solar_vendor_sales_invoices` v ON v.`id` = p.`invoice_id`' : '';
+                    $vsSelect = $vsiCols ? 'p.*, v.`invoice_number`, v.`vendor_name`' : 'p.*';
+                    $vsiPays = $pdo->query("SELECT {$vsSelect} FROM `solar_vendor_sales_payments` p {$vsJoin} {$vsPayWhere}")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    foreach ($vsiPays as $vp) {
+                        if (isset($posted['VENDOR_SALES_RECEIPT:' . $vp['id']])) continue;
+                        $amt = accRound2(floatval($vp['amount'] ?? 0));
+                        if ($amt <= 0) continue;
+                        $bankCoa = !empty($vp['bank_account_id'])
+                            ? accResolveBankCoaTxPhp($pdo, $vp['bank_account_id'], $settings)
+                            : (stripos($vp['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+                        $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($vp['payment_date'] ?? null), 'referenceType' => 'VENDOR_SALES_RECEIPT', 'referenceId' => $vp['id'], 'referenceNumber' => $vp['invoice_number'] ?? $vp['id'], 'narration' => "Vendor Sales Receipt for " . ($vp['invoice_number'] ?? $vp['invoice_id']), 'status' => 'POSTED', 'lines' => [['accountId' => $bankCoa, 'description' => $vp['payment_mode'] ?? 'Vendor Sales Receipt', 'debit' => $amt, 'credit' => 0, 'partyType' => 'VENDOR', 'partyId' => $vp['vendor_id'] ?? '', 'partyName' => $vp['vendor_name'] ?? ''], ['accountId' => $settings['default_ar_account_id'] ?? 'acc-1100', 'description' => "Receivable settlement - " . ($vp['invoice_number'] ?? ($vp['invoice_id'] ?? '')), 'debit' => 0, 'credit' => $amt, 'partyType' => 'VENDOR', 'partyId' => $vp['vendor_id'] ?? '', 'partyName' => $vp['vendor_name'] ?? '']]], $actor);
+                        if (isset($vsPayCols['journal_entry_id'])) {
+                            $pdo->prepare('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $vp['id']]);
+                        }
+                        $posted['VENDOR_SALES_RECEIPT:' . $vp['id']] = true;
+                        $bd['vendorSalesReceipts']++;
+                    }
                 }
 
-                $exps = $pdo->query("SELECT * FROM `solar_expenses` WHERE (`status` IS NULL OR `status`='' OR `status`='PAID') AND (`journal_entry_id` IS NULL OR `journal_entry_id`='')")->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                foreach ($exps as $ex) {
-                    if (isset($posted['EXPENSE_PAYMENT:' . $ex['id']])) continue;
-                    $amt = accRound2(floatval($ex['amount']));
-                    if ($amt <= 0) continue;
-                    $bankCoa = stripos($ex['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020');
-                    $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($ex['expense_date']), 'referenceType' => 'EXPENSE_PAYMENT', 'referenceId' => $ex['id'], 'referenceNumber' => $ex['expense_number'], 'narration' => "Expense {$ex['expense_number']}", 'status' => 'POSTED', 'lines' => [['accountId' => $ex['expense_account_id'] ?: 'acc-5040', 'debit' => $amt, 'credit' => 0, 'projectId' => $ex['project_id'] ?? ''], ['accountId' => $bankCoa, 'debit' => 0, 'credit' => $amt]]], $actor);
-                    $pdo->prepare('UPDATE `solar_expenses` SET `status`=?,`journal_entry_id`=? WHERE `id`=?')->execute(['PAID', $jeId, $ex['id']]);
-                    $bd['expenses']++;
+                // 5. Legacy / PAID Expenses without journal_entry_id
+                $expCols = accGetTableColumnsPhp($pdo, 'solar_expenses');
+                if ($expCols) {
+                    $expConds = [];
+                    if (isset($expCols['status'])) {
+                        $expConds[] = "(`status` IS NULL OR `status`='' OR `status`='PAID')";
+                    }
+                    if (isset($expCols['journal_entry_id'])) {
+                        $expConds[] = "(`journal_entry_id` IS NULL OR `journal_entry_id`='')";
+                    }
+                    $expWhere = count($expConds) > 0 ? ('WHERE ' . implode(' AND ', $expConds)) : '';
+                    $exps = $pdo->query("SELECT * FROM `solar_expenses` {$expWhere}")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    foreach ($exps as $ex) {
+                        if (isset($posted['EXPENSE_PAYMENT:' . $ex['id']])) continue;
+                        $amt = accRound2(floatval($ex['amount'] ?? 0));
+                        if ($amt <= 0) continue;
+                        $bankCoa = !empty($ex['bank_account_id'])
+                            ? accResolveBankCoaTxPhp($pdo, $ex['bank_account_id'], $settings)
+                            : (stripos($ex['payment_mode'] ?? '', 'cash') !== false ? ($settings['default_cash_account_id'] ?? 'acc-1010') : ($settings['default_bank_account_id'] ?? 'acc-1020'));
+                        $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($ex['expense_date'] ?? null), 'referenceType' => 'EXPENSE_PAYMENT', 'referenceId' => $ex['id'], 'referenceNumber' => $ex['expense_number'] ?? $ex['id'], 'narration' => "Expense " . ($ex['expense_number'] ?? $ex['id']) . (!empty($ex['vendor_name']) ? " - {$ex['vendor_name']}" : ''), 'status' => 'POSTED', 'lines' => [['accountId' => !empty($ex['expense_account_id']) ? $ex['expense_account_id'] : ($settings['default_cogs_account_id'] ?? 'acc-5040'), 'description' => $ex['category'] ?? 'Expense', 'debit' => $amt, 'credit' => 0, 'projectId' => $ex['project_id'] ?? '', 'partyType' => 'VENDOR', 'partyName' => $ex['vendor_name'] ?? ''], ['accountId' => $bankCoa, 'description' => $ex['payment_mode'] ?? 'Bank Payment', 'projectId' => $ex['project_id'] ?? '', 'debit' => 0, 'credit' => $amt]]], $actor);
+                        if (isset($expCols['status']) && isset($expCols['journal_entry_id'])) {
+                            $pdo->prepare('UPDATE `solar_expenses` SET `status`=?,`journal_entry_id`=? WHERE `id`=?')->execute(['PAID', $jeId, $ex['id']]);
+                        } elseif (isset($expCols['journal_entry_id'])) {
+                            $pdo->prepare('UPDATE `solar_expenses` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $ex['id']]);
+                        }
+                        $posted['EXPENSE_PAYMENT:' . $ex['id']] = true;
+                        $bd['expenses']++;
+                    }
                 }
 
-                $pss = $pdo->query("SELECT * FROM `solar_payslips` WHERE `status`='PAID'")->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                foreach ($pss as $ps) {
-                    if (isset($posted['PAYROLL:' . $ps['id']])) continue;
-                    $net = accRound2(floatval($ps['net_salary']));
-                    if ($net <= 0) continue;
-                    accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($ps['payment_date'] ?: $ps['created_at']), 'referenceType' => 'PAYROLL', 'referenceId' => $ps['id'], 'referenceNumber' => $ps['month'] . '-' . $ps['year'], 'narration' => "Payroll {$ps['employee_name']}", 'status' => 'POSTED', 'lines' => [['accountId' => $settings['default_payroll_account_id'] ?? 'acc-5030', 'debit' => $net, 'credit' => 0], ['accountId' => $settings['default_bank_account_id'] ?? 'acc-1020', 'debit' => 0, 'credit' => $net]]], $actor);
-                    $bd['payslips']++;
+                // 6. Paid Payslips (schema uses payment_status; dynamically inspect status/payment_status & journal_entry_id)
+                $psCols = accGetTableColumnsPhp($pdo, 'solar_payslips');
+                if ($psCols) {
+                    $psConds = [];
+                    if (isset($psCols['payment_status']) && isset($psCols['status'])) {
+                        $psConds[] = "(`payment_status`='PAID' OR `status`='PAID')";
+                    } elseif (isset($psCols['payment_status'])) {
+                        $psConds[] = "`payment_status`='PAID'";
+                    } elseif (isset($psCols['status'])) {
+                        $psConds[] = "`status`='PAID'";
+                    }
+                    if (isset($psCols['journal_entry_id'])) {
+                        $psConds[] = "(`journal_entry_id` IS NULL OR `journal_entry_id`='')";
+                    }
+                    $psWhere = count($psConds) > 0 ? ('WHERE ' . implode(' AND ', $psConds)) : '';
+                    $pss = $pdo->query("SELECT * FROM `solar_payslips` {$psWhere}")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    foreach ($pss as $ps) {
+                        if (isset($posted['PAYROLL:' . $ps['id']])) continue;
+                        $net = accRound2(floatval($ps['net_salary'] ?? 0));
+                        if ($net <= 0) continue;
+                        $payCoa = stripos($ps['payment_mode'] ?? '', 'cash') !== false
+                            ? ($settings['default_cash_account_id'] ?? 'acc-1010')
+                            : ($settings['default_bank_account_id'] ?? 'acc-1020');
+                        $jeId = accInsertJournalTxPhp($pdo, ['entryDate' => $safeD($ps['payment_date'] ?: ($ps['created_at'] ?? null)), 'referenceType' => 'PAYROLL', 'referenceId' => $ps['id'], 'referenceNumber' => ($ps['month'] ?? '') . '-' . ($ps['year'] ?? ''), 'narration' => "Payroll disbursement for " . ($ps['employee_name'] ?? 'Employee') . (!empty($ps['month']) ? " ({$ps['month']} {$ps['year']})" : ''), 'status' => 'POSTED', 'lines' => [['accountId' => $settings['default_payroll_account_id'] ?? 'acc-5030', 'description' => "Salary Expense - " . ($ps['employee_name'] ?? ''), 'partyType' => 'EMPLOYEE', 'partyId' => $ps['employee_id'] ?? '', 'partyName' => $ps['employee_name'] ?? '', 'debit' => $net, 'credit' => 0], ['accountId' => $payCoa, 'description' => "Salary Paid - " . ($ps['employee_name'] ?? ''), 'partyType' => 'EMPLOYEE', 'partyId' => $ps['employee_id'] ?? '', 'partyName' => $ps['employee_name'] ?? '', 'debit' => 0, 'credit' => $net]]], $actor);
+                        if (isset($psCols['journal_entry_id'])) {
+                            $pdo->prepare('UPDATE `solar_payslips` SET `journal_entry_id`=? WHERE `id`=?')->execute([$jeId, $ps['id']]);
+                        }
+                        $posted['PAYROLL:' . $ps['id']] = true;
+                        $bd['payslips']++;
+                    }
                 }
 
                 $cnt = $bd['salesInvoices'] + $bd['vendorSalesInvoices'] + $bd['customerReceipts'] + $bd['vendorSalesReceipts'] + $bd['expenses'] + $bd['payslips'];
+                accLogAuditPhp($pdo, $actor, 'LEDGER', 'SYNC_ERP_VOUCHERS', 'erp-sync', "{$cnt} vouchers", "Synced {$cnt} ERP vouchers into General Ledger", $bd);
                 $pdo->commit();
                 echo json_encode(['success' => true, 'data' => ['syncedCount' => $cnt, 'breakdown' => $bd]]);
             } catch (Exception $e) {
-                $pdo->rollBack();
+                if ($pdo->inTransaction()) $pdo->rollBack();
                 throw $e;
             }
             exit;
@@ -3733,7 +3862,8 @@ function handleAccountingRoutePhp($pdo, $cleanPath, $method, $body, $actor) {
         echo json_encode(['success' => false, 'error' => 'Accounting API endpoint not found']);
         exit;
     } catch (Exception $e) {
-        http_response_code(400);
+        $errCode = intval($e->getCode());
+        http_response_code(($errCode >= 400 && $errCode <= 599) ? $errCode : 400);
         echo json_encode(['success' => false, 'message' => $e->getMessage(), 'error' => $e->getMessage()]);
         exit;
     }
