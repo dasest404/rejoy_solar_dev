@@ -1344,28 +1344,37 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
     <>
       <div className="print:hidden fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-md overflow-hidden animate-in fade-in duration-200">
         {/* Top Toolbar (Hidden during Print) */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-2.5 bg-slate-900 border-b border-slate-800 text-white select-none z-20 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg border border-amber-500/30">
-              <Sun className="w-5 h-5 animate-pulse" />
+        <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 px-3 sm:px-6 py-2.5 bg-slate-900 border-b border-slate-800 text-white select-none z-20 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg border border-amber-500/30 shrink-0">
+              <Sun className="w-4 h-4 sm:w-5 sm:h-5 animate-pulse" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-white tracking-wide">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <h2 className="text-xs sm:text-sm font-bold text-white tracking-wide truncate">
                   Quotation Preview: {quotation.quotationNumber}
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className="px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
                   {capacityKw} kW {systemType.toUpperCase()}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
                 {quotation.customerName} {quotation.companyName ? `• ${quotation.companyName}` : ''}
               </p>
             </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Preview"
+              className="sm:hidden shrink-0 inline-flex items-center justify-center w-9 h-9 text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-colors cursor-pointer"
+              title="Close Preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
           {/* 10-Page Jump Quick Buttons */}
-          <div className="hidden xl:flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs">
+          <div className="hidden xl:flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs shrink-0">
             {[
               { page: 1, label: '1. Cover' },
               { page: 2, label: '2. Benefits' },
@@ -1389,9 +1398,9 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
           </div>
 
           {/* Action Controls */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-end shrink-0 flex-wrap">
             {/* Zoom Controls */}
-            <div className="hidden sm:flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700/60 text-xs">
+            <div className="hidden md:flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700/60 text-xs">
               <button
                 onClick={() => setZoom(z => Math.max(60, z - 10))}
                 className="p-1 text-slate-400 hover:text-white"
@@ -1419,7 +1428,7 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
             {onShareWhatsApp && (
               <button
                 onClick={() => onShareWhatsApp(quotation)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xs transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xs transition-colors"
               >
                 <Share2 className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">WhatsApp</span>
@@ -1428,7 +1437,7 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
 
             <button
               onClick={handleEmailQuote}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-xs transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-xs transition-colors"
               title="Email Quotation via Gmail"
             >
               <Mail className="w-3.5 h-3.5" />
@@ -1437,16 +1446,17 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
 
             <button
               onClick={handleDownload}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl shadow-xs transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl shadow-xs transition-colors"
               title="Download PDF document"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Download PDF</span>
+              <span className="hidden sm:inline">Download PDF</span>
+              <span className="sm:hidden">PDF</span>
             </button>
 
             <button
               onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors"
               title="Print Quotation"
             >
               <Printer className="w-3.5 h-3.5" />
@@ -1454,8 +1464,10 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
             </button>
 
             <button
+              type="button"
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors ml-1"
+              aria-label="Close Preview"
+              className="hidden sm:inline-flex items-center justify-center p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors ml-1 shrink-0 cursor-pointer"
               title="Close Preview"
             >
               <X className="w-5 h-5" />
@@ -1466,7 +1478,7 @@ export const QuotationPdfPreviewModal: React.FC<QuotationPdfPreviewModalProps> =
         {/* Main Document Scroll View */}
         <div
           ref={containerRef}
-          className="flex-1 overflow-auto p-4 sm:p-8 bg-slate-950/60"
+          className="flex-1 overflow-auto p-2 sm:p-8 bg-slate-950/60"
         >
           <div
             style={{ zoom: zoom / 100 }}

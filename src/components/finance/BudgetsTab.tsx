@@ -157,7 +157,7 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-bold text-slate-900">Budget vs Actual & Forecast Control</h3>
           <p className="text-xs text-slate-500">Monitor departmental, ledger, and project spending against approved allocations</p>
@@ -166,7 +166,7 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
           <button
             type="button"
             onClick={() => openModal()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+            className="w-full sm:w-auto justify-center shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" /> Create Budget
           </button>
@@ -174,8 +174,107 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="md:hidden divide-y divide-slate-100">
+          {rows.length === 0 ? (
+            <div className="py-8 px-4 text-center text-xs text-slate-500">
+              No fiscal budgets defined yet. Create a budget to track actuals and run-rate forecasts.
+            </div>
+          ) : (
+            rows.map(({ budget, actualSpend, variance, utilizationPercent, projectedSpend, statusFlag }) => (
+              <div key={budget.id} className="p-4 space-y-2.5 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-900">{budget.name}</div>
+                    {budget.projectTitle && <div className="text-[11px] text-slate-500">{budget.projectTitle}</div>}
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      {budget.periodLabel} ({budget.periodType})
+                      {[budget.department, budget.category].filter(Boolean).length > 0 && ` · ${[budget.department, budget.category].filter(Boolean).join(' · ')}`}
+                    </div>
+                  </div>
+                  {canManage && (
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openModal(budget)}
+                        className="text-slate-600 hover:text-slate-900 cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      {confirmDeleteId === budget.id ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(budget.id)}
+                          className="text-rose-700 font-bold cursor-pointer"
+                        >
+                          Confirm
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(budget.id)}
+                          className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2 font-mono text-[11px] bg-slate-50 rounded-lg p-2.5">
+                  <div>
+                    <span className="block text-slate-400">Allocated</span>
+                    <span className="font-semibold text-slate-900">{formatINR(budget.allocatedAmount)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-400">Actual Spend</span>
+                    <span className="font-semibold text-slate-800">{formatINR(actualSpend)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-400">Variance</span>
+                    <span className={`font-semibold ${variance >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      {formatINR(variance)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-400">Forecast</span>
+                    <span className="text-slate-700">{formatINR(projectedSpend)}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between text-[11px] font-mono mb-1">
+                    <span className="text-slate-500">Utilization</span>
+                    <span
+                      className={
+                        statusFlag === 'OVER_BUDGET'
+                          ? 'text-rose-700 font-bold'
+                          : statusFlag === 'NEAR_LIMIT'
+                          ? 'text-amber-700 font-semibold'
+                          : 'text-emerald-700'
+                      }
+                    >
+                      {utilizationPercent}%
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${
+                        statusFlag === 'OVER_BUDGET'
+                          ? 'bg-rose-600'
+                          : statusFlag === 'NEAR_LIMIT'
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-600'
+                      }`}
+                      style={{ width: `${Math.min(100, utilizationPercent)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full min-w-[780px] text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
               <tr>
                 <th className="py-2.5 px-4">Budget Name</th>
@@ -284,15 +383,15 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">{form.id ? 'Edit Budget' : 'Create Fiscal Budget'}</h3>
-              <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSave} className="p-5 space-y-3">
+            <form onSubmit={handleSave} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Budget Title *</label>
                 <input
@@ -304,7 +403,7 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
                   className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Fiscal Year</label>
                   <input
@@ -338,7 +437,7 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Allocated Amount (₹) *</label>
                   <input
@@ -369,7 +468,7 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
                   <input
@@ -395,7 +494,7 @@ export const BudgetsTab: React.FC<BudgetsTabProps> = ({
                   </select>
                 </div>
               </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}

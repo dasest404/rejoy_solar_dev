@@ -108,15 +108,15 @@ export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
           <h3 className="text-sm font-bold text-slate-900">Solar EPC Project Costing & Margin Tracker</h3>
           <p className="text-xs text-slate-500">Compares Contract Value, Billed Revenue, BOM Estimate, Vendor Bills, and Direct Expenses</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:flex-none min-w-0">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search project or customer..."
-              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-52"
+              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-full sm:w-52"
             />
           </div>
           <button
@@ -139,7 +139,7 @@ export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
                 ])
               )
             }
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer shrink-0"
           >
             <Download className="w-3.5 h-3.5" /> CSV
           </button>
@@ -147,8 +147,65 @@ export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="md:hidden divide-y divide-slate-100">
+          {filtered.length === 0 ? (
+            <div className="py-8 px-4 text-center text-xs text-slate-500">
+              No EPC projects found matching your filter.
+            </div>
+          ) : (
+            filtered.map(r => (
+              <div key={r.projectId} className="p-4 space-y-2.5 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-900 flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-slate-500">{r.projectCode}</span>
+                      <span>{r.projectTitle}</span>
+                      {r.isOverBudget && <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {r.customerName} · {r.capacityKw} kWp · {r.status}
+                    </div>
+                  </div>
+                  <div className={`text-right font-mono font-bold shrink-0 ${r.marginPercent >= 15 ? 'text-emerald-700' : r.marginPercent >= 0 ? 'text-amber-700' : 'text-rose-700'}`}>
+                    {r.marginPercent}%
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 font-mono text-[11px] bg-slate-50 rounded-lg p-2.5">
+                  <div>
+                    <span className="block text-slate-400">Contract</span>
+                    <span className="font-semibold text-slate-900">{formatINR(r.contractValue)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-400">Billed / Recv</span>
+                    <span>{formatINR(r.billedRevenue)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-400">Actual Cost</span>
+                    <span className="font-semibold text-rose-700">{formatINR(r.actualTotalCost)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-400">Gross Profit</span>
+                    <span className={`font-bold ${r.grossProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      {formatINR(r.grossProfit)}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRow(r)}
+                    className="text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                  >
+                    View Breakdown →
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full min-w-[780px] text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
               <tr>
                 <th className="py-2.5 px-4">Project</th>
@@ -223,48 +280,48 @@ export const ProjectCostingTab: React.FC<ProjectCostingTabProps> = ({
 
       {/* Project Financial Drilldown Modal */}
       {selectedRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">{selectedRow.projectCode} — Cost Breakdown</h3>
-                <p className="text-xs text-slate-500">{selectedRow.projectTitle} ({selectedRow.customerName})</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0 gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-slate-900 truncate">{selectedRow.projectCode} — Cost Breakdown</h3>
+                <p className="text-xs text-slate-500 truncate">{selectedRow.projectTitle} ({selectedRow.customerName})</p>
               </div>
-              <button type="button" onClick={() => setSelectedRow(null)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setSelectedRow(null)} className="text-slate-400 hover:text-slate-600 p-1 shrink-0">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-3 text-xs">
+            <div className="p-4 sm:p-5 space-y-3 text-xs overflow-y-auto">
               <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">EPC Contract Value</span>
                   <span className="font-mono font-bold text-slate-900">{formatINR(selectedRow.contractValue)}</span>
                 </div>
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">Billed Customer Invoices</span>
                   <span className="font-mono font-semibold text-slate-900">{formatINR(selectedRow.billedRevenue)}</span>
                 </div>
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">Cash Collected</span>
                   <span className="font-mono font-semibold text-emerald-700">{formatINR(selectedRow.collectedRevenue)}</span>
                 </div>
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">BOM Estimated Material Cost</span>
                   <span className="font-mono text-slate-700">{formatINR(selectedRow.bomEstimatedCost)}</span>
                 </div>
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">Posted Vendor Bills</span>
                   <span className="font-mono text-rose-700">{formatINR(selectedRow.vendorBillsCost)}</span>
                 </div>
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">Site & Direct Expenses</span>
                   <span className="font-mono text-rose-700">{formatINR(selectedRow.expensesCost)}</span>
                 </div>
-                <div className="p-3 flex justify-between">
+                <div className="p-3 flex flex-wrap justify-between gap-1">
                   <span className="text-slate-600">Open Unbilled PO Commitments</span>
                   <span className="font-mono text-amber-700">{formatINR(selectedRow.poCommittedCost)}</span>
                 </div>
-                <div className="p-3 flex justify-between bg-slate-50 font-bold">
+                <div className="p-3 flex flex-wrap justify-between gap-1 bg-slate-50 font-bold">
                   <span className="text-slate-900">Gross Profit ({selectedRow.marginPercent}% margin)</span>
                   <span className={`font-mono ${selectedRow.grossProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                     {formatINR(selectedRow.grossProfit)}

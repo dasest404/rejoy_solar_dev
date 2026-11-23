@@ -88,6 +88,8 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
   const [savingJournal, setSavingJournal] = useState(false);
   const [journalError, setJournalError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmReverseId, setConfirmReverseId] = useState<string | null>(null);
+  const [reversedJournalIds, setReversedJournalIds] = useState<string[]>([]);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
 
   // General Ledger Filter State
@@ -317,13 +319,28 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
     }
   };
 
+  const isJournalReversed = (j: JournalEntry) =>
+    j.status === 'REVERSED' || Boolean(j.reversedEntryId) || reversedJournalIds.includes(j.id);
+
+  const canReverseJournal = (j: JournalEntry) =>
+    canManage &&
+    j.status === 'POSTED' &&
+    j.referenceType !== 'REVERSAL' &&
+    !j.reversedEntryId &&
+    !reversedJournalIds.includes(j.id);
+
   const handleReversePosted = async (id: string) => {
+    if (busyActionId === id || reversedJournalIds.includes(id)) return;
     setBusyActionId(id);
     try {
       await apiClient.reverseJournalEntry(id);
+      setReversedJournalIds(prev => (prev.includes(id) ? prev : [...prev, id]));
+      setConfirmReverseId(null);
       await onRefresh();
       showToast('Reversing journal voucher posted.', 'success');
     } catch (err: any) {
+      setConfirmReverseId(null);
+      await onRefresh().catch(() => undefined);
       showToast(err?.message || 'Failed to reverse journal', 'error');
     } finally {
       setBusyActionId(null);
@@ -352,7 +369,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
   return (
     <div className="space-y-4">
       {/* Sub-Navigation & Controls */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {(
             [
@@ -377,16 +394,16 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           {(subTab === 'COA' || subTab === 'JOURNALS') && (
-            <div className="relative">
+            <div className="relative flex-1 sm:flex-none">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder={subTab === 'COA' ? 'Search code or account...' : 'Search voucher or narration...'}
-                className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-hidden focus:border-amber-500 w-56"
+                className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-hidden focus:border-amber-500 w-full sm:w-56"
               />
             </div>
           )}
@@ -395,7 +412,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
             <button
               type="button"
               onClick={openNewAccount}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer w-full sm:w-auto"
             >
               <Plus className="w-3.5 h-3.5" /> Add Account
             </button>
@@ -405,7 +422,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
             <button
               type="button"
               onClick={openNewJournal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer w-full sm:w-auto"
             >
               <Plus className="w-3.5 h-3.5" /> New Journal Entry
             </button>
@@ -429,7 +446,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                   ])
                 )
               }
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer w-full sm:w-auto"
             >
               <Download className="w-3.5 h-3.5" /> Export CSV
             </button>
@@ -440,7 +457,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
       {/* 1. CHART OF ACCOUNTS */}
       {subTab === 'COA' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center gap-2 bg-slate-50">
+          <div className="px-3 sm:px-4 py-3 border-b border-slate-200 flex flex-wrap items-center gap-1.5 sm:gap-2 bg-slate-50">
             {(['ALL', 'ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'] as const).map(t => (
               <button
                 key={t}
@@ -455,8 +472,90 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
             ))}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          {/* Mobile Stacked Cards (< md) */}
+          <div className="md:hidden divide-y divide-slate-100">
+            {filteredAccounts.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">No matching ledger accounts found.</div>
+            ) : (
+              filteredAccounts.map(acc => (
+                <div key={acc.id} className="p-3.5 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono font-bold text-slate-800">{acc.code}</span>
+                        <span className="font-semibold text-slate-500">{acc.accountType}</span>
+                        {acc.isSystem && <span className="text-[10px] font-semibold text-slate-400">SYSTEM</span>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openLedgerForAccount(acc.id)}
+                        className="font-semibold text-slate-900 hover:text-amber-700 text-left mt-0.5 cursor-pointer"
+                      >
+                        {acc.name}
+                      </button>
+                      <div className="text-[11px] text-slate-500">{acc.subType}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[10px] text-slate-400">Balance</div>
+                      <div className="font-mono font-bold text-slate-900 tabular-nums">{formatINR(acc.currentBalance)}</div>
+                      <div className="text-[10px] font-mono text-slate-400">Open {formatINR(acc.openingBalance)}</div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-3 pt-1.5 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => openLedgerForAccount(acc.id)}
+                      className="text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                    >
+                      View Ledger
+                    </button>
+                    {canManage && (
+                      <button
+                        type="button"
+                        onClick={() => openEditAccount(acc)}
+                        className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-medium cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" /> Edit
+                      </button>
+                    )}
+                    {canManage && !acc.isSystem && (
+                      confirmDeleteId === acc.id ? (
+                        <span className="inline-flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={busyActionId === acc.id}
+                            onClick={() => handleDeleteAccount(acc.id)}
+                            className="text-rose-700 font-bold cursor-pointer"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="text-slate-500 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(acc.id)}
+                          className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 font-medium cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Tablet & Desktop Table (>= md) */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Code</th>
@@ -478,7 +577,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 ) : (
                   filteredAccounts.map(acc => (
                     <tr key={acc.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-mono font-bold text-slate-800">{acc.code}</td>
+                      <td className="py-2.5 px-4 font-mono font-bold text-slate-800 whitespace-nowrap">{acc.code}</td>
                       <td className="py-2.5 px-4">
                         <button
                           type="button"
@@ -491,12 +590,12 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                           <span className="ml-2 text-[10px] font-semibold text-slate-400">SYSTEM</span>
                         )}
                       </td>
-                      <td className="py-2.5 px-4 font-semibold text-slate-600">{acc.accountType}</td>
+                      <td className="py-2.5 px-4 font-semibold text-slate-600 whitespace-nowrap">{acc.accountType}</td>
                       <td className="py-2.5 px-4 text-slate-500">{acc.subType}</td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-600">
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
                         {formatINR(acc.openingBalance)}
                       </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                         {formatINR(acc.currentBalance)}
                       </td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap space-x-2">
@@ -560,8 +659,152 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
       {/* 2. JOURNAL ENTRIES */}
       {subTab === 'JOURNALS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          {/* Mobile Stacked Cards (< md) */}
+          <div className="md:hidden divide-y divide-slate-200">
+            {filteredJournals.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">No journal entries found.</div>
+            ) : (
+              filteredJournals.map(j => {
+                const reversed = isJournalReversed(j);
+                const reversable = canReverseJournal(j);
+                return (
+                  <div key={j.id} className="p-3.5 space-y-2.5 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono font-bold text-slate-900">{j.entryNumber}</span>
+                          <span className="font-mono text-slate-500">{formatDateIN(j.entryDate)}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-600 mt-0.5">
+                          {j.referenceType || 'MANUAL'}
+                          {j.referenceNumber ? ` · ${j.referenceNumber}` : ''}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono font-bold text-slate-900 tabular-nums">{formatINR(j.totalDebit)}</div>
+                        <span
+                          className={`text-[11px] font-semibold ${
+                            j.status === 'POSTED'
+                              ? 'text-emerald-700'
+                              : j.status === 'REVERSED'
+                              ? 'text-rose-700'
+                              : 'text-amber-700'
+                          }`}
+                        >
+                          {j.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="font-semibold text-slate-800">{j.narration}</div>
+
+                    <div className="bg-slate-50 rounded-lg p-2 space-y-1 text-[11px] text-slate-600">
+                      {(j.lines || []).map(l => (
+                        <div key={l.id} className="flex items-start justify-between gap-2">
+                          <span className="min-w-0">
+                            <span className="font-mono text-slate-400">{l.accountCode}</span> {l.accountName}
+                            {l.partyName ? ` · ${l.partyName}` : ''}
+                          </span>
+                          <span className="font-mono tabular-nums shrink-0 font-medium text-slate-800">
+                            {l.debit > 0 ? `Dr ${formatINR(l.debit)}` : `Cr ${formatINR(l.credit)}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-3 pt-1">
+                      {canManage && j.status === 'DRAFT' && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={busyActionId === j.id}
+                            onClick={() => openEditJournal(j)}
+                            className="text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyActionId === j.id}
+                            onClick={() => handlePostDraft(j.id)}
+                            className="text-emerald-700 hover:text-emerald-800 font-semibold cursor-pointer"
+                          >
+                            Post
+                          </button>
+                          {confirmDeleteId === j.id ? (
+                            <span className="inline-flex items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={busyActionId === j.id}
+                                onClick={() => handleDeleteDraftJournal(j.id)}
+                                className="text-rose-700 font-bold cursor-pointer"
+                              >
+                                Confirm Del
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="text-slate-500 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(j.id)}
+                              className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </>
+                      )}
+
+                      {reversable && (
+                        confirmReverseId === j.id ? (
+                          <span className="inline-flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={busyActionId === j.id}
+                              onClick={() => handleReversePosted(j.id)}
+                              className="text-amber-800 font-bold cursor-pointer"
+                            >
+                              {busyActionId === j.id ? 'Reversing...' : 'Confirm Reverse'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmReverseId(null)}
+                              className="text-slate-500 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busyActionId === j.id}
+                            onClick={() => setConfirmReverseId(j.id)}
+                            className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                          >
+                            <RotateCcw className="w-3 h-3" /> Reverse
+                          </button>
+                        )
+                      )}
+
+                      {reversed && (
+                        <span className="text-[11px] font-medium text-slate-400">Reversed (Locked)</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Tablet & Desktop Table (>= md) */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Voucher #</th>
@@ -581,98 +824,125 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                     </td>
                   </tr>
                 ) : (
-                  filteredJournals.map(j => (
-                    <tr key={j.id} className="hover:bg-slate-50 align-top">
-                      <td className="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{j.entryNumber}</td>
-                      <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(j.entryDate)}</td>
-                      <td className="py-3 px-4 text-slate-600">
-                        <div className="font-medium text-slate-800">{j.referenceType || 'MANUAL'}</div>
-                        {j.referenceNumber && <div className="font-mono text-[11px] text-slate-500">{j.referenceNumber}</div>}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-slate-800 mb-1">{j.narration}</div>
-                        <div className="space-y-0.5 text-[11px] text-slate-600">
-                          {(j.lines || []).map(l => (
-                            <div key={l.id} className="flex items-center justify-between gap-4 max-w-lg">
-                              <span>
-                                <span className="font-mono text-slate-400">{l.accountCode}</span> {l.accountName}
-                                {l.partyName ? ` · ${l.partyName}` : ''}
-                              </span>
-                              <span className="font-mono tabular-nums">
-                                {l.debit > 0 ? `Dr ${formatINR(l.debit)}` : `Cr ${formatINR(l.credit)}`}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
-                        {formatINR(j.totalDebit)}
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span
-                          className={`font-semibold ${
-                            j.status === 'POSTED'
-                              ? 'text-emerald-700'
-                              : j.status === 'REVERSED'
-                              ? 'text-rose-700'
-                              : 'text-amber-700'
-                          }`}
-                        >
-                          {j.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right whitespace-nowrap space-x-2">
-                        {canManage && j.status === 'DRAFT' && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={busyActionId === j.id}
-                              onClick={() => openEditJournal(j)}
-                              className="text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busyActionId === j.id}
-                              onClick={() => handlePostDraft(j.id)}
-                              className="text-emerald-700 hover:text-emerald-800 font-semibold cursor-pointer"
-                            >
-                              Post
-                            </button>
-                            {confirmDeleteId === j.id ? (
+                  filteredJournals.map(j => {
+                    const reversed = isJournalReversed(j);
+                    const reversable = canReverseJournal(j);
+                    return (
+                      <tr key={j.id} className="hover:bg-slate-50 align-top">
+                        <td className="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{j.entryNumber}</td>
+                        <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(j.entryDate)}</td>
+                        <td className="py-3 px-4 text-slate-600">
+                          <div className="font-medium text-slate-800">{j.referenceType || 'MANUAL'}</div>
+                          {j.referenceNumber && <div className="font-mono text-[11px] text-slate-500">{j.referenceNumber}</div>}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-800 mb-1">{j.narration}</div>
+                          <div className="space-y-0.5 text-[11px] text-slate-600">
+                            {(j.lines || []).map(l => (
+                              <div key={l.id} className="flex items-center justify-between gap-4 max-w-lg">
+                                <span>
+                                  <span className="font-mono text-slate-400">{l.accountCode}</span> {l.accountName}
+                                  {l.partyName ? ` · ${l.partyName}` : ''}
+                                </span>
+                                <span className="font-mono tabular-nums whitespace-nowrap">
+                                  {l.debit > 0 ? `Dr ${formatINR(l.debit)}` : `Cr ${formatINR(l.credit)}`}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
+                          {formatINR(j.totalDebit)}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span
+                            className={`font-semibold ${
+                              j.status === 'POSTED'
+                                ? 'text-emerald-700'
+                                : j.status === 'REVERSED'
+                                ? 'text-rose-700'
+                                : 'text-amber-700'
+                            }`}
+                          >
+                            {j.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap space-x-2">
+                          {canManage && j.status === 'DRAFT' && (
+                            <>
                               <button
                                 type="button"
                                 disabled={busyActionId === j.id}
-                                onClick={() => handleDeleteDraftJournal(j.id)}
-                                className="text-rose-700 font-bold cursor-pointer"
+                                onClick={() => openEditJournal(j)}
+                                className="text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
                               >
-                                Confirm Del
+                                Edit
                               </button>
+                              <button
+                                type="button"
+                                disabled={busyActionId === j.id}
+                                onClick={() => handlePostDraft(j.id)}
+                                className="text-emerald-700 hover:text-emerald-800 font-semibold cursor-pointer"
+                              >
+                                Post
+                              </button>
+                              {confirmDeleteId === j.id ? (
+                                <button
+                                  type="button"
+                                  disabled={busyActionId === j.id}
+                                  onClick={() => handleDeleteDraftJournal(j.id)}
+                                  className="text-rose-700 font-bold cursor-pointer"
+                                >
+                                  Confirm Del
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(j.id)}
+                                  className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {reversable && (
+                            confirmReverseId === j.id ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={busyActionId === j.id}
+                                  onClick={() => handleReversePosted(j.id)}
+                                  className="text-amber-800 font-bold cursor-pointer"
+                                >
+                                  {busyActionId === j.id ? 'Reversing...' : 'Confirm Rev'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmReverseId(null)}
+                                  className="text-slate-500 cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </span>
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => setConfirmDeleteId(j.id)}
-                                className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                                disabled={busyActionId === j.id}
+                                onClick={() => setConfirmReverseId(j.id)}
+                                className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
                               >
-                                Delete
+                                <RotateCcw className="w-3 h-3" /> Reverse
                               </button>
-                            )}
-                          </>
-                        )}
-                        {canManage && j.status === 'POSTED' && (
-                          <button
-                            type="button"
-                            disabled={busyActionId === j.id}
-                            onClick={() => handleReversePosted(j.id)}
-                            className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
-                          >
-                            <RotateCcw className="w-3 h-3" /> Reverse
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                            )
+                          )}
+                          {reversed && (
+                            <span className="text-[11px] font-medium text-slate-400">Reversed</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -682,9 +952,9 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
 
       {/* 3. GENERAL LEDGER */}
       {subTab === 'LEDGER' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-            <div className="md:col-span-2">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-slate-700 mb-1">Select Account</label>
               <select
                 value={selectedLedgerAccount?.id || ''}
@@ -746,8 +1016,41 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+              {/* Mobile Stacked Cards (< md) */}
+              <div className="md:hidden divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                {ledgerResult.rows.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-500">
+                    No posted transactions in this account for the selected period.
+                  </div>
+                ) : (
+                  ledgerResult.rows.map(r => (
+                    <div key={r.lineId} className="p-3 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-semibold text-slate-800">{r.entryNumber}</span>
+                        <span className="font-mono text-slate-500">{formatDateIN(r.entryDate)}</span>
+                      </div>
+                      <div className="text-slate-700">{r.narration}</div>
+                      {(r.partyName || r.projectTitle) && (
+                        <div className="text-[11px] text-slate-500">
+                          {[r.partyName, r.projectTitle].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-1 font-mono tabular-nums text-[11px]">
+                        <span className="text-slate-600">
+                          {r.debit > 0 ? `Dr ${formatINR(r.debit)}` : `Cr ${formatINR(r.credit)}`}
+                        </span>
+                        <span className="font-bold text-slate-900">
+                          Bal: {formatINR(r.runningBalance)} {r.balanceOrientation}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Tablet & Desktop Table (>= md) */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full min-w-[720px] text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                     <tr>
                       <th className="py-2 px-3">Date</th>
@@ -769,19 +1072,19 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                     ) : (
                       ledgerResult.rows.map(r => (
                         <tr key={r.lineId} className="hover:bg-slate-50">
-                          <td className="py-2 px-3 font-mono text-slate-600">{formatDateIN(r.entryDate)}</td>
-                          <td className="py-2 px-3 font-mono font-semibold text-slate-800">{r.entryNumber}</td>
+                          <td className="py-2 px-3 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(r.entryDate)}</td>
+                          <td className="py-2 px-3 font-mono font-semibold text-slate-800 whitespace-nowrap">{r.entryNumber}</td>
                           <td className="py-2 px-3 text-slate-700">{r.narration}</td>
                           <td className="py-2 px-3 text-slate-500">
                             {[r.partyName, r.projectTitle].filter(Boolean).join(' · ') || '—'}
                           </td>
-                          <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-900">
+                          <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-900 whitespace-nowrap">
                             {r.debit > 0 ? formatINR(r.debit) : '—'}
                           </td>
-                          <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-900">
+                          <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-900 whitespace-nowrap">
                             {r.credit > 0 ? formatINR(r.credit) : '—'}
                           </td>
-                          <td className="py-2 px-3 text-right font-mono tabular-nums font-bold text-slate-900">
+                          <td className="py-2 px-3 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                             {formatINR(r.runningBalance)} {r.balanceOrientation}
                           </td>
                         </tr>
@@ -797,7 +1100,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
 
       {/* 4. TRIAL BALANCE */}
       {subTab === 'TRIAL_BALANCE' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-bold text-slate-900">Trial Balance Summary</h3>
@@ -805,7 +1108,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 Verification of total closing debits vs total closing credits across all accounts
               </p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-slate-600 font-medium">As of:</span>
                 <input
@@ -820,14 +1123,60 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                   trialBalance.isBalanced ? 'text-emerald-700' : 'text-rose-700'
                 }`}
               >
-                <CheckCircle2 className="w-4 h-4" />
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
                 {trialBalance.isBalanced ? 'Balanced' : `Out of balance by ${formatINR(trialBalance.difference)}`}
               </span>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          {/* Mobile Stacked Cards (< md) */}
+          <div className="md:hidden space-y-2">
+            {trialBalance.rows.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500 border border-slate-200 rounded-lg">
+                No account balances recorded as of {formatDateIN(tbAsOfDate)}.
+              </div>
+            ) : (
+              <>
+                <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                  {trialBalance.rows.map(r => (
+                    <div key={r.accountId} className="p-3 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openLedgerForAccount(r.accountId)}
+                          className="font-semibold text-slate-900 hover:text-amber-700 text-left cursor-pointer"
+                        >
+                          <span className="font-mono text-slate-500 mr-1.5">{r.code}</span>
+                          {r.name}
+                        </button>
+                        <span className="text-[10px] font-semibold text-slate-500 shrink-0">{r.accountType}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono tabular-nums pt-1">
+                        <div>
+                          <span className="text-slate-400 block">Closing Dr</span>
+                          <span className="font-semibold text-slate-900">{r.closingDebit > 0 ? formatINR(r.closingDebit) : '—'}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-400 block">Closing Cr</span>
+                          <span className="font-semibold text-slate-900">{r.closingCredit > 0 ? formatINR(r.closingCredit) : '—'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold flex items-center justify-between">
+                  <span>Total Closing Trial Balance</span>
+                  <span className="font-mono tabular-nums text-right">
+                    Dr {formatINR(trialBalance.totalDebit)} / Cr {formatINR(trialBalance.totalCredit)}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Tablet & Desktop Table (>= md) */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[740px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-3">Code</th>
@@ -849,27 +1198,27 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 ) : (
                   trialBalance.rows.map(r => (
                     <tr key={r.accountId} className="hover:bg-slate-50">
-                      <td className="py-2 px-3 font-mono font-semibold text-slate-800">{r.code}</td>
+                      <td className="py-2 px-3 font-mono font-semibold text-slate-800 whitespace-nowrap">{r.code}</td>
                       <td className="py-2 px-3">
                         <button
                           type="button"
                           onClick={() => openLedgerForAccount(r.accountId)}
-                          className="font-medium text-slate-900 hover:text-amber-700 cursor-pointer"
+                          className="font-medium text-slate-900 hover:text-amber-700 cursor-pointer text-left"
                         >
                           {r.name}
                         </button>
                       </td>
-                      <td className="py-2 px-3 text-slate-500">{r.accountType}</td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-600">
+                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">{r.accountType}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
                         {r.periodDebit > 0 ? formatINR(r.periodDebit) : '—'}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-600">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
                         {r.periodCredit > 0 ? formatINR(r.periodCredit) : '—'}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums font-semibold text-slate-900">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                         {r.closingDebit > 0 ? formatINR(r.closingDebit) : '—'}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums font-semibold text-slate-900">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                         {r.closingCredit > 0 ? formatINR(r.closingCredit) : '—'}
                       </td>
                     </tr>
@@ -881,8 +1230,8 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                   <td colSpan={5} className="py-2.5 px-3 text-right">
                     Total Closing Trial Balance
                   </td>
-                  <td className="py-2.5 px-3 text-right font-mono tabular-nums">{formatINR(trialBalance.totalDebit)}</td>
-                  <td className="py-2.5 px-3 text-right font-mono tabular-nums">{formatINR(trialBalance.totalCredit)}</td>
+                  <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">{formatINR(trialBalance.totalDebit)}</td>
+                  <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">{formatINR(trialBalance.totalCredit)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -892,18 +1241,18 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
 
       {/* Account Modal */}
       {isAccountModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">
                 {editingAccount ? `Edit Account ${editingAccount.code}` : 'New Chart of Accounts Ledger'}
               </h3>
-              <button type="button" onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveAccount} className="p-5 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleSaveAccount} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Account Code *</label>
                   <input
@@ -941,7 +1290,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                   className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Sub-Group</label>
                   <input
@@ -971,7 +1320,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                   className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsAccountModalOpen(false)}
@@ -994,17 +1343,17 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
 
       {/* Journal Voucher Modal */}
       {isJournalModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
           <div className="w-full max-w-4xl bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">
                 {editingJournalId ? `Edit Draft Journal ${journalForm.entryNumber}` : 'New Double-Entry Journal Voucher'}
               </h3>
-              <button type="button" onClick={() => setIsJournalModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsJournalModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveJournal} className="p-5 space-y-4 overflow-y-auto">
+            <form onSubmit={handleSaveJournal} className="p-4 sm:p-5 space-y-4 overflow-y-auto">
               {journalError && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1012,7 +1361,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Entry Date *</label>
                   <input
@@ -1057,8 +1406,8 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 </div>
               </div>
 
-              <div className="border border-slate-200 rounded-lg overflow-hidden">
-                <table className="w-full text-left text-xs">
+              <div className="border border-slate-200 rounded-lg overflow-x-auto">
+                <table className="w-full min-w-[680px] text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                     <tr>
                       <th className="py-2 px-3">Ledger Account *</th>
@@ -1192,7 +1541,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                   + Add Line
                 </button>
 
-                <div className="flex items-center gap-5 text-xs font-mono">
+                <div className="flex flex-wrap items-center gap-3 sm:gap-5 text-xs font-mono">
                   <span>
                     Total Debit: <strong>{formatINR(journalTotals.debit)}</strong>
                   </span>
@@ -1205,7 +1554,7 @@ export const AccountsLedgerTab: React.FC<AccountsLedgerTabProps> = ({
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsJournalModalOpen(false)}

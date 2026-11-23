@@ -363,22 +363,22 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+          <div className="relative flex-1 sm:flex-none">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search receipt, customer, invoice..."
-              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-56"
+              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-full sm:w-56"
             />
           </div>
           {canEdit && (
             <button
               type="button"
               onClick={() => openModalForInvoice()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer w-full sm:w-auto"
             >
               <Plus className="w-3.5 h-3.5" /> Record Receipt
             </button>
@@ -389,8 +389,109 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
       {/* Subtab 1: Receipts */}
       {subTab === 'RECEIPTS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          {/* Mobile Cards (< md) */}
+          <div className="md:hidden divide-y divide-slate-100">
+            {filteredPayments.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                No customer receipts recorded matching your filter.
+              </div>
+            ) : (
+              filteredPayments.map(p => (
+                <div key={p.id} className="p-3.5 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-slate-900">{p.receiptNumber}</div>
+                      <div className="font-semibold text-slate-800 truncate">{p.customerName}</div>
+                      <div className="text-[11px] text-slate-500">
+                        {p.invoiceNumber ? `${p.invoiceNumber} · ` : ''}
+                        {p.milestone}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-bold text-slate-900 tabular-nums">{formatINR(p.amount)}</div>
+                      <span className={`text-[11px] font-semibold ${p.status === 'PAID' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {p.status}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span className="font-mono">{formatDateIN(p.paidDate || p.dueDate)}</span>
+                    <span>
+                      {p.paymentMode || 'NEFT'}
+                      {p.transactionReference ? ` · ${p.transactionReference}` : ''}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-3 pt-1.5 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setViewReceipt(p)}
+                      className="inline-flex items-center gap-1 text-slate-700 font-semibold cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" /> View
+                    </button>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => openEditReceipt(p)}
+                        className="inline-flex items-center gap-1 text-slate-700 font-semibold cursor-pointer"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" /> Edit
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onOpenXml(generateTallyReceiptXML(p, settings))}
+                      className="inline-flex items-center gap-1 text-slate-700 font-semibold cursor-pointer"
+                    >
+                      <FileCode className="w-3.5 h-3.5" /> XML
+                    </button>
+                    {canTallySync && (
+                      <button
+                        type="button"
+                        disabled={syncingId === p.id}
+                        onClick={() => {
+                          setSyncingId(p.id);
+                          setTimeout(() => {
+                            setSyncingId(null);
+                            const res = attemptTallySync(p.id, 'PAYMENT', p, settings);
+                            showToast(res.message, res.success ? 'success' : 'warning');
+                          }, 500);
+                        }}
+                        className="inline-flex items-center gap-1 text-amber-700 font-semibold cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${syncingId === p.id ? 'animate-spin' : ''}`} />
+                        {syncingId === p.id ? 'Syncing' : 'Tally'}
+                      </button>
+                    )}
+                    {canEdit && (
+                      confirmDeleteId === p.id ? (
+                        <button
+                          type="button"
+                          disabled={busyId === p.id}
+                          onClick={() => handleDeleteReceipt(p.id)}
+                          className="text-rose-700 font-bold cursor-pointer"
+                        >
+                          {busyId === p.id ? '...' : 'Confirm Del'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(p.id)}
+                          className="inline-flex items-center gap-1 text-rose-600 font-medium cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Tablet & Desktop Table (>= md) */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[780px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Receipt #</th>
@@ -413,21 +514,21 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                 ) : (
                   filteredPayments.map(p => (
                     <tr key={p.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{p.receiptNumber}</td>
+                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{p.receiptNumber}</td>
                       <td className="py-2.5 px-4 font-semibold text-slate-800">{p.customerName}</td>
                       <td className="py-2.5 px-4 text-slate-600">
                         {p.invoiceNumber ? `${p.invoiceNumber} · ` : ''}
                         {p.milestone}
                       </td>
-                      <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(p.paidDate || p.dueDate)}</td>
+                      <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(p.paidDate || p.dueDate)}</td>
                       <td className="py-2.5 px-4 text-slate-600">
                         {p.paymentMode || 'NEFT'}
                         {p.transactionReference ? ` · ${p.transactionReference}` : ''}
                       </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                         {formatINR(p.amount)}
                       </td>
-                      <td className="py-2.5 px-4">
+                      <td className="py-2.5 px-4 whitespace-nowrap">
                         <span className={`font-semibold ${p.status === 'PAID' ? 'text-emerald-700' : 'text-amber-700'}`}>
                           {p.status}
                         </span>
@@ -510,76 +611,123 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
       {/* Subtab 2 & 3: Open / Overdue Invoices */}
       {(subTab === 'OPEN_INVOICES' || subTab === 'OVERDUE') && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
-                <tr>
-                  <th className="py-2.5 px-4">Invoice #</th>
-                  <th className="py-2.5 px-4">Customer</th>
-                  <th className="py-2.5 px-4">Project</th>
-                  <th className="py-2.5 px-4">Due Date</th>
-                  <th className="py-2.5 px-4 text-right">Billed (₹)</th>
-                  <th className="py-2.5 px-4 text-right">Received (₹)</th>
-                  <th className="py-2.5 px-4 text-right">Balance Due (₹)</th>
-                  <th className="py-2.5 px-4">Status</th>
-                  <th className="py-2.5 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {(subTab === 'OVERDUE' ? overdueInvoices : openInvoices)
-                  .filter(
-                    r =>
-                      !q ||
-                      r.inv.invoiceNumber.toLowerCase().includes(q) ||
-                      r.inv.customerName.toLowerCase().includes(q) ||
-                      (r.inv.projectTitle || '').toLowerCase().includes(q)
-                  )
-                  .map(({ inv, paid, balance, payStatus }) => (
-                    <tr key={inv.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{inv.invoiceNumber}</td>
-                      <td className="py-2.5 px-4 font-semibold text-slate-800">{inv.customerName}</td>
-                      <td className="py-2.5 px-4 text-slate-600">{inv.projectTitle || '—'}</td>
-                      <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(inv.dueDate)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-700">{formatINR(inv.totalAmount)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-emerald-700">{formatINR(paid)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">{formatINR(balance)}</td>
-                      <td className="py-2.5 px-4">
-                        <span className={`font-semibold ${payStatus === 'OVERDUE' ? 'text-rose-700' : 'text-amber-700'}`}>
-                          {payStatus}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-4 text-right">
-                        {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() => openModalForInvoice(inv, balance)}
-                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold cursor-pointer"
-                          >
-                            Receive Payment
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                {(subTab === 'OVERDUE' ? overdueInvoices : openInvoices).length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="py-8 text-center text-slate-500">
+          {(() => {
+            const invoiceRows = (subTab === 'OVERDUE' ? overdueInvoices : openInvoices).filter(
+              r =>
+                !q ||
+                r.inv.invoiceNumber.toLowerCase().includes(q) ||
+                r.inv.customerName.toLowerCase().includes(q) ||
+                (r.inv.projectTitle || '').toLowerCase().includes(q)
+            );
+            return (
+              <>
+                <div className="md:hidden divide-y divide-slate-100">
+                  {invoiceRows.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-500">
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 mx-auto mb-1" />
                       All customer invoices are settled!
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                  ) : (
+                    invoiceRows.map(({ inv, paid, balance, payStatus }) => (
+                      <div key={inv.id} className="p-3.5 space-y-2 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-mono font-bold text-slate-900">{inv.invoiceNumber}</div>
+                            <div className="font-semibold text-slate-800 truncate">{inv.customerName}</div>
+                            <div className="text-[11px] text-slate-500 truncate">{inv.projectTitle || '—'}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="font-mono font-bold text-slate-900">{formatINR(balance)}</div>
+                            <span className={`text-[11px] font-semibold ${payStatus === 'OVERDUE' ? 'text-rose-700' : 'text-amber-700'}`}>
+                              {payStatus}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                          <span className="font-mono">Due {formatDateIN(inv.dueDate)}</span>
+                          <span className="font-mono">Billed {formatINR(inv.totalAmount)} · Recv {formatINR(paid)}</span>
+                        </div>
+                        {canEdit && (
+                          <div className="pt-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => openModalForInvoice(inv, balance)}
+                              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold cursor-pointer"
+                            >
+                              Receive Payment
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full min-w-[780px] text-left text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-4">Invoice #</th>
+                        <th className="py-2.5 px-4">Customer</th>
+                        <th className="py-2.5 px-4">Project</th>
+                        <th className="py-2.5 px-4">Due Date</th>
+                        <th className="py-2.5 px-4 text-right">Billed (₹)</th>
+                        <th className="py-2.5 px-4 text-right">Received (₹)</th>
+                        <th className="py-2.5 px-4 text-right">Balance Due (₹)</th>
+                        <th className="py-2.5 px-4">Status</th>
+                        <th className="py-2.5 px-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {invoiceRows.map(({ inv, paid, balance, payStatus }) => (
+                        <tr key={inv.id} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{inv.invoiceNumber}</td>
+                          <td className="py-2.5 px-4 font-semibold text-slate-800">{inv.customerName}</td>
+                          <td className="py-2.5 px-4 text-slate-600">{inv.projectTitle || '—'}</td>
+                          <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(inv.dueDate)}</td>
+                          <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-700 whitespace-nowrap">{formatINR(inv.totalAmount)}</td>
+                          <td className="py-2.5 px-4 text-right font-mono tabular-nums text-emerald-700 whitespace-nowrap">{formatINR(paid)}</td>
+                          <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">{formatINR(balance)}</td>
+                          <td className="py-2.5 px-4 whitespace-nowrap">
+                            <span className={`font-semibold ${payStatus === 'OVERDUE' ? 'text-rose-700' : 'text-amber-700'}`}>
+                              {payStatus}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => openModalForInvoice(inv, balance)}
+                                className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold cursor-pointer"
+                              >
+                                Receive Payment
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {invoiceRows.length === 0 && (
+                        <tr>
+                          <td colSpan={9} className="py-8 text-center text-slate-500">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600 mx-auto mb-1" />
+                            All customer invoices are settled!
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
       {/* Record Receipt Modal */}
       {isReceiptModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">
                 {editingReceiptId ? 'Edit Customer Receipt & Adjust Ledger' : 'Record Customer Receipt & Auto-Post Ledger'}
               </h3>
@@ -589,12 +737,12 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                   setIsReceiptModalOpen(false);
                   setEditingReceiptId(null);
                 }}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-slate-400 hover:text-slate-600 p-1"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveReceipt} className="p-5 space-y-3">
+            <form onSubmit={handleSaveReceipt} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {errorMsg && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -618,7 +766,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Customer *</label>
                   <input
@@ -655,7 +803,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Receipt Amount (₹) *</label>
                   <input
@@ -680,7 +828,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Deposit Into Cash / Bank *</label>
                   <select
@@ -711,7 +859,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Milestone / Description</label>
                   <input
@@ -732,7 +880,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => {
@@ -758,53 +906,53 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
 
       {/* View Receipt Detail Modal */}
       {viewReceipt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900 font-mono">{viewReceipt.receiptNumber}</h3>
-              <button type="button" onClick={() => setViewReceipt(null)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setViewReceipt(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-2.5 text-xs">
-              <div className="flex justify-between">
+            <div className="p-4 sm:p-5 space-y-2.5 text-xs overflow-y-auto">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Customer:</span>
-                <strong className="text-slate-900">{viewReceipt.customerName}</strong>
+                <strong className="text-slate-900 text-right">{viewReceipt.customerName}</strong>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Receipt Date:</span>
                 <span className="font-mono text-slate-800">{formatDateIN(viewReceipt.paidDate || viewReceipt.dueDate)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Amount Collected:</span>
                 <strong className="font-mono text-emerald-700 text-sm">{formatINR(viewReceipt.amount)}</strong>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Status:</span>
                 <span className="font-semibold text-slate-900">{viewReceipt.status}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Invoice / Milestone:</span>
-                <span className="text-slate-800">
+                <span className="text-slate-800 text-right">
                   {viewReceipt.invoiceNumber ? `${viewReceipt.invoiceNumber} · ` : ''}{viewReceipt.milestone}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Bank / Cash Register:</span>
-                <span className="text-slate-800">
+                <span className="text-slate-800 text-right">
                   {workspace.bankAccounts.find(b => b.id === viewReceipt.bankAccountId)?.accountName || 'Default Bank/Cash'}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Mode & Reference:</span>
-                <span className="font-mono text-slate-800">
+                <span className="font-mono text-slate-800 text-right break-all">
                   {viewReceipt.paymentMode || 'NEFT'}{viewReceipt.transactionReference ? ` · ${viewReceipt.transactionReference}` : ''}
                 </span>
               </div>
               {viewReceipt.journalEntryId && (
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span className="text-slate-500">Journal Voucher Ref:</span>
-                  <span className="font-mono text-slate-700">{viewReceipt.journalEntryId}</span>
+                  <span className="font-mono text-slate-700 break-all">{viewReceipt.journalEntryId}</span>
                 </div>
               )}
               {viewReceipt.notes && (
@@ -813,7 +961,7 @@ export const CustomerPaymentsTab: React.FC<CustomerPaymentsTabProps> = ({
                   <p className="text-slate-800 bg-slate-50 p-2 rounded">{viewReceipt.notes}</p>
                 </div>
               )}
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 {canEdit && (
                   <button
                     type="button"

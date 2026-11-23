@@ -286,22 +286,22 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:flex-none min-w-0">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search voucher, payee, category..."
-              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-52"
+              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-full sm:w-52"
             />
           </div>
           {canEdit && (
             <button
               type="button"
               onClick={openCreateModal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              className="w-full sm:w-auto justify-center inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" /> Record Expense / Claim
             </button>
@@ -309,10 +309,132 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
         </div>
       </div>
 
-      {/* Table */}
+      {/* Mobile Cards + Desktop Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="md:hidden divide-y divide-slate-100">
+          {filtered.length === 0 ? (
+            <div className="py-8 px-4 text-center text-xs text-slate-500">
+              No expenses or reimbursements match the selected filter.
+            </div>
+          ) : (
+            filtered.map(exp => {
+              const st = exp.status || 'APPROVED';
+              return (
+                <div key={exp.id} className="p-4 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-slate-900">{exp.expenseNumber}</div>
+                      <div className="font-semibold text-slate-800 truncate">{exp.employeeName || exp.vendorName}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono tabular-nums font-bold text-slate-900 text-sm">{formatINR(exp.amount)}</div>
+                      <span
+                        className={`text-[11px] font-semibold ${
+                          st === 'PAID' || st === 'APPROVED'
+                            ? 'text-emerald-700'
+                            : st === 'REJECTED'
+                            ? 'text-rose-700'
+                            : 'text-amber-700'
+                        }`}
+                      >
+                        {st}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span>
+                      {exp.expenseType === 'REIMBURSEMENT' ? 'Reimbursement' : 'Direct Expense'} · {formatDateIN(exp.expenseDate || exp.date)}
+                    </span>
+                    <span>{exp.category}{exp.projectCode ? ` · ${exp.projectCode}` : ''}</span>
+                  </div>
+                  {exp.itcEligible && Number(exp.gstAmount) > 0 && (
+                    <div className="text-[11px] text-emerald-700 font-mono">ITC {formatINR(exp.gstAmount || 0)}</div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setViewExpense(exp)}
+                      className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" /> View
+                    </button>
+                    {canEdit && st !== 'PAID' && (
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(exp)}
+                        className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" /> Edit
+                      </button>
+                    )}
+                    {canApprove && st === 'PENDING_APPROVAL' && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={busyId === exp.id}
+                          onClick={() => handleDecision(exp.id, 'APPROVED')}
+                          className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 font-semibold cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Approve
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyId === exp.id}
+                          onClick={() => setRejectTargetId(exp.id)}
+                          className="inline-flex items-center gap-1 text-rose-700 hover:text-rose-800 font-semibold cursor-pointer"
+                        >
+                          <XCircle className="w-3.5 h-3.5" /> Reject
+                        </button>
+                      </>
+                    )}
+                    {canApprove && st === 'APPROVED' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayError(null);
+                          setPayModalExpense(exp);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold cursor-pointer"
+                      >
+                        <Wallet className="w-3 h-3" /> Pay
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onOpenXml(generateTallyExpenseXML(exp, settings))}
+                      className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
+                    >
+                      <FileCode className="w-3.5 h-3.5" /> XML
+                    </button>
+                    {canApprove && st !== 'PAID' && (
+                      confirmDeleteId === exp.id ? (
+                        <button
+                          type="button"
+                          disabled={busyId === exp.id}
+                          onClick={() => handleDeleteExpense(exp.id)}
+                          className="text-rose-700 font-bold cursor-pointer"
+                        >
+                          {busyId === exp.id ? '...' : 'Confirm Del'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(exp.id)}
+                          className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full min-w-[780px] text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
               <tr>
                 <th className="py-2.5 px-4">Voucher #</th>
@@ -336,8 +458,8 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                   const st = exp.status || 'APPROVED';
                   return (
                     <tr key={exp.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{exp.expenseNumber}</td>
-                      <td className="py-2.5 px-4">
+                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{exp.expenseNumber}</td>
+                      <td className="py-2.5 px-4 whitespace-nowrap">
                         <div className="font-medium text-slate-800">
                           {exp.expenseType === 'REIMBURSEMENT' ? 'Reimbursement' : 'Direct Expense'}
                         </div>
@@ -350,13 +472,13 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                         <div>{exp.category}</div>
                         {exp.projectCode && <div className="font-mono text-[11px] text-slate-400">Project {exp.projectCode}</div>}
                       </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                         {formatINR(exp.amount)}
                         {exp.itcEligible && Number(exp.gstAmount) > 0 && (
                           <div className="text-[10px] text-emerald-700 font-normal">ITC {formatINR(exp.gstAmount || 0)}</div>
                         )}
                       </td>
-                      <td className="py-2.5 px-4">
+                      <td className="py-2.5 px-4 whitespace-nowrap">
                         <span
                           className={`font-semibold ${
                             st === 'PAID' || st === 'APPROVED'
@@ -460,8 +582,8 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
 
       {/* Reject Reason Modal */}
       {rejectTargetId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-sm bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl p-5 space-y-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto bg-white rounded-xl border border-slate-200 shadow-xl p-4 sm:p-5 space-y-3">
             <h4 className="text-sm font-bold text-slate-900">Reject Expense Claim</h4>
             <input
               type="text"
@@ -470,7 +592,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
               placeholder="Reason for rejection"
               className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
             />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -495,15 +617,15 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
 
       {/* Pay Expense Modal */}
       {payModalExpense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-sm bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Disburse {payModalExpense.expenseNumber}</h3>
-              <button type="button" onClick={() => setPayModalExpense(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-sm max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="text-sm font-bold text-slate-900 truncate">Disburse {payModalExpense.expenseNumber}</h3>
+              <button type="button" onClick={() => setPayModalExpense(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handlePayExpense} className="p-5 space-y-3">
+            <form onSubmit={handlePayExpense} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {payError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -529,7 +651,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                   ))}
                 </select>
               </div>
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setPayModalExpense(null)}
@@ -552,24 +674,24 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
 
       {/* New Expense Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">
                 {form.id ? 'Edit Expense / Reimbursement Claim' : 'Record Expense or Employee Reimbursement'}
               </h3>
-              <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveExpense} className="p-5 space-y-3">
+            <form onSubmit={handleSaveExpense} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {formError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{formError}</span>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Entry Type</label>
                   <select
@@ -593,7 +715,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {form.expenseType === 'REIMBURSEMENT' ? (
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">Employee *</label>
@@ -636,7 +758,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Total Amount (₹) *</label>
                   <input
@@ -662,7 +784,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Expense Ledger</label>
                   <select
@@ -715,7 +837,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
@@ -738,59 +860,59 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
 
       {/* View Expense Detail Modal */}
       {viewExpense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900 font-mono">{viewExpense.expenseNumber}</h3>
-              <button type="button" onClick={() => setViewExpense(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="text-sm font-bold text-slate-900 font-mono truncate">{viewExpense.expenseNumber}</h3>
+              <button type="button" onClick={() => setViewExpense(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-2.5 text-xs">
-              <div className="flex justify-between">
+            <div className="p-4 sm:p-5 space-y-2.5 text-xs overflow-y-auto">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Type & Date:</span>
                 <span className="font-medium text-slate-800">
                   {viewExpense.expenseType === 'REIMBURSEMENT' ? 'Reimbursement' : 'Direct Expense'} · {formatDateIN(viewExpense.expenseDate || viewExpense.date)}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Payee / Employee:</span>
                 <strong className="text-slate-900">{viewExpense.employeeName || viewExpense.vendorName}</strong>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Category:</span>
                 <span className="text-slate-800">{viewExpense.category}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Total Amount:</span>
                 <strong className="font-mono text-slate-900 text-sm">{formatINR(viewExpense.amount)}</strong>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">GST / ITC:</span>
                 <span className="font-mono text-slate-800">
                   {formatINR(viewExpense.gstAmount || 0)} ({viewExpense.itcEligible ? 'ITC Eligible' : 'Non-ITC'})
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Workflow Status:</span>
                 <strong className="text-slate-900">{viewExpense.status || 'APPROVED'}</strong>
               </div>
               {viewExpense.approvedBy && (
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span className="text-slate-500">Reviewed By:</span>
                   <span className="text-slate-800">{viewExpense.approvedBy}</span>
                 </div>
               )}
               {viewExpense.paidBy && (
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span className="text-slate-500">Disbursed By:</span>
                   <span className="text-slate-800">{viewExpense.paidBy}</span>
                 </div>
               )}
               {viewExpense.journalEntryId && (
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span className="text-slate-500">Journal Ref:</span>
-                  <span className="font-mono text-slate-700">{viewExpense.journalEntryId}</span>
+                  <span className="font-mono text-slate-700 break-all">{viewExpense.journalEntryId}</span>
                 </div>
               )}
               {viewExpense.rejectionReason && (
@@ -805,7 +927,7 @@ export const ExpensesFinanceTab: React.FC<ExpensesFinanceTabProps> = ({
                   {viewExpense.notes}
                 </div>
               )}
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 {canEdit && (viewExpense.status || 'APPROVED') !== 'PAID' && (
                   <button
                     type="button"

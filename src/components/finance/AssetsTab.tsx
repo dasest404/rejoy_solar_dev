@@ -245,7 +245,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setSubTab('REGISTER')}
@@ -269,7 +269,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
           <button
             type="button"
             onClick={openCreateAsset}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+            className="w-full sm:w-auto justify-center inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" /> Capitalize Asset
           </button>
@@ -278,8 +278,119 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
 
       {subTab === 'REGISTER' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="md:hidden divide-y divide-slate-100">
+            {workspace.fixedAssets.length === 0 ? (
+              <div className="py-8 px-4 text-center text-xs text-slate-500">
+                No fixed assets registered yet. Capitalize solar testing equipment, vehicles, or office hardware.
+              </div>
+            ) : (
+              workspace.fixedAssets.map(a => (
+                <div key={a.id} className="p-4 space-y-2.5 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-slate-900">{a.assetCode}</div>
+                      <div className="font-semibold text-slate-800">{a.name}</div>
+                      <div className="text-[11px] text-slate-500">
+                        {a.category}{a.location ? ` · ${a.location}` : ''}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono tabular-nums font-bold text-slate-900 text-sm">{formatINR(a.bookValue)}</div>
+                      <span className={`text-[11px] font-semibold ${a.status === 'ACTIVE' ? 'text-emerald-700' : 'text-slate-500'}`}>
+                        {a.status}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 font-mono text-[11px] bg-slate-50 rounded-lg p-2.5">
+                    <div>
+                      <span className="block text-slate-400">Purchased</span>
+                      <span>{formatDateIN(a.purchaseDate)}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400">Cost</span>
+                      <span>{formatINR(a.purchaseCost)}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400">Accum. Dep</span>
+                      <span className="text-amber-700">{formatINR(a.accumulatedDepreciation)}</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setViewAsset(a)}
+                      className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" /> View
+                    </button>
+                    {canManage && (
+                      <button
+                        type="button"
+                        onClick={() => openEditAsset(a)}
+                        className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900 font-semibold cursor-pointer"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" /> Edit
+                      </button>
+                    )}
+                    {canManage && a.status === 'ACTIVE' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setModalError(null);
+                            setDepTarget(a);
+                            setDepForm({ periodLabel: `${today.slice(0, 7)} Depreciation`, runDate: today, months: 1 });
+                          }}
+                          className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                        >
+                          <TrendingDown className="w-3.5 h-3.5" /> Depreciate
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setModalError(null);
+                            setDisposeTarget(a);
+                            setDisposeForm({
+                              disposalDate: today,
+                              proceeds: a.bookValue,
+                              bankAccountId: workspace.bankAccounts.find(b => b.isPrimary)?.id || workspace.bankAccounts[0]?.id || '',
+                              notes: ''
+                            });
+                          }}
+                          className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                        >
+                          Dispose
+                        </button>
+                        {a.accumulatedDepreciation === 0 && (
+                          confirmDeleteId === a.id ? (
+                            <button
+                              type="button"
+                              disabled={busyId === a.id}
+                              onClick={() => handleDeleteAsset(a.id)}
+                              className="text-rose-700 font-bold cursor-pointer"
+                            >
+                              {busyId === a.id ? '...' : 'Confirm Del'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(a.id)}
+                              className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Delete
+                            </button>
+                          )
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Asset Code</th>
@@ -404,7 +515,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
       {subTab === 'DEP_LOGS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Run Date</th>
@@ -446,24 +557,24 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
 
       {/* ADD / EDIT ASSET MODAL */}
       {isAddOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
           <div className="w-full max-w-lg bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="text-sm font-bold text-slate-900 truncate">
                 {assetForm.id ? `Edit Fixed Asset · ${assetForm.assetCode}` : 'Capitalize Fixed Asset'}
               </h3>
-              <button type="button" onClick={() => setIsAddOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsAddOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleCreateAsset} className="p-5 space-y-3 overflow-y-auto">
+            <form onSubmit={handleCreateAsset} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {modalError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{modalError}</span>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Asset Name *</label>
                   <input
@@ -490,7 +601,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Vendor Name</label>
                   <input
@@ -523,7 +634,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
               </div>
               {!assetForm.id && (
                 <>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Cost (₹) *</label>
                       <input
@@ -558,7 +669,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                       />
                     </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">Dep. Method</label>
                       <select
@@ -627,7 +738,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                   className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsAddOpen(false)}
@@ -650,15 +761,15 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
 
       {/* DEPRECIATION MODAL */}
       {depTarget && depPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Run Depreciation · {depTarget.assetCode}</h3>
-              <button type="button" onClick={() => setDepTarget(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="text-sm font-bold text-slate-900 truncate">Run Depreciation · {depTarget.assetCode}</h3>
+              <button type="button" onClick={() => setDepTarget(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleRunDep} className="p-5 space-y-3 text-xs">
+            <form onSubmit={handleRunDep} className="p-4 sm:p-5 space-y-3 text-xs overflow-y-auto">
               {modalError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -675,7 +786,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                   className="w-full border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Run Date *</label>
                   <input
@@ -701,20 +812,20 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                 </div>
               </div>
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1 font-mono">
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span>Opening Book Value:</span>
                   <span>{formatINR(depTarget.bookValue)}</span>
                 </div>
-                <div className="flex justify-between text-rose-700 font-bold">
+                <div className="flex flex-wrap justify-between gap-1 text-rose-700 font-bold">
                   <span>Depreciation Charge ({depTarget.depreciationMethod}):</span>
                   <span>{formatINR(depPreview.chargeAmount)}</span>
                 </div>
-                <div className="flex justify-between border-t border-slate-200 pt-1 font-bold">
+                <div className="flex flex-wrap justify-between gap-1 border-t border-slate-200 pt-1 font-bold">
                   <span>Closing Book Value:</span>
                   <span>{formatINR(depPreview.closingBookValue)}</span>
                 </div>
               </div>
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setDepTarget(null)}
@@ -737,22 +848,22 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
 
       {/* DISPOSAL MODAL */}
       {disposeTarget && disposePreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Dispose Asset · {disposeTarget.assetCode}</h3>
-              <button type="button" onClick={() => setDisposeTarget(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="text-sm font-bold text-slate-900 truncate">Dispose Asset · {disposeTarget.assetCode}</h3>
+              <button type="button" onClick={() => setDisposeTarget(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleDispose} className="p-5 space-y-3 text-xs">
+            <form onSubmit={handleDispose} className="p-4 sm:p-5 space-y-3 text-xs overflow-y-auto">
               {modalError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{modalError}</span>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Disposal Date *</label>
                   <input
@@ -790,16 +901,16 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                 </select>
               </div>
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1 font-mono">
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span>Current Book Value:</span>
                   <span>{formatINR(disposePreview.bookValue)}</span>
                 </div>
-                <div className={`flex justify-between font-bold ${disposePreview.isGain ? 'text-emerald-700' : 'text-rose-700'}`}>
+                <div className={`flex flex-wrap justify-between gap-1 font-bold ${disposePreview.isGain ? 'text-emerald-700' : 'text-rose-700'}`}>
                   <span>{disposePreview.isGain ? 'Gain on Disposal:' : 'Loss on Disposal:'}</span>
                   <span>{formatINR(Math.abs(disposePreview.gainLoss))}</span>
                 </div>
               </div>
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setDisposeTarget(null)}
@@ -821,55 +932,55 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
       )}
       {/* VIEW ASSET DETAIL MODAL */}
       {viewAsset && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900 font-mono">{viewAsset.assetCode}</h3>
-              <button type="button" onClick={() => setViewAsset(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="text-sm font-bold text-slate-900 font-mono truncate">{viewAsset.assetCode}</h3>
+              <button type="button" onClick={() => setViewAsset(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-2.5 text-xs">
-              <div className="flex justify-between">
+            <div className="p-4 sm:p-5 space-y-2.5 text-xs overflow-y-auto">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Asset Name:</span>
                 <strong className="text-slate-900">{viewAsset.name}</strong>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Category:</span>
                 <span className="text-slate-800">{viewAsset.category}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Vendor / Location / Custodian:</span>
                 <span className="text-slate-800">
                   {[viewAsset.vendorName, viewAsset.location, viewAsset.custodian].filter(Boolean).join(' · ') || '—'}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Purchase Date:</span>
                 <span className="font-mono text-slate-800">{formatDateIN(viewAsset.purchaseDate)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Gross Cost / Salvage:</span>
                 <span className="font-mono font-semibold text-slate-900">
                   {formatINR(viewAsset.purchaseCost)} / {formatINR(viewAsset.salvageValue)}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Accumulated Depreciation:</span>
                 <span className="font-mono text-amber-700 font-semibold">{formatINR(viewAsset.accumulatedDepreciation)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Net Book Value:</span>
                 <strong className="font-mono text-emerald-700 text-sm">{formatINR(viewAsset.bookValue)}</strong>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-slate-500">Status:</span>
                 <strong className="text-slate-900">{viewAsset.status}</strong>
               </div>
               {viewAsset.purchaseJournalId && (
-                <div className="flex justify-between">
+                <div className="flex flex-wrap justify-between gap-1">
                   <span className="text-slate-500">Purchase JV Ref:</span>
-                  <span className="font-mono text-slate-700">{viewAsset.purchaseJournalId}</span>
+                  <span className="font-mono text-slate-700 break-all">{viewAsset.purchaseJournalId}</span>
                 </div>
               )}
               {viewAsset.disposalDate && (
@@ -884,7 +995,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                   {viewAsset.notes}
                 </div>
               )}
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 {canManage && (
                   <button
                     type="button"

@@ -86,7 +86,7 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-2">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setSubTab('CONFIG')}
@@ -108,7 +108,7 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
       </div>
 
       {subTab === 'CONFIG' && (
-        <form onSubmit={handleSave} className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+        <form onSubmit={handleSave} className="bg-white border border-slate-200 rounded-xl p-4 sm:p-6 space-y-6">
           <div>
             <h3 className="text-sm font-bold text-slate-900">Fiscal Period & Internal Controls</h3>
             <p className="text-xs text-slate-500">Define fiscal year boundaries, transaction lock dates, and approval rules</p>
@@ -237,7 +237,7 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
               <button
                 type="submit"
                 disabled={saving}
-                className="inline-flex items-center gap-1.5 px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-50"
+                className="w-full sm:w-auto justify-center inline-flex items-center gap-1.5 px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-50"
               >
                 <Save className="w-3.5 h-3.5" />
                 {saving ? 'Saving...' : 'Save Accounting Configuration'}
@@ -249,7 +249,7 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
 
       {subTab === 'AUDIT' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between text-xs">
+          <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-bold text-slate-900 inline-flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               Immutable Financial Audit Trail
@@ -257,7 +257,7 @@ export const FinanceSettingsTab: React.FC<FinanceSettingsTabProps> = ({
             <span className="text-slate-500">Latest {workspace.auditLogs.length} events</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Timestamp</th>

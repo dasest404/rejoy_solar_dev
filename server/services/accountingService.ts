@@ -67,6 +67,15 @@ class AccountingService {
     }
   }
 
+  private async getTableColumnsTx(conn: mysql.PoolConnection, table: string): Promise<Set<string> | null> {
+    try {
+      const [cols]: any = await conn.query(`SHOW COLUMNS FROM \`${table}\``);
+      return new Set((cols || []).map((c: any) => String(c?.Field || '').toLowerCase()));
+    } catch {
+      return null;
+    }
+  }
+
   public async ensureAccountingSchema(pool: mysql.Pool): Promise<void> {
     if (this.schemaReady) return;
 
@@ -1351,10 +1360,43 @@ class AccountingService {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      const [rows]: any = await conn.query('SELECT * FROM `solar_acc_journal_entries` WHERE `id` = ? LIMIT 1', [id]);
+      const [rows]: any = await conn.query(
+        'SELECT * FROM `solar_acc_journal_entries` WHERE `id` = ? LIMIT 1 FOR UPDATE',
+        [id]
+      );
       const je = rows?.[0];
-      if (!je) throw new Error('Journal entry not found.');
-      if (je.status !== 'POSTED') throw new Error('Only POSTED journal entries can be reversed.');
+      if (!je) {
+        const err: any = new Error('Journal entry not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (je.status === 'REVERSED' || Boolean(je.reversed_entry_id)) {
+        const err: any = new Error('This journal entry has already been reversed and cannot be reversed again.');
+        err.statusCode = 409;
+        throw err;
+      }
+      if (String(je.reference_type || '').toUpperCase() === 'REVERSAL') {
+        const err: any = new Error('A reversal journal voucher cannot itself be reversed. Post a new correcting journal entry instead.');
+        err.statusCode = 409;
+        throw err;
+      }
+      if (je.status !== 'POSTED') {
+        const err: any = new Error('Only POSTED journal entries can be reversed.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const [existingReversal]: any = await conn.query(
+        "SELECT `id`, `entry_number` FROM `solar_acc_journal_entries` WHERE `reference_type` = 'REVERSAL' AND `reference_id` = ? LIMIT 1 FOR UPDATE",
+        [id]
+      );
+      if (existingReversal?.[0]) {
+        const err: any = new Error(
+          `This journal entry has already been reversed by voucher ${existingReversal[0].entry_number || existingReversal[0].id}.`
+        );
+        err.statusCode = 409;
+        throw err;
+      }
 
       const revDate = todaySql();
       await this.assertNotLockedDate(conn, revDate);
@@ -1387,7 +1429,16 @@ class AccountingService {
         actor
       );
 
-      await conn.query('UPDATE `solar_acc_journal_entries` SET `status` = ?, `reversed_entry_id` = ? WHERE `id` = ?', ['REVERSED', revId, id]);
+      const [updRes]: any = await conn.query(
+        "UPDATE `solar_acc_journal_entries` SET `status` = 'REVERSED', `reversed_entry_id` = ? WHERE `id` = ? AND `status` = 'POSTED' AND (`reversed_entry_id` IS NULL OR `reversed_entry_id` = '')",
+        [revId, id]
+      );
+      if (!updRes || updRes.affectedRows !== 1) {
+        const err: any = new Error('This journal entry has already been reversed and cannot be reversed again.');
+        err.statusCode = 409;
+        throw err;
+      }
+
       await this.recalculateAccountBalances(conn);
       await this.logAudit(conn, actor, 'LEDGER', 'REVERSE_JOURNAL', id, je.entry_number, `Reversed journal ${je.entry_number} via ${revId}`);
       await conn.commit();
@@ -3033,7 +3084,14 @@ class AccountingService {
   public async syncErpVouchers(pool: mysql.Pool, actor: any): Promise<{ syncedCount: number; breakdown: Record<string, number> }> {
     await this.ensureAccountingSchema(pool);
     const conn = await pool.getConnection();
-    const breakdown = { salesInvoices: 0, customerReceipts: 0, expenses: 0, payslips: 0 };
+    const breakdown: Record<string, number> = {
+      salesInvoices: 0,
+      vendorSalesInvoices: 0,
+      customerReceipts: 0,
+      vendorSalesReceipts: 0,
+      expenses: 0,
+      payslips: 0
+    };
     try {
       await conn.beginTransaction();
       const settings = await this.getSettingsRow(conn);
@@ -3052,255 +3110,301 @@ class AccountingService {
       );
 
       // 1. Sales Invoices (non-DRAFT, non-CANCELLED)
-      const [invoices]: any = await conn.query(
-        "SELECT * FROM `solar_sales_invoices` WHERE `payment_status` NOT IN ('DRAFT', 'CANCELLED')"
-      );
-      for (const inv of invoices || []) {
-        if (postedKeys.has(`SALES_INVOICE:${inv.id}`)) continue;
-        const total = round2(Number(inv.total_amount || 0));
-        const sub = round2(Number(inv.subtotal || 0));
-        const gst = round2(Number(inv.gst_amount || 0));
-        if (total <= 0) continue;
-        const revAmount = round2(total - gst > 0 ? total - gst : sub);
-        const lines: any[] = [
-          {
-            accountId: settings.default_ar_account_id || 'acc-1100',
-            description: `Sales Invoice ${inv.invoice_number} - ${inv.customer_name}`,
-            projectId: inv.project_id || '',
-            projectTitle: inv.project_title || '',
-            partyType: 'CUSTOMER',
-            partyId: inv.customer_id,
-            partyName: inv.customer_name,
-            debit: total,
-            credit: 0
-          },
-          {
-            accountId: settings.default_sales_account_id || 'acc-4010',
-            description: `Solar EPC Revenue - ${inv.invoice_number}`,
-            projectId: inv.project_id || '',
-            projectTitle: inv.project_title || '',
-            partyType: 'CUSTOMER',
-            partyId: inv.customer_id,
-            partyName: inv.customer_name,
-            debit: 0,
-            credit: revAmount
-          }
-        ];
-        if (gst > 0) {
-          lines.push({
-            accountId: settings.default_output_gst_account_id || 'acc-2100',
-            description: `Output GST - ${inv.invoice_number}`,
-            projectId: inv.project_id || '',
-            debit: 0,
-            credit: round2(total - revAmount)
-          });
+      const invCols = await this.getTableColumnsTx(conn, 'solar_sales_invoices');
+      if (invCols) {
+        const invConditions: string[] = [];
+        if (invCols.has('payment_status')) {
+          invConditions.push("COALESCE(NULLIF(UPPER(`payment_status`), ''), 'UNPAID') NOT IN ('DRAFT', 'CANCELLED')");
         }
-        await this.insertAndPostJournalTx(
-          conn,
-          {
-            entryDate: safeDate(inv.invoice_date),
-            referenceType: 'SALES_INVOICE',
-            referenceId: inv.id,
-            referenceNumber: inv.invoice_number,
-            narration: `Sales Invoice ${inv.invoice_number} (${inv.customer_name})`,
-            status: 'POSTED',
-            lines
-          },
-          actor
-        );
-        postedKeys.add(`SALES_INVOICE:${inv.id}`);
-        breakdown.salesInvoices++;
+        if (invCols.has('status')) {
+          invConditions.push("COALESCE(NULLIF(UPPER(`status`), ''), 'ISSUED') NOT IN ('DRAFT', 'CANCELLED')");
+        }
+        const invWhere = invConditions.length > 0 ? `WHERE ${invConditions.join(' AND ')}` : '';
+        const [invoices]: any = await conn.query(`SELECT * FROM \`solar_sales_invoices\` ${invWhere}`);
+        for (const inv of invoices || []) {
+          if (postedKeys.has(`SALES_INVOICE:${inv.id}`)) continue;
+          const total = round2(Number(inv.total_amount || 0));
+          const sub = round2(Number(inv.subtotal || 0));
+          const gst = round2(Number(inv.gst_amount ?? inv.tax_amount ?? 0));
+          if (total <= 0) continue;
+          const revAmount = round2(total - gst > 0 ? total - gst : sub);
+          const lines: any[] = [
+            {
+              accountId: settings.default_ar_account_id || 'acc-1100',
+              description: `Sales Invoice ${inv.invoice_number} - ${inv.customer_name}`,
+              projectId: inv.project_id || '',
+              projectTitle: inv.project_title || '',
+              partyType: 'CUSTOMER',
+              partyId: inv.customer_id,
+              partyName: inv.customer_name,
+              debit: total,
+              credit: 0
+            },
+            {
+              accountId: settings.default_sales_account_id || 'acc-4010',
+              description: `Solar EPC Revenue - ${inv.invoice_number}`,
+              projectId: inv.project_id || '',
+              projectTitle: inv.project_title || '',
+              partyType: 'CUSTOMER',
+              partyId: inv.customer_id,
+              partyName: inv.customer_name,
+              debit: 0,
+              credit: revAmount
+            }
+          ];
+          if (round2(total - revAmount) > 0) {
+            lines.push({
+              accountId: settings.default_output_gst_account_id || 'acc-2100',
+              description: `Output GST - ${inv.invoice_number}`,
+              projectId: inv.project_id || '',
+              debit: 0,
+              credit: round2(total - revAmount)
+            });
+          }
+          await this.insertAndPostJournalTx(
+            conn,
+            {
+              entryDate: safeDate(inv.invoice_date),
+              referenceType: 'SALES_INVOICE',
+              referenceId: inv.id,
+              referenceNumber: inv.invoice_number,
+              narration: `Sales Invoice ${inv.invoice_number} (${inv.customer_name})`,
+              status: 'POSTED',
+              lines
+            },
+            actor
+          );
+          postedKeys.add(`SALES_INVOICE:${inv.id}`);
+          breakdown.salesInvoices++;
+        }
       }
 
-      // 2. Vendor Sales Invoices (non-DRAFT, non-CANCELLED)
-      const [vsInvoices]: any = await conn.query(
-        "SELECT * FROM `solar_vendor_sales_invoices` WHERE `status` NOT IN ('DRAFT', 'CANCELLED')"
-      ).catch(() => [[]]);
-      for (const vsi of vsInvoices || []) {
-        if (postedKeys.has(`VENDOR_SALES_INVOICE:${vsi.id}`)) continue;
-        const jeId = await this.ensureVendorSalesInvoiceJournalTx(conn, vsi, settings, actor);
-        if (jeId) {
-          postedKeys.add(`VENDOR_SALES_INVOICE:${vsi.id}`);
-          (breakdown as any).vendorSalesInvoices = ((breakdown as any).vendorSalesInvoices || 0) + 1;
+      // 2. Vendor Sales Invoices (non-DRAFT, non-CANCELLED) - consolidated single pass
+      const vsiCols = await this.getTableColumnsTx(conn, 'solar_vendor_sales_invoices');
+      if (vsiCols) {
+        const vsiConditions: string[] = [];
+        if (vsiCols.has('status')) {
+          vsiConditions.push("COALESCE(NULLIF(UPPER(`status`), ''), 'ISSUED') NOT IN ('DRAFT', 'CANCELLED')");
+        }
+        if (vsiCols.has('payment_status')) {
+          vsiConditions.push("COALESCE(NULLIF(UPPER(`payment_status`), ''), 'UNPAID') NOT IN ('DRAFT', 'CANCELLED')");
+        }
+        const vsiWhere = vsiConditions.length > 0 ? `WHERE ${vsiConditions.join(' AND ')}` : '';
+        const [vsInvoices]: any = await conn.query(`SELECT * FROM \`solar_vendor_sales_invoices\` ${vsiWhere}`);
+        for (const vsi of vsInvoices || []) {
+          if (postedKeys.has(`VENDOR_SALES_INVOICE:${vsi.id}`)) continue;
+          const jeId = await this.ensureVendorSalesInvoiceJournalTx(conn, vsi, settings, actor);
+          if (jeId) {
+            postedKeys.add(`VENDOR_SALES_INVOICE:${vsi.id}`);
+            breakdown.vendorSalesInvoices++;
+          }
         }
       }
 
       // 3. Customer Receipts (PAID without journal_entry_id)
-      const [payments]: any = await conn.query(
-        "SELECT * FROM `solar_payments` WHERE `status` = 'PAID' AND (`journal_entry_id` IS NULL OR `journal_entry_id` = '')"
-      );
-      for (const p of payments || []) {
-        if (postedKeys.has(`CUSTOMER_RECEIPT:${p.id}`)) continue;
-        const amt = round2(Number(p.amount || 0));
-        if (amt <= 0) continue;
-        const isCash = String(p.payment_mode || '').toLowerCase().includes('cash');
-        const bankCoa = p.bank_account_id
-          ? await this.resolveBankCoaTx(conn, p.bank_account_id, settings)
-          : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
-        const jeId = await this.insertAndPostJournalTx(
-          conn,
-          {
-            entryDate: safeDate(p.paid_date || p.due_date),
-            referenceType: 'CUSTOMER_RECEIPT',
-            referenceId: p.id,
-            referenceNumber: p.receipt_number,
-            narration: `Receipt ${p.receipt_number} from ${p.customer_name}`,
-            status: 'POSTED',
-            lines: [
-              { accountId: bankCoa, description: p.payment_mode || 'Receipt', projectId: p.project_id || '', partyType: 'CUSTOMER', partyId: p.customer_id || '', partyName: p.customer_name, debit: amt, credit: 0 },
-              { accountId: settings.default_ar_account_id || 'acc-1100', description: p.milestone || 'Customer Receipt', projectId: p.project_id || '', partyType: 'CUSTOMER', partyId: p.customer_id || '', partyName: p.customer_name, debit: 0, credit: amt }
-            ]
-          },
-          actor
-        );
-        await conn.query('UPDATE `solar_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, p.id]);
-        postedKeys.add(`CUSTOMER_RECEIPT:${p.id}`);
-        breakdown.customerReceipts++;
-      }
-
-      // 4. Vendor Sales Receipts without journal_entry_id
-      const [vsiPays]: any = await conn.query(
-        "SELECT p.*, v.`invoice_number`, v.`vendor_name` FROM `solar_vendor_sales_payments` p LEFT JOIN `solar_vendor_sales_invoices` v ON v.`id` = p.`invoice_id` WHERE (p.`journal_entry_id` IS NULL OR p.`journal_entry_id` = '')"
-      ).catch(() => [[]]);
-      for (const vp of vsiPays || []) {
-        if (postedKeys.has(`VENDOR_SALES_RECEIPT:${vp.id}`)) continue;
-        const amt = round2(Number(vp.amount || 0));
-        if (amt <= 0) continue;
-        const isCash = String(vp.payment_mode || '').toLowerCase().includes('cash');
-        const bankCoa = vp.bank_account_id
-          ? await this.resolveBankCoaTx(conn, vp.bank_account_id, settings)
-          : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
-        const jeId = await this.insertAndPostJournalTx(
-          conn,
-          {
-            entryDate: safeDate(vp.payment_date),
-            referenceType: 'VENDOR_SALES_RECEIPT',
-            referenceId: vp.id,
-            referenceNumber: vp.invoice_number || vp.id,
-            narration: `Vendor Sales Receipt for ${vp.invoice_number || vp.invoice_id}`,
-            status: 'POSTED',
-            lines: [
-              { accountId: bankCoa, description: vp.payment_mode || 'Receipt', partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: amt, credit: 0 },
-              { accountId: settings.default_ar_account_id || 'acc-1100', description: `Receivable settlement - ${vp.invoice_number || ''}`, partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: 0, credit: amt }
-            ]
-          },
-          actor
-        );
-        await conn.query('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, vp.id]);
-        postedKeys.add(`VENDOR_SALES_RECEIPT:${vp.id}`);
-        (breakdown as any).vendorSalesReceipts = ((breakdown as any).vendorSalesReceipts || 0) + 1;
-      }
-
-      // 3. Legacy/PAID Expenses without journal_entry_id
-      const [expenses]: any = await conn.query(
-        "SELECT * FROM `solar_expenses` WHERE (`status` IS NULL OR `status` = '' OR `status` = 'PAID') AND (`journal_entry_id` IS NULL OR `journal_entry_id` = '')"
-      );
-      for (const ex of expenses || []) {
-        if (postedKeys.has(`EXPENSE_PAYMENT:${ex.id}`)) continue;
-        const amt = round2(Number(ex.amount || 0));
-        if (amt <= 0) continue;
-        const isCash = String(ex.payment_mode || '').toLowerCase().includes('cash');
-        const bankCoa = isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020');
-        const jeId = await this.insertAndPostJournalTx(
-          conn,
-          {
-            entryDate: safeDate(ex.expense_date),
-            referenceType: 'EXPENSE_PAYMENT',
-            referenceId: ex.id,
-            referenceNumber: ex.expense_number,
-            narration: `Expense ${ex.expense_number} - ${ex.vendor_name} (${ex.category})`,
-            status: 'POSTED',
-            lines: [
-              { accountId: ex.expense_account_id || settings.default_cogs_account_id || 'acc-5040', description: ex.category, projectId: ex.project_id || '', partyType: 'VENDOR', partyName: ex.vendor_name, debit: amt, credit: 0 },
-              { accountId: bankCoa, description: ex.payment_mode || 'Bank Payment', projectId: ex.project_id || '', debit: 0, credit: amt }
-            ]
-          },
-          actor
-        );
-        await conn.query('UPDATE `solar_expenses` SET `status` = ?, `journal_entry_id` = ? WHERE `id` = ?', ['PAID', jeId, ex.id]);
-        postedKeys.add(`EXPENSE_PAYMENT:${ex.id}`);
-        breakdown.expenses++;
-      }
-
-      // 4. Paid Payslips
-      const [payslips]: any = await conn.query("SELECT * FROM `solar_payslips` WHERE `status` = 'PAID'");
-      for (const ps of payslips || []) {
-        if (postedKeys.has(`PAYROLL:${ps.id}`)) continue;
-        const net = round2(Number(ps.net_salary || 0));
-        if (net <= 0) continue;
-        await this.insertAndPostJournalTx(
-          conn,
-          {
-            entryDate: safeDate(ps.payment_date || ps.created_at),
-            referenceType: 'PAYROLL',
-            referenceId: ps.id,
-            referenceNumber: `${ps.month}-${ps.year}`,
-            narration: `Payroll disbursement for ${ps.employee_name} (${ps.month} ${ps.year})`,
-            status: 'POSTED',
-            lines: [
-              { accountId: settings.default_payroll_account_id || 'acc-5030', description: `Salary Expense - ${ps.employee_name}`, partyType: 'EMPLOYEE', partyId: ps.employee_id, partyName: ps.employee_name, debit: net, credit: 0 },
-              { accountId: settings.default_bank_account_id || 'acc-1020', description: `Salary Paid - ${ps.employee_name}`, partyType: 'EMPLOYEE', partyId: ps.employee_id, partyName: ps.employee_name, debit: 0, credit: net }
-            ]
-          },
-          actor
-        );
-        postedKeys.add(`PAYROLL:${ps.id}`);
-        breakdown.payslips++;
-      }
-
-      // 5. Vendor Sales Invoices
-      const [vsiRows]: any = await conn.query(
-        "SELECT * FROM `solar_vendor_sales_invoices` WHERE `status` <> 'DRAFT'"
-      );
-      let vendorSalesInvoices = 0;
-      for (const inv of vsiRows || []) {
-        if (postedKeys.has(`VENDOR_SALES_INVOICE:${inv.id}`)) continue;
-        const ok = await this.ensureVendorSalesInvoiceJournalTx(conn, inv, settings, actor);
-        if (ok) {
-          postedKeys.add(`VENDOR_SALES_INVOICE:${inv.id}`);
-          vendorSalesInvoices++;
+      const payCols = await this.getTableColumnsTx(conn, 'solar_payments');
+      if (payCols) {
+        const payConditions: string[] = [];
+        if (payCols.has('status') && payCols.has('payment_status')) {
+          payConditions.push("(`status` = 'PAID' OR `payment_status` = 'PAID')");
+        } else if (payCols.has('status')) {
+          payConditions.push("`status` = 'PAID'");
+        } else if (payCols.has('payment_status')) {
+          payConditions.push("`payment_status` = 'PAID'");
+        }
+        if (payCols.has('journal_entry_id')) {
+          payConditions.push("(`journal_entry_id` IS NULL OR `journal_entry_id` = '')");
+        }
+        const payWhere = payConditions.length > 0 ? `WHERE ${payConditions.join(' AND ')}` : '';
+        const [payments]: any = await conn.query(`SELECT * FROM \`solar_payments\` ${payWhere}`);
+        for (const p of payments || []) {
+          if (postedKeys.has(`CUSTOMER_RECEIPT:${p.id}`)) continue;
+          const amt = round2(Number(p.amount || 0));
+          if (amt <= 0) continue;
+          const isCash = String(p.payment_mode || '').toLowerCase().includes('cash');
+          const bankCoa = p.bank_account_id
+            ? await this.resolveBankCoaTx(conn, p.bank_account_id, settings)
+            : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
+          const jeId = await this.insertAndPostJournalTx(
+            conn,
+            {
+              entryDate: safeDate(p.paid_date || p.due_date),
+              referenceType: 'CUSTOMER_RECEIPT',
+              referenceId: p.id,
+              referenceNumber: p.receipt_number,
+              narration: `Receipt ${p.receipt_number} from ${p.customer_name}`,
+              status: 'POSTED',
+              lines: [
+                { accountId: bankCoa, description: p.payment_mode || 'Receipt', projectId: p.project_id || '', partyType: 'CUSTOMER', partyId: p.customer_id || '', partyName: p.customer_name, debit: amt, credit: 0 },
+                { accountId: settings.default_ar_account_id || 'acc-1100', description: p.milestone || 'Customer Receipt', projectId: p.project_id || '', partyType: 'CUSTOMER', partyId: p.customer_id || '', partyName: p.customer_name, debit: 0, credit: amt }
+              ]
+            },
+            actor
+          );
+          if (payCols.has('journal_entry_id')) {
+            await conn.query('UPDATE `solar_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, p.id]);
+          }
+          postedKeys.add(`CUSTOMER_RECEIPT:${p.id}`);
+          breakdown.customerReceipts++;
         }
       }
 
-      // 6. Vendor Sales Payments without journal_entry_id
-      const [vsPayRows]: any = await conn.query(
-        "SELECT vp.*, vsi.invoice_number, vsi.vendor_name FROM `solar_vendor_sales_payments` vp LEFT JOIN `solar_vendor_sales_invoices` vsi ON vsi.id = vp.invoice_id WHERE (vp.journal_entry_id IS NULL OR vp.journal_entry_id = '')"
-      );
-      let vendorSalesReceipts = 0;
-      for (const vp of vsPayRows || []) {
-        if (postedKeys.has(`VENDOR_SALES_RECEIPT:${vp.id}`)) continue;
-        const amt = round2(Number(vp.amount || 0));
-        if (amt <= 0) continue;
-        const bankCoa = vp.bank_account_id
-          ? await this.resolveBankCoaTx(conn, vp.bank_account_id, settings)
-          : (String(vp.payment_mode || '').toLowerCase().includes('cash')
-              ? (settings.default_cash_account_id || 'acc-1010')
-              : (settings.default_bank_account_id || 'acc-1020'));
-        const jeId = await this.insertAndPostJournalTx(
-          conn,
-          {
-            entryDate: safeDate(vp.payment_date),
-            referenceType: 'VENDOR_SALES_RECEIPT',
-            referenceId: vp.id,
-            referenceNumber: vp.invoice_number || vp.id,
-            narration: `Vendor Sales Receipt from ${vp.vendor_name || vp.vendor_id} against ${vp.invoice_number || vp.invoice_id}`,
-            status: 'POSTED',
-            lines: [
-              { accountId: bankCoa, description: vp.payment_mode || 'Vendor Sales Receipt', partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: amt, credit: 0 },
-              { accountId: settings.default_ar_account_id || 'acc-1100', description: `Receivable settlement - ${vp.invoice_number || vp.invoice_id}`, partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: 0, credit: amt }
-            ]
-          },
-          actor
+      // 4. Vendor Sales Receipts without journal_entry_id - consolidated single pass
+      const vsPayCols = await this.getTableColumnsTx(conn, 'solar_vendor_sales_payments');
+      if (vsPayCols) {
+        const vsPayWhere = vsPayCols.has('journal_entry_id')
+          ? "WHERE (p.`journal_entry_id` IS NULL OR p.`journal_entry_id` = '')"
+          : '';
+        const vsJoin = vsiCols
+          ? 'LEFT JOIN `solar_vendor_sales_invoices` v ON v.`id` = p.`invoice_id`'
+          : '';
+        const vsSelect = vsiCols ? 'p.*, v.`invoice_number`, v.`vendor_name`' : 'p.*';
+        const [vsiPays]: any = await conn.query(
+          `SELECT ${vsSelect} FROM \`solar_vendor_sales_payments\` p ${vsJoin} ${vsPayWhere}`
         );
-        await conn.query('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, vp.id]);
-        postedKeys.add(`VENDOR_SALES_RECEIPT:${vp.id}`);
-        vendorSalesReceipts++;
+        for (const vp of vsiPays || []) {
+          if (postedKeys.has(`VENDOR_SALES_RECEIPT:${vp.id}`)) continue;
+          const amt = round2(Number(vp.amount || 0));
+          if (amt <= 0) continue;
+          const isCash = String(vp.payment_mode || '').toLowerCase().includes('cash');
+          const bankCoa = vp.bank_account_id
+            ? await this.resolveBankCoaTx(conn, vp.bank_account_id, settings)
+            : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
+          const jeId = await this.insertAndPostJournalTx(
+            conn,
+            {
+              entryDate: safeDate(vp.payment_date),
+              referenceType: 'VENDOR_SALES_RECEIPT',
+              referenceId: vp.id,
+              referenceNumber: vp.invoice_number || vp.id,
+              narration: `Vendor Sales Receipt from ${vp.vendor_name || vp.vendor_id || 'Vendor'} against ${vp.invoice_number || vp.invoice_id}`,
+              status: 'POSTED',
+              lines: [
+                { accountId: bankCoa, description: vp.payment_mode || 'Vendor Sales Receipt', partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: amt, credit: 0 },
+                { accountId: settings.default_ar_account_id || 'acc-1100', description: `Receivable settlement - ${vp.invoice_number || vp.invoice_id || ''}`, partyType: 'VENDOR', partyId: vp.vendor_id || '', partyName: vp.vendor_name || '', debit: 0, credit: amt }
+              ]
+            },
+            actor
+          );
+          if (vsPayCols.has('journal_entry_id')) {
+            await conn.query('UPDATE `solar_vendor_sales_payments` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, vp.id]);
+          }
+          postedKeys.add(`VENDOR_SALES_RECEIPT:${vp.id}`);
+          breakdown.vendorSalesReceipts++;
+        }
       }
 
-      const syncedCount = breakdown.salesInvoices + breakdown.customerReceipts + breakdown.expenses + breakdown.payslips + vendorSalesInvoices + vendorSalesReceipts;
-      await this.logAudit(conn, actor, 'LEDGER', 'SYNC_ERP_VOUCHERS', 'erp-sync', `${syncedCount} vouchers`, `Synced ${syncedCount} ERP vouchers into General Ledger`, { ...breakdown, vendorSalesInvoices, vendorSalesReceipts });
+      // 5. Legacy/PAID Expenses without journal_entry_id
+      const expCols = await this.getTableColumnsTx(conn, 'solar_expenses');
+      if (expCols) {
+        const expConditions: string[] = [];
+        if (expCols.has('status')) {
+          expConditions.push("(`status` IS NULL OR `status` = '' OR `status` = 'PAID')");
+        }
+        if (expCols.has('journal_entry_id')) {
+          expConditions.push("(`journal_entry_id` IS NULL OR `journal_entry_id` = '')");
+        }
+        const expWhere = expConditions.length > 0 ? `WHERE ${expConditions.join(' AND ')}` : '';
+        const [expenses]: any = await conn.query(`SELECT * FROM \`solar_expenses\` ${expWhere}`);
+        for (const ex of expenses || []) {
+          if (postedKeys.has(`EXPENSE_PAYMENT:${ex.id}`)) continue;
+          const amt = round2(Number(ex.amount || 0));
+          if (amt <= 0) continue;
+          const isCash = String(ex.payment_mode || '').toLowerCase().includes('cash');
+          const bankCoa = ex.bank_account_id
+            ? await this.resolveBankCoaTx(conn, ex.bank_account_id, settings)
+            : (isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020'));
+          const jeId = await this.insertAndPostJournalTx(
+            conn,
+            {
+              entryDate: safeDate(ex.expense_date),
+              referenceType: 'EXPENSE_PAYMENT',
+              referenceId: ex.id,
+              referenceNumber: ex.expense_number,
+              narration: `Expense ${ex.expense_number} - ${ex.vendor_name} (${ex.category})`,
+              status: 'POSTED',
+              lines: [
+                { accountId: ex.expense_account_id || settings.default_cogs_account_id || 'acc-5040', description: ex.category, projectId: ex.project_id || '', partyType: 'VENDOR', partyName: ex.vendor_name, debit: amt, credit: 0 },
+                { accountId: bankCoa, description: ex.payment_mode || 'Bank Payment', projectId: ex.project_id || '', debit: 0, credit: amt }
+              ]
+            },
+            actor
+          );
+          if (expCols.has('status') && expCols.has('journal_entry_id')) {
+            await conn.query('UPDATE `solar_expenses` SET `status` = ?, `journal_entry_id` = ? WHERE `id` = ?', ['PAID', jeId, ex.id]);
+          } else if (expCols.has('journal_entry_id')) {
+            await conn.query('UPDATE `solar_expenses` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, ex.id]);
+          }
+          postedKeys.add(`EXPENSE_PAYMENT:${ex.id}`);
+          breakdown.expenses++;
+        }
+      }
+
+      // 6. Paid Payslips (schema uses `payment_status`, guard against `status` variant cleanly)
+      const psCols = await this.getTableColumnsTx(conn, 'solar_payslips');
+      if (psCols) {
+        const psConditions: string[] = [];
+        if (psCols.has('payment_status') && psCols.has('status')) {
+          psConditions.push("(`payment_status` = 'PAID' OR `status` = 'PAID')");
+        } else if (psCols.has('payment_status')) {
+          psConditions.push("`payment_status` = 'PAID'");
+        } else if (psCols.has('status')) {
+          psConditions.push("`status` = 'PAID'");
+        }
+        if (psCols.has('journal_entry_id')) {
+          psConditions.push("(`journal_entry_id` IS NULL OR `journal_entry_id` = '')");
+        }
+        const psWhere = psConditions.length > 0 ? `WHERE ${psConditions.join(' AND ')}` : '';
+        const [payslips]: any = await conn.query(`SELECT * FROM \`solar_payslips\` ${psWhere}`);
+        for (const ps of payslips || []) {
+          if (postedKeys.has(`PAYROLL:${ps.id}`)) continue;
+          const net = round2(Number(ps.net_salary || 0));
+          if (net <= 0) continue;
+          const isCash = String(ps.payment_mode || '').toLowerCase().includes('cash');
+          const payCoa = isCash ? (settings.default_cash_account_id || 'acc-1010') : (settings.default_bank_account_id || 'acc-1020');
+          const jeId = await this.insertAndPostJournalTx(
+            conn,
+            {
+              entryDate: safeDate(ps.payment_date || ps.created_at),
+              referenceType: 'PAYROLL',
+              referenceId: ps.id,
+              referenceNumber: `${ps.month}-${ps.year}`,
+              narration: `Payroll disbursement for ${ps.employee_name} (${ps.month} ${ps.year})`,
+              status: 'POSTED',
+              lines: [
+                { accountId: settings.default_payroll_account_id || 'acc-5030', description: `Salary Expense - ${ps.employee_name}`, partyType: 'EMPLOYEE', partyId: ps.employee_id, partyName: ps.employee_name, debit: net, credit: 0 },
+                { accountId: payCoa, description: `Salary Paid - ${ps.employee_name}`, partyType: 'EMPLOYEE', partyId: ps.employee_id, partyName: ps.employee_name, debit: 0, credit: net }
+              ]
+            },
+            actor
+          );
+          if (psCols.has('journal_entry_id')) {
+            await conn.query('UPDATE `solar_payslips` SET `journal_entry_id` = ? WHERE `id` = ?', [jeId, ps.id]);
+          }
+          postedKeys.add(`PAYROLL:${ps.id}`);
+          breakdown.payslips++;
+        }
+      }
+
+      const syncedCount =
+        breakdown.salesInvoices +
+        breakdown.vendorSalesInvoices +
+        breakdown.customerReceipts +
+        breakdown.vendorSalesReceipts +
+        breakdown.expenses +
+        breakdown.payslips;
+      await this.logAudit(
+        conn,
+        actor,
+        'LEDGER',
+        'SYNC_ERP_VOUCHERS',
+        'erp-sync',
+        `${syncedCount} vouchers`,
+        `Synced ${syncedCount} ERP vouchers into General Ledger`,
+        breakdown
+      );
       await conn.commit();
-      return { syncedCount, breakdown: { ...breakdown, vendorSalesInvoices, vendorSalesReceipts } };
+      return { syncedCount, breakdown };
     } catch (err) {
       await conn.rollback();
       throw err;

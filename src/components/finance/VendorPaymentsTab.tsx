@@ -478,22 +478,22 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+          <div className="relative flex-1 sm:flex-none">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search bill, vendor, PO..."
-              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-52"
+              className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg w-full sm:w-52"
             />
           </div>
           {canManage && (
             <button
               type="button"
               onClick={() => openBillFromPo()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer w-full sm:w-auto"
             >
               <Plus className="w-3.5 h-3.5" /> New Vendor Bill
             </button>
@@ -504,8 +504,99 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       {/* BILLS TABLE */}
       {subTab === 'BILLS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="md:hidden divide-y divide-slate-100">
+            {filteredBills.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                No vendor bills recorded yet. Create one manually or convert an existing Purchase Order.
+              </div>
+            ) : (
+              filteredBills.map(b => {
+                const isOverdue = b.status !== 'PAID' && b.status !== 'DRAFT' && (b.dueDate || '') < today;
+                const displayStatus = isOverdue ? 'OVERDUE' : b.status;
+                return (
+                  <div key={b.id} className="p-3.5 space-y-2 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-mono font-bold text-slate-900">{b.billNumber}</div>
+                        <div className="font-semibold text-slate-800 truncate">{b.vendorName}</div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {[b.poNumber, b.projectTitle].filter(Boolean).join(' · ') || b.category}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono font-bold text-slate-900 tabular-nums">{formatINR(b.balanceAmount)}</div>
+                        <span
+                          className={`text-[11px] font-semibold ${
+                            displayStatus === 'PAID'
+                              ? 'text-emerald-700'
+                              : displayStatus === 'OVERDUE'
+                              ? 'text-rose-700'
+                              : 'text-amber-700'
+                          }`}
+                        >
+                          {displayStatus}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 font-mono">
+                      <span>Bill {formatDateIN(b.billDate)} · Due {formatDateIN(b.dueDate)}</span>
+                      <span>Total {formatINR(b.totalAmount)} · Paid {formatINR(b.paidAmount)}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-3 pt-1.5 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => setViewBill(b)}
+                        className="inline-flex items-center gap-1 text-slate-700 font-semibold cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" /> View
+                      </button>
+                      {canManage && Number(b.paidAmount || 0) === 0 && Number(b.returnedAmount || 0) === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => openEditBill(b)}
+                          className="inline-flex items-center gap-1 text-slate-700 font-semibold cursor-pointer"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" /> Edit
+                        </button>
+                      )}
+                      {canManage && b.status !== 'DRAFT' && b.balanceAmount > 0.01 && (
+                        <button
+                          type="button"
+                          onClick={() => openPayModal(b)}
+                          className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold cursor-pointer"
+                        >
+                          Pay
+                        </button>
+                      )}
+                      {canManage && Number(b.paidAmount || 0) === 0 && Number(b.returnedAmount || 0) === 0 && (
+                        confirmDeleteId === b.id ? (
+                          <button
+                            type="button"
+                            disabled={busyId === b.id}
+                            onClick={() => handleDeleteBill(b.id)}
+                            className="text-rose-700 font-bold cursor-pointer"
+                          >
+                            {busyId === b.id ? '...' : 'Confirm Del'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(b.id)}
+                            className="inline-flex items-center gap-1 text-rose-600 font-medium cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Delete
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Bill #</th>
@@ -532,25 +623,25 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                     const displayStatus = isOverdue ? 'OVERDUE' : b.status;
                     return (
                       <tr key={b.id} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{b.billNumber}</td>
+                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{b.billNumber}</td>
                         <td className="py-2.5 px-4 font-semibold text-slate-800">{b.vendorName}</td>
                         <td className="py-2.5 px-4 text-slate-600">
                           {[b.poNumber, b.projectTitle].filter(Boolean).join(' · ') || b.category}
                         </td>
-                        <td className="py-2.5 px-4 font-mono text-slate-600">
+                        <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">
                           <div>{formatDateIN(b.billDate)}</div>
                           <div className="text-[11px] text-slate-400">Due {formatDateIN(b.dueDate)}</div>
                         </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-900 font-semibold">
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-900 font-semibold whitespace-nowrap">
                           {formatINR(b.totalAmount)}
                         </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-emerald-700">
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-emerald-700 whitespace-nowrap">
                           {formatINR(b.paidAmount)}
                         </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                           {formatINR(b.balanceAmount)}
                         </td>
-                        <td className="py-2.5 px-4">
+                        <td className="py-2.5 px-4 whitespace-nowrap">
                           <span
                             className={`font-semibold ${
                               displayStatus === 'PAID'
@@ -626,8 +717,64 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       {/* VENDOR PAYMENTS TABLE */}
       {subTab === 'PAYMENTS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="md:hidden divide-y divide-slate-100">
+            {filteredPayments.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">No vendor disbursements recorded yet.</div>
+            ) : (
+              filteredPayments.map(p => {
+                const tdsDeposited = workspace.tdsEntries.some(
+                  t => t.sourceType === 'VENDOR_PAYMENT' && t.sourceId === p.id && t.status === 'DEPOSITED'
+                );
+                return (
+                  <div key={p.id} className="p-3.5 space-y-2 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-mono font-bold text-slate-900">{p.paymentNumber}</div>
+                        <div className="font-semibold text-slate-800 truncate">{p.vendorName}</div>
+                        <div className="text-[11px] font-mono text-slate-500">Bill: {p.billNumber || p.billId}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono font-bold text-emerald-700 tabular-nums">{formatINR(p.netPaid)}</div>
+                        {p.tdsDeducted > 0 && (
+                          <div className="text-[11px] font-mono text-amber-700">TDS {formatINR(p.tdsDeducted)}</div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span className="font-mono">{formatDateIN(p.paymentDate)}</span>
+                      <span>{p.bankAccountName || p.paymentMode}{p.referenceNo ? ` · ${p.referenceNo}` : ''}</span>
+                    </div>
+                    <div className="flex justify-end pt-1">
+                      {canManage && !tdsDeposited && (
+                        confirmPayDeleteId === p.id ? (
+                          <button
+                            type="button"
+                            disabled={busyId === p.id}
+                            onClick={() => handleDeletePayment(p.id)}
+                            className="text-rose-700 font-bold cursor-pointer"
+                          >
+                            {busyId === p.id ? '...' : 'Confirm Rev'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmPayDeleteId(p.id)}
+                            className="inline-flex items-center gap-1 text-rose-600 font-medium cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Reverse Payment
+                          </button>
+                        )
+                      )}
+                      {tdsDeposited && <span className="text-[11px] text-slate-400">TDS Deposited</span>}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Payment #</th>
@@ -655,21 +802,21 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                     );
                     return (
                       <tr key={p.id} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{p.paymentNumber}</td>
-                        <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(p.paymentDate)}</td>
+                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{p.paymentNumber}</td>
+                        <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(p.paymentDate)}</td>
                         <td className="py-2.5 px-4 font-semibold text-slate-800">{p.vendorName}</td>
-                        <td className="py-2.5 px-4 font-mono text-slate-600">{p.billNumber || p.billId}</td>
+                        <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{p.billNumber || p.billId}</td>
                         <td className="py-2.5 px-4 text-slate-600">
                           {p.bankAccountName || p.paymentMode}
                           {p.referenceNo ? ` · ${p.referenceNo}` : ''}
                         </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                           {formatINR(p.amount)}
                         </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-700">
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-700 whitespace-nowrap">
                           {p.tdsDeducted > 0 ? formatINR(p.tdsDeducted) : '—'}
                         </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-700">
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-700 whitespace-nowrap">
                           {formatINR(p.netPaid)}
                         </td>
                         <td className="py-2.5 px-4 text-right whitespace-nowrap">
@@ -711,8 +858,44 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       {/* UNBILLED PURCHASE ORDERS */}
       {subTab === 'UNBILLED_POS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="md:hidden divide-y divide-slate-100">
+            {unbilledPos.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                All active Purchase Orders have already been converted to Vendor Bills.
+              </div>
+            ) : (
+              unbilledPos.map(po => (
+                <div key={po.id} className="p-3.5 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-slate-900">{po.purchaseNumber}</div>
+                      <div className="font-semibold text-slate-800 truncate">{po.vendorName}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{po.projectTitle || 'Stock Procurement'}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-bold text-slate-900">{formatINR(po.totalAmount)}</div>
+                      <div className="text-[11px] text-slate-600">{po.status}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <span className="font-mono text-[11px] text-slate-500">{formatDateIN(po.purchaseDate)}</span>
+                    {canManage && (
+                      <button
+                        type="button"
+                        onClick={() => openBillFromPo(po)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold cursor-pointer"
+                      >
+                        <FileCheck2 className="w-3.5 h-3.5" /> Convert to Bill
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[740px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">PO #</th>
@@ -734,15 +917,15 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 ) : (
                   unbilledPos.map(po => (
                     <tr key={po.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{po.purchaseNumber}</td>
+                      <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{po.purchaseNumber}</td>
                       <td className="py-2.5 px-4 font-semibold text-slate-800">{po.vendorName}</td>
                       <td className="py-2.5 px-4 text-slate-600">{po.projectTitle || 'Stock Procurement'}</td>
-                      <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(po.purchaseDate)}</td>
-                      <td className="py-2.5 px-4 text-slate-700 font-medium">{po.status}</td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                      <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(po.purchaseDate)}</td>
+                      <td className="py-2.5 px-4 text-slate-700 font-medium whitespace-nowrap">{po.status}</td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                         {formatINR(po.totalAmount)}
                       </td>
-                      <td className="py-2.5 px-4 text-right">
+                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
                         {canManage && (
                           <button
                             type="button"
@@ -826,7 +1009,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Bill Date *</label>
                   <input
@@ -876,8 +1059,8 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="border border-slate-200 rounded-lg overflow-hidden">
-                <table className="w-full text-left text-xs">
+              <div className="border border-slate-200 rounded-lg overflow-x-auto">
+                <table className="w-full min-w-[680px] text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                     <tr>
                       <th className="py-2 px-3">Item / Service Description *</th>
@@ -992,7 +1175,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsBillModalOpen(false)}
@@ -1023,15 +1206,15 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
 
       {/* PAY VENDOR BILL MODAL */}
       {payTargetBill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">Pay Vendor Bill {payTargetBill.billNumber}</h3>
-              <button type="button" onClick={() => setPayTargetBill(null)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setPayTargetBill(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleRecordVendorPayment} className="p-5 space-y-3">
+            <form onSubmit={handleRecordVendorPayment} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {payError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1042,7 +1225,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 Vendor: <strong className="text-slate-900">{payTargetBill.vendorName}</strong> · Balance Due:{' '}
                 <strong className="font-mono text-slate-900">{formatINR(payTargetBill.balanceAmount)}</strong>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Gross Settlement (₹) *</label>
                   <input
@@ -1068,7 +1251,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Pay From Bank / Cash *</label>
                   <select
@@ -1095,7 +1278,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">TDS Section</label>
                   <select
@@ -1122,7 +1305,7 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
                 <span className="text-slate-600">Net Bank Outflow:</span>
                 <strong className="text-slate-900">{formatINR(Math.max(0, round2(payForm.amount - payForm.tdsDeducted)))}</strong>
               </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setPayTargetBill(null)}
@@ -1144,16 +1327,16 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
       )}
       {/* VIEW VENDOR BILL MODAL */}
       {viewBill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
           <div className="w-full max-w-2xl bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl max-h-[88vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900 font-mono">{viewBill.billNumber}</h3>
-              <button type="button" onClick={() => setViewBill(null)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setViewBill(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-4 overflow-y-auto text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+            <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
                 <div>
                   <span className="text-slate-500 block">Vendor</span>
                   <strong className="text-slate-900">{viewBill.vendorName}</strong>
@@ -1179,30 +1362,32 @@ export const VendorPaymentsTab: React.FC<VendorPaymentsTabProps> = ({
               </div>
 
               {viewBill.items && viewBill.items.length > 0 && (
-                <table className="w-full text-left border border-slate-200 rounded-lg overflow-hidden">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
-                    <tr>
-                      <th className="py-2 px-3">Description</th>
-                      <th className="py-2 px-3">HSN</th>
-                      <th className="py-2 px-3 text-right">Qty</th>
-                      <th className="py-2 px-3 text-right">Rate</th>
-                      <th className="py-2 px-3 text-right">GST</th>
-                      <th className="py-2 px-3 text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {viewBill.items.map(it => (
-                      <tr key={it.id}>
-                        <td className="py-2 px-3 font-medium text-slate-800">{it.description}</td>
-                        <td className="py-2 px-3 font-mono text-slate-500">{it.hsnCode || '—'}</td>
-                        <td className="py-2 px-3 text-right font-mono">{it.quantity}</td>
-                        <td className="py-2 px-3 text-right font-mono">{formatINR(it.rate)}</td>
-                        <td className="py-2 px-3 text-right font-mono">{it.gstRate}%</td>
-                        <td className="py-2 px-3 text-right font-mono font-semibold">{formatINR(it.totalAmount)}</td>
+                <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                  <table className="w-full min-w-[520px] text-left">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                      <tr>
+                        <th className="py-2 px-3">Description</th>
+                        <th className="py-2 px-3">HSN</th>
+                        <th className="py-2 px-3 text-right">Qty</th>
+                        <th className="py-2 px-3 text-right">Rate</th>
+                        <th className="py-2 px-3 text-right">GST</th>
+                        <th className="py-2 px-3 text-right">Total</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {viewBill.items.map(it => (
+                        <tr key={it.id}>
+                          <td className="py-2 px-3 font-medium text-slate-800">{it.description}</td>
+                          <td className="py-2 px-3 font-mono text-slate-500">{it.hsnCode || '—'}</td>
+                          <td className="py-2 px-3 text-right font-mono">{it.quantity}</td>
+                          <td className="py-2 px-3 text-right font-mono">{formatINR(it.rate)}</td>
+                          <td className="py-2 px-3 text-right font-mono">{it.gstRate}%</td>
+                          <td className="py-2 px-3 text-right font-mono font-semibold">{formatINR(it.totalAmount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200 font-mono">

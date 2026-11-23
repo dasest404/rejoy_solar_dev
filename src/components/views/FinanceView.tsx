@@ -147,10 +147,10 @@ export const FinanceView: React.FC = () => {
   const canApproveExpenses = isPrivilegedFinance || hasPermission('finance.audit') || hasPermission('finance.expenses');
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5 min-w-0">
       {/* Page Header */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
-        <div>
+      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
             <span className="font-semibold text-amber-700">Accounting & Finance</span>
             <span>·</span>
@@ -400,18 +400,18 @@ export const FinanceView: React.FC = () => {
 
       {/* Tally Prime XML Preview Modal */}
       {activeXmlPayload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-2xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900 text-white">
-              <span className="text-xs font-mono font-bold">Tally Prime XML Voucher Payload</span>
-              <button type="button" onClick={() => setActiveXmlPayload(null)} className="text-slate-400 hover:text-white">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-2xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 bg-slate-900 text-white shrink-0">
+              <span className="text-xs font-mono font-bold truncate pr-2">Tally Prime XML Voucher Payload</span>
+              <button type="button" onClick={() => setActiveXmlPayload(null)} className="text-slate-400 hover:text-white p-1 shrink-0">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-4 bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-96">
+            <div className="p-4 bg-slate-950 text-emerald-400 font-mono text-xs overflow-auto flex-1">
               <pre>{activeXmlPayload}</pre>
             </div>
-            <div className="p-4 bg-slate-50 flex justify-end gap-2">
+            <div className="p-4 bg-slate-50 flex flex-wrap justify-end gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => {

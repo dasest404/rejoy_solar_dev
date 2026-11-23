@@ -182,7 +182,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
               ]
             )
           }
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
+          className="w-full sm:w-auto justify-center inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
         >
           <Download className="w-3.5 h-3.5" /> Export GST CSV
         </button>
@@ -191,7 +191,8 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
       {/* 1. SUMMARY */}
       {subTab === 'SUMMARY' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[660px] text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
               <tr>
                 <th className="py-3 px-4">GST Component</th>
@@ -275,6 +276,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       )}
 
@@ -287,7 +289,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
             </span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[740px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Invoice #</th>
@@ -348,42 +350,44 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
 
       {/* 3. GSTR-3B */}
       {subTab === 'GSTR3B' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4 text-xs">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 text-xs">
           <h3 className="text-sm font-bold text-slate-900">GSTR-3B Consolidated Tax Return Computation</h3>
-          <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
-            <div className="p-3 bg-slate-50 font-bold text-slate-700 grid grid-cols-3">
-              <span>Table Section</span>
-              <span className="text-right">Taxable Value</span>
-              <span className="text-right">Tax Amount</span>
-            </div>
-            <div className="p-3 grid grid-cols-3">
-              <span>3.1(a) Net Outward Taxable Supplies (Invoices less Credit Notes)</span>
-              <span className="text-right font-mono">{formatINR(gst.outputTaxable)}</span>
-              <span className="text-right font-mono font-semibold">{formatINR(gst.outputTotalTax)}</span>
-            </div>
-            <div className="p-3 grid grid-cols-3">
-              <span>4(A)(5) All Other ITC (Bills & Expenses)</span>
-              <span className="text-right font-mono">{formatINR(gst.grossInputTaxable)}</span>
-              <span className="text-right font-mono font-semibold text-emerald-700">{formatINR(gst.grossInputTotalItc)}</span>
-            </div>
-            {gst.purchaseReturnTotalTax > 0 && (
-              <div className="p-3 grid grid-cols-3 bg-amber-50/40">
-                <span>4(B)(2) ITC Reversed (Purchase Returns / Debit Notes)</span>
-                <span className="text-right font-mono text-amber-800">-{formatINR(gst.purchaseReturnTaxable)}</span>
-                <span className="text-right font-mono font-semibold text-amber-800">-{formatINR(gst.purchaseReturnTotalTax)}</span>
+          <div className="overflow-x-auto border border-slate-200 rounded-lg">
+            <div className="min-w-[540px] divide-y divide-slate-200">
+              <div className="p-3 bg-slate-50 font-bold text-slate-700 grid grid-cols-3 gap-2">
+                <span>Table Section</span>
+                <span className="text-right">Taxable Value</span>
+                <span className="text-right">Tax Amount</span>
               </div>
-            )}
-            <div className="p-3 grid grid-cols-3">
-              <span className="font-semibold text-slate-800">4(C) Net ITC Available</span>
-              <span className="text-right font-mono">{formatINR(gst.inputTaxable)}</span>
-              <span className="text-right font-mono font-bold text-emerald-700">{formatINR(gst.inputTotalItc)}</span>
-            </div>
-            <div className="p-3 grid grid-cols-3 bg-slate-50 font-bold">
-              <span>6.1 Payment of Tax (Net Payable / Credit Balance)</span>
-              <span className="text-right font-mono">—</span>
-              <span className={`text-right font-mono ${gst.netPayable > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                {gst.netPayable > 0 ? `Pay ${formatINR(gst.netPayable)}` : `ITC Cr ${formatINR(gst.itcCarryForward)}`}
-              </span>
+              <div className="p-3 grid grid-cols-3 gap-2">
+                <span>3.1(a) Net Outward Taxable Supplies (Invoices less Credit Notes)</span>
+                <span className="text-right font-mono">{formatINR(gst.outputTaxable)}</span>
+                <span className="text-right font-mono font-semibold">{formatINR(gst.outputTotalTax)}</span>
+              </div>
+              <div className="p-3 grid grid-cols-3 gap-2">
+                <span>4(A)(5) All Other ITC (Bills & Expenses)</span>
+                <span className="text-right font-mono">{formatINR(gst.grossInputTaxable)}</span>
+                <span className="text-right font-mono font-semibold text-emerald-700">{formatINR(gst.grossInputTotalItc)}</span>
+              </div>
+              {gst.purchaseReturnTotalTax > 0 && (
+                <div className="p-3 grid grid-cols-3 gap-2 bg-amber-50/40">
+                  <span>4(B)(2) ITC Reversed (Purchase Returns / Debit Notes)</span>
+                  <span className="text-right font-mono text-amber-800">-{formatINR(gst.purchaseReturnTaxable)}</span>
+                  <span className="text-right font-mono font-semibold text-amber-800">-{formatINR(gst.purchaseReturnTotalTax)}</span>
+                </div>
+              )}
+              <div className="p-3 grid grid-cols-3 gap-2">
+                <span className="font-semibold text-slate-800">4(C) Net ITC Available</span>
+                <span className="text-right font-mono">{formatINR(gst.inputTaxable)}</span>
+                <span className="text-right font-mono font-bold text-emerald-700">{formatINR(gst.inputTotalItc)}</span>
+              </div>
+              <div className="p-3 grid grid-cols-3 gap-2 bg-slate-50 font-bold">
+                <span>6.1 Payment of Tax (Net Payable / Credit Balance)</span>
+                <span className="text-right font-mono">—</span>
+                <span className={`text-right font-mono ${gst.netPayable > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {gst.netPayable > 0 ? `Pay ${formatINR(gst.netPayable)}` : `ITC Cr ${formatINR(gst.itcCarryForward)}`}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -393,7 +397,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
       {subTab === 'TDS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[740px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Section</th>
@@ -455,7 +459,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
       {subTab === 'EINVOICE' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[740px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Invoice #</th>
@@ -479,23 +483,23 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
                     const generated = inv.einvoiceStatus === 'GENERATED' && Boolean(inv.einvoiceIrn);
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{inv.invoiceNumber}</td>
+                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{inv.invoiceNumber}</td>
                         <td className="py-2.5 px-4">
                           <div className="font-semibold text-slate-800">{inv.customerName}</div>
                           <div className="font-mono text-[11px] text-slate-500">{inv.customerGst}</div>
                         </td>
-                        <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(inv.invoiceDate)}</td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold">{formatINR(inv.totalAmount)}</td>
+                        <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(inv.invoiceDate)}</td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold whitespace-nowrap">{formatINR(inv.totalAmount)}</td>
                         <td className="py-2.5 px-4 font-mono text-[11px] text-slate-700 max-w-xs truncate">
                           {generated ? `${inv.einvoiceIrn?.slice(0, 22)}... (Ack ${inv.einvoiceAckNo})` : '—'}
                         </td>
-                        <td className="py-2.5 px-4">
+                        <td className="py-2.5 px-4 whitespace-nowrap">
                           <span className={`font-semibold inline-flex items-center gap-1 ${generated ? 'text-emerald-700' : 'text-amber-700'}`}>
                             {generated && <CheckCircle2 className="w-3.5 h-3.5" />}
                             {generated ? 'GENERATED' : 'PENDING'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 text-right">
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
                           {canManage && !generated && (
                             <button
                               type="button"
@@ -520,20 +524,20 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
 
       {/* TDS CHALLAN MODAL */}
       {depositTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">Record TDS Challan 281 Deposit</h3>
-              <button type="button" onClick={() => setDepositTarget(null)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setDepositTarget(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleDepositTds} className="p-5 space-y-3">
+            <form onSubmit={handleDepositTds} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               <div className="text-xs text-slate-600">
                 Party: <strong>{depositTarget.partyName}</strong> ({depositTarget.section}) · Amount:{' '}
                 <strong className="font-mono">{formatINR(depositTarget.tdsAmount)}</strong>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Challan Serial # *</label>
                   <input
@@ -554,7 +558,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Deposit Date *</label>
                   <input
@@ -581,7 +585,7 @@ export const GstTaxTab: React.FC<GstTaxTabProps> = ({
                   </select>
                 </div>
               </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setDepositTarget(null)}

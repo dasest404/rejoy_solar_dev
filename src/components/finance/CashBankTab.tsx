@@ -348,7 +348,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
           ))}
         </div>
         {canManage && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => {
@@ -360,14 +360,14 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                 }));
                 setIsTransferModalOpen(true);
               }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
             >
               <ArrowLeftRight className="w-3.5 h-3.5" /> Fund Transfer (Contra)
             </button>
             <button
               type="button"
               onClick={openNewBankModal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" /> Add Bank / Cash
             </button>
@@ -453,16 +453,16 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
 
       {/* 2. CASH & BANK BOOK */}
       {subTab === 'CASH_BOOK' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <h3 className="text-sm font-bold text-slate-900">Cash & Bank Ledger Register</h3>
               <p className="text-xs text-slate-500">Chronological inflows and outflows with running balance</p>
             </div>
             <select
               value={selectedBank?.id || ''}
               onChange={e => setSelectedBankId(e.target.value)}
-              className="text-xs border border-slate-200 rounded-lg px-3 py-2"
+              className="w-full sm:w-auto max-w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
             >
               {workspace.bankAccounts.map(b => (
                 <option key={b.id} value={b.id}>
@@ -472,8 +472,38 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
             </select>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="md:hidden divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+            {!cashBookLedger || cashBookLedger.rows.length === 0 ? (
+              <div className="py-8 px-4 text-center text-xs text-slate-500">
+                No cash/bank entries posted to this register yet.
+              </div>
+            ) : (
+              cashBookLedger.rows.map(r => (
+                <div key={r.lineId} className="p-3.5 space-y-1.5 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-mono font-semibold text-slate-900">{r.entryNumber}</span>
+                      <span className="ml-2 font-mono text-[11px] text-slate-500">{formatDateIN(r.entryDate)}</span>
+                    </div>
+                    <span className="font-mono tabular-nums font-bold text-slate-900 shrink-0">
+                      {formatINR(r.runningBalance)} {r.balanceOrientation}
+                    </span>
+                  </div>
+                  <div className="text-slate-700">{r.narration}</div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="text-slate-500">{r.partyName || '—'}</span>
+                    <div className="flex items-center gap-3 font-mono tabular-nums">
+                      {r.debit > 0 && <span className="text-emerald-700 font-semibold">+{formatINR(r.debit)} Dr</span>}
+                      {r.credit > 0 && <span className="text-rose-700 font-semibold">-{formatINR(r.credit)} Cr</span>}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-3">Date</th>
@@ -495,17 +525,17 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                 ) : (
                   cashBookLedger.rows.map(r => (
                     <tr key={r.lineId} className="hover:bg-slate-50">
-                      <td className="py-2 px-3 font-mono text-slate-600">{formatDateIN(r.entryDate)}</td>
-                      <td className="py-2 px-3 font-mono font-semibold text-slate-900">{r.entryNumber}</td>
+                      <td className="py-2 px-3 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(r.entryDate)}</td>
+                      <td className="py-2 px-3 font-mono font-semibold text-slate-900 whitespace-nowrap">{r.entryNumber}</td>
                       <td className="py-2 px-3 text-slate-700">{r.narration}</td>
                       <td className="py-2 px-3 text-slate-500">{r.partyName || '—'}</td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-emerald-700">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-emerald-700 whitespace-nowrap">
                         {r.debit > 0 ? formatINR(r.debit) : '—'}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-rose-700">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-rose-700 whitespace-nowrap">
                         {r.credit > 0 ? formatINR(r.credit) : '—'}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums font-bold text-slate-900">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                         {formatINR(r.runningBalance)} {r.balanceOrientation}
                       </td>
                     </tr>
@@ -520,8 +550,64 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
       {/* 3. CONTRA TRANSFERS */}
       {subTab === 'TRANSFERS' && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="md:hidden divide-y divide-slate-100">
+            {workspace.bankTransfers.length === 0 ? (
+              <div className="py-8 px-4 text-center text-xs text-slate-500">
+                No contra fund transfers recorded yet.
+              </div>
+            ) : (
+              workspace.bankTransfers.map(t => (
+                <div key={t.id} className="p-4 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-mono font-bold text-slate-900">{t.transferNumber}</div>
+                      <div className="font-mono text-[11px] text-slate-500">{formatDateIN(t.transferDate)}</div>
+                    </div>
+                    <div className="font-mono tabular-nums font-bold text-slate-900 text-sm">
+                      {formatINR(t.amount)}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-50 rounded-lg p-2">
+                    <div>
+                      <div className="text-[10px] text-slate-400">From</div>
+                      <div className="text-rose-700 font-medium">{t.fromAccountName || t.fromAccountId}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">To</div>
+                      <div className="text-emerald-700 font-medium">{t.toAccountName || t.toAccountId}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <span className="text-slate-600">{t.mode}{t.referenceNo ? ` · ${t.referenceNo}` : ''}</span>
+                    {canManage && (
+                      confirmDeleteTransferId === t.id ? (
+                        <button
+                          type="button"
+                          disabled={busyTransferId === t.id}
+                          onClick={() => handleDeleteTransfer(t.id)}
+                          className="text-rose-700 font-bold cursor-pointer"
+                        >
+                          {busyTransferId === t.id ? '...' : 'Confirm Rev'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteTransferId(t.id)}
+                          title="Reverse / Delete Transfer"
+                          className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Reverse
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[740px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-4">Transfer #</th>
@@ -544,14 +630,14 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   workspace.bankTransfers.map(t => (
                     <tr key={t.id} className="hover:bg-slate-50">
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{t.transferNumber}</td>
-                      <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(t.transferDate)}</td>
+                      <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(t.transferDate)}</td>
                       <td className="py-2.5 px-4 text-rose-700 font-medium">{t.fromAccountName || t.fromAccountId}</td>
                       <td className="py-2.5 px-4 text-emerald-700 font-medium">{t.toAccountName || t.toAccountId}</td>
                       <td className="py-2.5 px-4 text-slate-600">
                         {t.mode}
                         {t.referenceNo ? ` · ${t.referenceNo}` : ''}
                       </td>
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
                         {formatINR(t.amount)}
                       </td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap">
@@ -658,7 +744,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[660px] text-left text-xs">
                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
                   <tr>
                     <th className="py-2 px-3 w-10">Clear</th>
@@ -692,13 +778,13 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                               }
                             />
                           </td>
-                          <td className="py-2 px-3 font-mono text-slate-600">{formatDateIN(r.entryDate)}</td>
-                          <td className="py-2 px-3 font-mono font-semibold text-slate-900">{r.entryNumber}</td>
+                          <td className="py-2 px-3 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(r.entryDate)}</td>
+                          <td className="py-2 px-3 font-mono font-semibold text-slate-900 whitespace-nowrap">{r.entryNumber}</td>
                           <td className="py-2 px-3 text-slate-700">{r.narration}</td>
-                          <td className="py-2 px-3 text-right font-mono tabular-nums text-emerald-700">
+                          <td className="py-2 px-3 text-right font-mono tabular-nums text-emerald-700 whitespace-nowrap">
                             {r.debit > 0 ? formatINR(r.debit) : '—'}
                           </td>
-                          <td className="py-2 px-3 text-right font-mono tabular-nums text-rose-700">
+                          <td className="py-2 px-3 text-right font-mono tabular-nums text-rose-700 whitespace-nowrap">
                             {r.credit > 0 ? formatINR(r.credit) : '—'}
                           </td>
                         </tr>
@@ -710,7 +796,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
             </div>
 
             {canManage && (
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
                   disabled={savingRecon}
@@ -736,73 +822,132 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
               <div className="px-4 py-3 border-b border-slate-200 text-xs font-bold text-slate-900">
                 Reconciliation History
               </div>
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
-                  <tr>
-                    <th className="py-2 px-4">Statement Date</th>
-                    <th className="py-2 px-4">Account</th>
-                    <th className="py-2 px-4 text-right">Book Balance</th>
-                    <th className="py-2 px-4 text-right">Statement Balance</th>
-                    <th className="py-2 px-4 text-right">Difference</th>
-                    <th className="py-2 px-4">Status</th>
-                    <th className="py-2 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {workspace.bankReconciliations.map(rec => (
-                    <tr key={rec.id}>
-                      <td className="py-2 px-4 font-mono">{formatDateIN(rec.statementDate)}</td>
-                      <td className="py-2 px-4 font-semibold text-slate-800">{rec.bankAccountName}</td>
-                      <td className="py-2 px-4 text-right font-mono">{formatINR(rec.bookBalance)}</td>
-                      <td className="py-2 px-4 text-right font-mono">{formatINR(rec.statementBalance)}</td>
-                      <td className="py-2 px-4 text-right font-mono">{formatINR(rec.difference)}</td>
-                      <td className={`py-2 px-4 font-semibold ${rec.status === 'RECONCILED' ? 'text-emerald-700' : 'text-amber-700'}`}>
+              <div className="md:hidden divide-y divide-slate-100">
+                {workspace.bankReconciliations.map(rec => (
+                  <div key={rec.id} className="p-4 space-y-2 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold text-slate-900">{rec.bankAccountName}</div>
+                        <div className="font-mono text-[11px] text-slate-500">{formatDateIN(rec.statementDate)}</div>
+                      </div>
+                      <span className={`font-semibold ${rec.status === 'RECONCILED' ? 'text-emerald-700' : 'text-amber-700'}`}>
                         {rec.status}
-                      </td>
-                      <td className="py-2 px-4 text-right whitespace-nowrap space-x-2">
-                        {canManage && rec.status !== 'RECONCILED' && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveReconId(rec.id);
-                                setReconBankId(rec.bankAccountId);
-                                setStatementDate(rec.statementDate);
-                                setStatementBalance(rec.statementBalance);
-                                setClearedIds(rec.clearedTxnIds || []);
-                                setReconNotes(rec.notes || '');
-                                showToast('Loaded reconciliation draft into workspace.', 'info');
-                              }}
-                              className="text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
-                            >
-                              Resume
-                            </button>
-                            {confirmDeleteReconId === rec.id ? (
-                              <button
-                                type="button"
-                                disabled={busyReconId === rec.id}
-                                onClick={() => handleDeleteReconciliation(rec.id)}
-                                className="text-rose-700 font-bold cursor-pointer"
-                              >
-                                {busyReconId === rec.id ? '...' : 'Confirm Del'}
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteReconId(rec.id)}
-                                title="Delete Draft"
-                                className="text-rose-600 hover:text-rose-800 cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5 inline" />
-                              </button>
-                            )}
-                          </>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-[11px] font-mono">
+                      <div><span className="block text-slate-400">Book</span>{formatINR(rec.bookBalance)}</div>
+                      <div><span className="block text-slate-400">Statement</span>{formatINR(rec.statementBalance)}</div>
+                      <div><span className="block text-slate-400">Diff</span>{formatINR(rec.difference)}</div>
+                    </div>
+                    {canManage && rec.status !== 'RECONCILED' && (
+                      <div className="flex flex-wrap items-center gap-3 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveReconId(rec.id);
+                            setReconBankId(rec.bankAccountId);
+                            setStatementDate(rec.statementDate);
+                            setStatementBalance(rec.statementBalance);
+                            setClearedIds(rec.clearedTxnIds || []);
+                            setReconNotes(rec.notes || '');
+                            showToast('Loaded reconciliation draft into workspace.', 'info');
+                          }}
+                          className="text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                        >
+                          Resume
+                        </button>
+                        {confirmDeleteReconId === rec.id ? (
+                          <button
+                            type="button"
+                            disabled={busyReconId === rec.id}
+                            onClick={() => handleDeleteReconciliation(rec.id)}
+                            className="text-rose-700 font-bold cursor-pointer"
+                          >
+                            {busyReconId === rec.id ? '...' : 'Confirm Del'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteReconId(rec.id)}
+                            className="text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                          >
+                            Delete Draft
+                          </button>
                         )}
-                      </td>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full min-w-[700px] text-left text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                    <tr>
+                      <th className="py-2 px-4">Statement Date</th>
+                      <th className="py-2 px-4">Account</th>
+                      <th className="py-2 px-4 text-right">Book Balance</th>
+                      <th className="py-2 px-4 text-right">Statement Balance</th>
+                      <th className="py-2 px-4 text-right">Difference</th>
+                      <th className="py-2 px-4">Status</th>
+                      <th className="py-2 px-4 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {workspace.bankReconciliations.map(rec => (
+                      <tr key={rec.id}>
+                        <td className="py-2 px-4 font-mono whitespace-nowrap">{formatDateIN(rec.statementDate)}</td>
+                        <td className="py-2 px-4 font-semibold text-slate-800">{rec.bankAccountName}</td>
+                        <td className="py-2 px-4 text-right font-mono whitespace-nowrap">{formatINR(rec.bookBalance)}</td>
+                        <td className="py-2 px-4 text-right font-mono whitespace-nowrap">{formatINR(rec.statementBalance)}</td>
+                        <td className="py-2 px-4 text-right font-mono whitespace-nowrap">{formatINR(rec.difference)}</td>
+                        <td className={`py-2 px-4 font-semibold ${rec.status === 'RECONCILED' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                          {rec.status}
+                        </td>
+                        <td className="py-2 px-4 text-right whitespace-nowrap space-x-2">
+                          {canManage && rec.status !== 'RECONCILED' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveReconId(rec.id);
+                                  setReconBankId(rec.bankAccountId);
+                                  setStatementDate(rec.statementDate);
+                                  setStatementBalance(rec.statementBalance);
+                                  setClearedIds(rec.clearedTxnIds || []);
+                                  setReconNotes(rec.notes || '');
+                                  showToast('Loaded reconciliation draft into workspace.', 'info');
+                                }}
+                                className="text-amber-700 hover:text-amber-800 font-semibold cursor-pointer"
+                              >
+                                Resume
+                              </button>
+                              {confirmDeleteReconId === rec.id ? (
+                                <button
+                                  type="button"
+                                  disabled={busyReconId === rec.id}
+                                  onClick={() => handleDeleteReconciliation(rec.id)}
+                                  className="text-rose-700 font-bold cursor-pointer"
+                                >
+                                  {busyReconId === rec.id ? '...' : 'Confirm Del'}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteReconId(rec.id)}
+                                  title="Delete Draft"
+                                  className="text-rose-600 hover:text-rose-800 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 inline" />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -810,22 +955,22 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
 
       {/* ADD / EDIT BANK MODAL */}
       {isAccountModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">{accForm.id ? 'Edit Register' : 'Add Cash / Bank Register'}</h3>
-              <button type="button" onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveBankAccount} className="p-5 space-y-3">
+            <form onSubmit={handleSaveBankAccount} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {accError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{accError}</span>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Register Type *</label>
                   <select
@@ -867,7 +1012,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
               </div>
               {accForm.accountType === 'BANK' && (
                 <>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">Bank Name</label>
                       <input
@@ -887,7 +1032,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                       />
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">Account Number</label>
                       <input
@@ -929,7 +1074,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   </label>
                 )}
               </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsAccountModalOpen(false)}
@@ -952,15 +1097,15 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
 
       {/* CONTRA TRANSFER MODAL */}
       {isTransferModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="w-full max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 bg-slate-50 shrink-0">
               <h3 className="text-sm font-bold text-slate-900">Contra Fund Transfer</h3>
-              <button type="button" onClick={() => setIsTransferModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsTransferModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleRecordTransfer} className="p-5 space-y-3">
+            <form onSubmit={handleRecordTransfer} className="p-4 sm:p-5 space-y-3 overflow-y-auto">
               {transferError && (
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -997,7 +1142,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   ))}
                 </select>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Amount (₹) *</label>
                   <input
@@ -1021,7 +1166,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Mode</label>
                   <input
@@ -1041,7 +1186,7 @@ export const CashBankTab: React.FC<CashBankTabProps> = ({
                   />
                 </div>
               </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsTransferModalOpen(false)}

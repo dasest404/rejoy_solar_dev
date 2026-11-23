@@ -280,13 +280,13 @@ export const FinanceDashboardTab: React.FC<FinanceDashboardTabProps> = ({
       {/* Two-Column Analytics + Action Queue */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Monthly Cash Flow Bar Visualization */}
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-4">
+        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900">Monthly Cash Inflow vs Outflow</h3>
               <p className="text-xs text-slate-500">Derived strictly from posted bank and cash ledger entries</p>
             </div>
-            <div className="flex items-center gap-4 text-xs text-slate-600">
+            <div className="flex items-center gap-4 text-xs text-slate-600 shrink-0">
               <span className="inline-flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 bg-emerald-600 inline-block rounded-xs" /> Inflow
               </span>
@@ -333,7 +333,7 @@ export const FinanceDashboardTab: React.FC<FinanceDashboardTabProps> = ({
                   );
                 })}
               </div>
-              <div className="grid grid-cols-3 gap-4 pt-1 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 pt-1 text-xs">
                 <div>
                   <span className="text-slate-500">Operating Cash Flow</span>
                   <div className="font-bold font-mono tabular-nums text-slate-900 mt-0.5">
@@ -457,7 +457,7 @@ export const FinanceDashboardTab: React.FC<FinanceDashboardTabProps> = ({
 
       {/* Recent Journal Activity */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
+        <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-bold text-slate-900">Recent Posted Journal Vouchers</h3>
             <p className="text-xs text-slate-500">Latest general ledger activity across invoices, bills, receipts, and journals</p>
@@ -465,7 +465,7 @@ export const FinanceDashboardTab: React.FC<FinanceDashboardTabProps> = ({
           <button
             type="button"
             onClick={() => onNavigateTab('ledger')}
-            className="text-xs font-semibold text-amber-700 hover:text-amber-800 cursor-pointer"
+            className="text-xs font-semibold text-amber-700 hover:text-amber-800 cursor-pointer self-start sm:self-auto shrink-0"
           >
             Open Accounts & Ledger →
           </button>
@@ -475,50 +475,78 @@ export const FinanceDashboardTab: React.FC<FinanceDashboardTabProps> = ({
             No journal entries recorded yet. Post a manual journal or click Sync ERP Vouchers.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
-                <tr>
-                  <th className="py-2.5 px-4">Voucher #</th>
-                  <th className="py-2.5 px-4">Date</th>
-                  <th className="py-2.5 px-4">Reference</th>
-                  <th className="py-2.5 px-4">Narration</th>
-                  <th className="py-2.5 px-4 text-right">Debit (₹)</th>
-                  <th className="py-2.5 px-4 text-right">Credit (₹)</th>
-                  <th className="py-2.5 px-4">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {workspace.journals.slice(0, 8).map(j => (
-                  <tr key={j.id} className="hover:bg-slate-50">
-                    <td className="py-2.5 px-4 font-mono font-semibold text-slate-900">{j.entryNumber}</td>
-                    <td className="py-2.5 px-4 font-mono text-slate-600">{formatDateIN(j.entryDate)}</td>
-                    <td className="py-2.5 px-4 text-slate-600">{j.referenceNumber || j.referenceType || 'Manual'}</td>
-                    <td className="py-2.5 px-4 text-slate-700 max-w-md truncate">{j.narration}</td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
-                      {formatINR(j.totalDebit)}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
-                      {formatINR(j.totalCredit)}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span
-                        className={`font-semibold ${
-                          j.status === 'POSTED'
-                            ? 'text-emerald-700'
-                            : j.status === 'REVERSED'
-                            ? 'text-rose-700'
-                            : 'text-amber-700'
-                        }`}
-                      >
-                        {j.status}
-                      </span>
-                    </td>
+          <>
+            <div className="md:hidden divide-y divide-slate-100">
+              {workspace.journals.slice(0, 8).map(j => (
+                <div key={j.id} className="p-3.5 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-bold text-slate-900">{j.entryNumber}</span>
+                    <span className="font-mono text-slate-500">{formatDateIN(j.entryDate)}</span>
+                  </div>
+                  <div className="text-slate-700 line-clamp-2">{j.narration}</div>
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <span
+                      className={`text-[11px] font-semibold ${
+                        j.status === 'POSTED'
+                          ? 'text-emerald-700'
+                          : j.status === 'REVERSED'
+                          ? 'text-rose-700'
+                          : 'text-amber-700'
+                      }`}
+                    >
+                      {j.status}
+                    </span>
+                    <span className="font-mono font-bold text-slate-900 tabular-nums">{formatINR(j.totalDebit)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
+                  <tr>
+                    <th className="py-2.5 px-4">Voucher #</th>
+                    <th className="py-2.5 px-4">Date</th>
+                    <th className="py-2.5 px-4">Reference</th>
+                    <th className="py-2.5 px-4">Narration</th>
+                    <th className="py-2.5 px-4 text-right">Debit (₹)</th>
+                    <th className="py-2.5 px-4 text-right">Credit (₹)</th>
+                    <th className="py-2.5 px-4">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {workspace.journals.slice(0, 8).map(j => (
+                    <tr key={j.id} className="hover:bg-slate-50">
+                      <td className="py-2.5 px-4 font-mono font-semibold text-slate-900 whitespace-nowrap">{j.entryNumber}</td>
+                      <td className="py-2.5 px-4 font-mono text-slate-600 whitespace-nowrap">{formatDateIN(j.entryDate)}</td>
+                      <td className="py-2.5 px-4 text-slate-600 whitespace-nowrap">{j.referenceNumber || j.referenceType || 'Manual'}</td>
+                      <td className="py-2.5 px-4 text-slate-700 max-w-md truncate">{j.narration}</td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                        {formatINR(j.totalDebit)}
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                        {formatINR(j.totalCredit)}
+                      </td>
+                      <td className="py-2.5 px-4 whitespace-nowrap">
+                        <span
+                          className={`font-semibold ${
+                            j.status === 'POSTED'
+                              ? 'text-emerald-700'
+                              : j.status === 'REVERSED'
+                              ? 'text-rose-700'
+                              : 'text-amber-700'
+                          }`}
+                        >
+                          {j.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>
