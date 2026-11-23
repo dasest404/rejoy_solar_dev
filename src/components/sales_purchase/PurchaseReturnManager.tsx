@@ -225,6 +225,10 @@ export const PurchaseReturnManager: React.FC = () => {
     setFormError('');
     setSettlementMode('DEBIT_NOTE');
     setRefundAmount(0);
+    const po = purchaseOrders.find(p => p.id === poId);
+    if (po?.bankAccountId && bankAccounts.some(b => b.id === po.bankAccountId)) {
+      setBankAccountId(po.bankAccountId);
+    }
     buildDraftLinesForPO(poId);
   };
 
@@ -317,7 +321,7 @@ export const PurchaseReturnManager: React.FC = () => {
         deductInventory,
         settlementMode,
         refundAmount: settlementMode === 'VENDOR_REFUND' ? round2(refundAmount) : 0,
-        bankAccountId: settlementMode === 'VENDOR_REFUND' ? bankAccountId : undefined,
+        bankAccountId: bankAccountId || undefined,
         notes: notes.trim(),
         items: itemsToSubmit
       });
@@ -537,9 +541,17 @@ export const PurchaseReturnManager: React.FC = () => {
                         )}
                       </div>
                     ) : (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                        Debit Note Offset
-                      </span>
+                      <div>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                          Debit Note Offset
+                        </span>
+                        {pr.bankAccountName && (
+                          <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
+                            <Landmark className="w-2.5 h-2.5" />
+                            {pr.bankAccountName}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="p-3.5 text-right whitespace-nowrap">
@@ -789,24 +801,28 @@ export const PurchaseReturnManager: React.FC = () => {
                     </div>
                   </div>
 
-                  {settlementMode === 'VENDOR_REFUND' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Deposit Refund Into Account *</label>
-                        <select
-                          required
-                          value={bankAccountId}
-                          onChange={e => setBankAccountId(e.target.value)}
-                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                        >
-                          <option value="">-- Select Account --</option>
-                          {bankAccounts.map(b => (
-                            <option key={b.id} value={b.id}>
-                              {b.accountName} ({b.accountType}) — Bal: {formatINR(b.currentBalance)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        {settlementMode === 'VENDOR_REFUND'
+                          ? 'Deposit Refund Into Account *'
+                          : 'Cash / Bank Account (Settlement Link)'}
+                      </label>
+                      <select
+                        required={settlementMode === 'VENDOR_REFUND'}
+                        value={bankAccountId}
+                        onChange={e => setBankAccountId(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                      >
+                        <option value="">-- Select Account --</option>
+                        {bankAccounts.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.accountName} ({b.accountType}) — Bal: {formatINR(b.currentBalance)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {settlementMode === 'VENDOR_REFUND' && (
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
                           Refund Received (Max {formatINR(maxRefundAllowed)}) *
@@ -822,8 +838,8 @@ export const PurchaseReturnManager: React.FC = () => {
                           className="w-full px-2.5 py-1.5 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg"
                         />
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 {/* Totals Box */}
@@ -937,7 +953,9 @@ export const PurchaseReturnManager: React.FC = () => {
                 </div>
                 {viewingReturn.bankAccountName && (
                   <div>
-                    <span className="text-slate-400 block">Deposited Into</span>
+                    <span className="text-slate-400 block">
+                      {viewingReturn.settlementMode === 'VENDOR_REFUND' ? 'Deposited Into' : 'Linked Bank Account'}
+                    </span>
                     <span className="font-bold text-slate-800">{viewingReturn.bankAccountName}</span>
                   </div>
                 )}

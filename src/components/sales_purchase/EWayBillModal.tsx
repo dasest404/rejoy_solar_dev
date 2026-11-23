@@ -300,7 +300,8 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
   const totalTaxable = enrichedItems.reduce((acc, i) => acc + i.taxableValue, 0);
   const totalCGST = enrichedItems.reduce((acc, i) => acc + i.cgstAmount, 0);
   const totalSGST = enrichedItems.reduce((acc, i) => acc + i.sgstAmount, 0);
-  const totalTax = totalCGST + totalSGST;
+  const totalIGST = 0;
+  const totalTax = totalCGST + totalSGST + totalIGST;
   const rawGrandTotal = totalTaxable + totalTax;
   const grandTotal = Math.round(rawGrandTotal);
   const roundOff = Number((grandTotal - rawGrandTotal).toFixed(2));
@@ -626,26 +627,22 @@ export const EWayBillModal: React.FC<EWayBillModalProps> = ({
                     </td>
                   </tr>
 
-                  {hsnSummaryList.map((s, sIdx) => (
-                    <React.Fragment key={sIdx}>
-                      <tr>
-                        <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
-                          CGST @ {s.cgstRate}%
-                        </td>
-                        <td className="p-1 text-right font-mono text-[11px]">
-                          {s.cgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td colSpan={7} className="p-1 text-right text-[11px] border-r border-black">
-                          SGST @ {s.sgstRate}%
-                        </td>
-                        <td className="p-1 text-right font-mono text-[11px]">
-                          {s.sgstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                    </React.Fragment>
-                  ))}
+                  <tr>
+                    <td colSpan={7} className="p-1.5 text-right text-[11px] border-r border-black">
+                      <span className="inline-flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
+                        <span>CGST: ₹{totalCGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="text-slate-400">|</span>
+                        <span>SGST: ₹{totalSGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="text-slate-400">|</span>
+                        <span>IGST: ₹{totalIGST.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="text-slate-400">|</span>
+                        <span className="font-semibold">GST Total</span>
+                      </span>
+                    </td>
+                    <td className="p-1.5 text-right font-mono text-[11px] font-semibold">
+                      {totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
 
                   {roundOff !== 0 && (
                     <tr>

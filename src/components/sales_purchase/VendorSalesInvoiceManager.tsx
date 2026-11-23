@@ -448,6 +448,12 @@ export const VendorSalesInvoiceManager: React.FC = () => {
     setFormPaymentTerms(invoice.paymentTerms || 'Net 15 Days');
     setFormStatus(invoice.status === 'DRAFT' ? 'DRAFT' : 'ISSUED');
     setFormNotes(invoice.notes || '');
+    const defaultBank =
+      invoice.bankAccountId ||
+      activeBankAccounts.find(b => b.isPrimary)?.id ||
+      activeBankAccounts[0]?.id ||
+      '';
+    setFormBankAccountId(defaultBank);
     setFormItems(
       (invoice.items || []).map((it, idx) => ({
         id: it.id || `vsli-${Date.now()}-${idx}`,
@@ -627,8 +633,7 @@ export const VendorSalesInvoiceManager: React.FC = () => {
           ? editingTarget.status
           : formStatus,
       paidAmount: !editingInvoiceId && formStatus !== 'DRAFT' ? initialPaidAmount : undefined,
-      bankAccountId:
-        !editingInvoiceId && initialPaidAmount > 0 ? formBankAccountId || undefined : editingTarget?.bankAccountId,
+      bankAccountId: formBankAccountId || '',
       paymentMode: !editingInvoiceId && initialPaidAmount > 0 ? formPaymentMode : undefined,
       items: liveTotals.items
     };
@@ -660,7 +665,9 @@ export const VendorSalesInvoiceManager: React.FC = () => {
   const openPaymentModal = (invoice: VendorSalesInvoice) => {
     const { balance } = computeVsiBalances(invoice);
     const defaultBank =
-      activeBankAccounts.find(b => b.isPrimary)?.id || activeBankAccounts[0]?.id || '';
+      (invoice.bankAccountId && activeBankAccounts.some(b => b.id === invoice.bankAccountId)
+        ? invoice.bankAccountId
+        : activeBankAccounts.find(b => b.isPrimary)?.id || activeBankAccounts[0]?.id) || '';
     setPaymentInvoiceId(invoice.id);
     setPayDate(new Date().toISOString().slice(0, 10));
     setPayAmount(balance > 0 ? balance : 0);
@@ -1042,6 +1049,12 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                         <div className="text-[11px] font-mono text-slate-500">
                           GSTIN: {inv.vendorGst || 'Unregistered'}
                         </div>
+                        {inv.bankAccountName && (
+                          <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                            <Landmark className="w-3 h-3 text-amber-600 shrink-0" />
+                            <span className="truncate max-w-[180px]">{inv.bankAccountName}</span>
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-3 px-4 align-top">
@@ -1760,14 +1773,18 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                 </div>
               </div>
 
-              {/* Upfront Settlement (Create + Issued only) */}
-              {!editingInvoiceId && formStatus !== 'DRAFT' && (
-                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-                      <Landmark className="w-4 h-4 text-amber-600" />
-                      <span>Upfront Payment &amp; Bank Deposit (Optional)</span>
+              {/* Bank Account & Settlement Section (Create + Edit) */}
+              <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                    <Landmark className="w-4 h-4 text-amber-600" />
+                    <span>
+                      {editingInvoiceId || formStatus === 'DRAFT'
+                        ? 'Settlement Cash / Bank Account'
+                        : 'Bank Account & Upfront Settlement (Optional)'}
                     </span>
+                  </span>
+                  {!editingInvoiceId && formStatus !== 'DRAFT' && (
                     <div className="flex items-center gap-1.5">
                       {(['UNPAID', 'PARTIAL', 'PAID'] as const).map(opt => (
                         <button
@@ -1789,31 +1806,35 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                         </button>
                       ))}
                     </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      {!editingInvoiceId && formStatus !== 'DRAFT' && formInitialSettlement !== 'UNPAID'
+                        ? 'Deposit Into Cash / Bank Account *'
+                        : 'Transaction / Deposit Bank Account'}
+                    </label>
+                    <select
+                      required={!editingInvoiceId && formStatus !== 'DRAFT' && formInitialSettlement !== 'UNPAID' && activeBankAccounts.length > 0}
+                      value={formBankAccountId}
+                      onChange={e => setFormBankAccountId(e.target.value)}
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="">
+                        {activeBankAccounts.length === 0 ? 'Default Cash / Bank Ledger' : '-- Select Cash / Bank Account --'}
+                      </option>
+                      {activeBankAccounts.map(acc => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.accountName} ({acc.accountType}) — Bal: {fmtCurrency(acc.currentBalance)}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
-                  {formInitialSettlement !== 'UNPAID' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Deposit Into Cash / Bank Account *
-                        </label>
-                        <select
-                          required={activeBankAccounts.length > 0}
-                          value={formBankAccountId}
-                          onChange={e => setFormBankAccountId(e.target.value)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                        >
-                          {activeBankAccounts.length === 0 && (
-                            <option value="">Default Cash / Bank Ledger</option>
-                          )}
-                          {activeBankAccounts.map(acc => (
-                            <option key={acc.id} value={acc.id}>
-                              {acc.accountName} ({acc.accountType}) — Bal: {fmtCurrency(acc.currentBalance)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
+                  {!editingInvoiceId && formStatus !== 'DRAFT' && formInitialSettlement !== 'UNPAID' && (
+                    <>
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
                           {formInitialSettlement === 'PAID' ? 'Full Payment (₹)' : 'Partial Amount (₹) *'}
@@ -1846,10 +1867,10 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                           <option value="Cash">Cash</option>
                         </select>
                       </div>
-                    </div>
+                    </>
                   )}
                 </div>
-              )}
+              </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
                 <button
@@ -2010,6 +2031,14 @@ export const VendorSalesInvoiceManager: React.FC = () => {
                       {viewingInvoice.vendorState || 'N/A'}
                     </span>
                   </div>
+                  {viewingInvoice.bankAccountName && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Bank Account:</span>
+                      <span className="font-semibold text-slate-900">
+                        {viewingInvoice.bankAccountName}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 

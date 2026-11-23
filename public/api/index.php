@@ -324,6 +324,19 @@ function ensureRequiredTables($pdo) {
             'bank_account_id' => "VARCHAR(64) DEFAULT ''",
             'updated_at' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
         ],
+        'solar_vendor_sales_invoices' => [
+            'returned_amount' => 'DECIMAL(14,2) NOT NULL DEFAULT 0.00',
+            'refunded_amount' => 'DECIMAL(14,2) NOT NULL DEFAULT 0.00',
+            'bank_account_id' => "VARCHAR(64) DEFAULT ''"
+        ],
+        'solar_vendor_sales_payments' => [
+            'bank_account_id' => "VARCHAR(64) DEFAULT ''",
+            'journal_entry_id' => "VARCHAR(64) DEFAULT ''"
+        ],
+        'solar_acc_vendor_bills' => [
+            'returned_amount' => 'DECIMAL(14,2) NOT NULL DEFAULT 0.00',
+            'refunded_amount' => 'DECIMAL(14,2) NOT NULL DEFAULT 0.00'
+        ],
         'solar_warehouses' => [
             'email' => "VARCHAR(191) DEFAULT ''",
             'capacity_sq_ft' => 'DECIMAL(12,2) DEFAULT 15000.00',
@@ -728,7 +741,10 @@ function ensureRequiredTables($pdo) {
               `tax_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
               `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
               `paid_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `returned_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `refunded_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
               `balance_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+              `bank_account_id` VARCHAR(64) DEFAULT '',
               `status` VARCHAR(32) NOT NULL DEFAULT 'ISSUED',
               `created_by` VARCHAR(255) DEFAULT '',
               `updated_by` VARCHAR(255) DEFAULT '',
@@ -779,6 +795,8 @@ function ensureRequiredTables($pdo) {
               `payment_mode` VARCHAR(64) NOT NULL DEFAULT 'Bank NEFT/RTGS',
               `reference_no` VARCHAR(128) DEFAULT '',
               `notes` TEXT,
+              `bank_account_id` VARCHAR(64) DEFAULT '',
+              `journal_entry_id` VARCHAR(64) DEFAULT '',
               `recorded_by` VARCHAR(255) DEFAULT '',
               `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
               INDEX `idx_vsip_invoice` (`invoice_id`),
@@ -1562,20 +1580,71 @@ function saveCustomerToDb($pdo, $item) {
 // Helper: Leads
 function saveLeadToDb($pdo, $item) {
     if (empty($item['id'])) $item['id'] = 'lead-' . round(microtime(true) * 1000);
-    $customerName = trim($item['customerName'] ?? $item['customer_name'] ?? '');
-    $companyName = trim($item['companyName'] ?? $item['company_name'] ?? '');
-    $phone = trim($item['phone'] ?? '');
-    $email = trim($item['email'] ?? '');
-    $address = trim($item['address'] ?? '');
-    $city = trim($item['city'] ?? '');
-    $solarCapacityKw = floatval($item['solarCapacityKw'] ?? $item['solar_capacity_kw'] ?? 0);
-    $estimatedValue = floatval($item['estimatedValue'] ?? $item['estimated_value'] ?? 0);
-    $source = $item['source'] ?? 'Website';
-    $assignedSalespersonId = $item['assignedSalespersonId'] ?? $item['assigned_salesperson_id'] ?? '';
-    $assignedSalespersonName = $item['assignedSalespersonName'] ?? $item['assigned_salesperson_name'] ?? '';
-    $status = $item['status'] ?? 'NEW';
-    $notes = $item['notes'] ?? '';
-    $nextFollowUpDate = !empty($item['nextFollowUpDate'] ?? $item['next_follow_up_date']) ? substr($item['nextFollowUpDate'] ?? $item['next_follow_up_date'], 0, 10) : null;
+    $ex = fetchExistingRowPhp($pdo, 'solar_leads', $item['id']);
+
+    $customerName = array_key_exists('customerName', $item)
+        ? trim((string)($item['customerName'] ?? ''))
+        : (array_key_exists('customer_name', $item) ? trim((string)($item['customer_name'] ?? '')) : ($ex['customer_name'] ?? ''));
+    $companyName = array_key_exists('companyName', $item)
+        ? trim((string)($item['companyName'] ?? ''))
+        : (array_key_exists('company_name', $item) ? trim((string)($item['company_name'] ?? '')) : ($ex['company_name'] ?? ''));
+    $phone = array_key_exists('phone', $item)
+        ? trim((string)($item['phone'] ?? ''))
+        : ($ex['phone'] ?? '');
+    $email = array_key_exists('email', $item)
+        ? trim((string)($item['email'] ?? ''))
+        : ($ex['email'] ?? '');
+    $address = array_key_exists('address', $item)
+        ? trim((string)($item['address'] ?? ''))
+        : ($ex['address'] ?? '');
+    $city = array_key_exists('city', $item)
+        ? trim((string)($item['city'] ?? ''))
+        : ($ex['city'] ?? '');
+    $solarCapacityKw = array_key_exists('solarCapacityKw', $item)
+        ? floatval($item['solarCapacityKw'] ?? 0)
+        : (array_key_exists('solar_capacity_kw', $item) ? floatval($item['solar_capacity_kw'] ?? 0) : floatval($ex['solar_capacity_kw'] ?? 0));
+    $estimatedValue = array_key_exists('estimatedValue', $item)
+        ? floatval($item['estimatedValue'] ?? 0)
+        : (array_key_exists('estimated_value', $item) ? floatval($item['estimated_value'] ?? 0) : floatval($ex['estimated_value'] ?? 0));
+    $source = array_key_exists('source', $item)
+        ? (trim((string)($item['source'] ?? '')) ?: 'Website')
+        : ($ex['source'] ?? 'Website');
+
+    if (array_key_exists('assignedSalespersonId', $item)) {
+        $assignedSalespersonId = trim((string)($item['assignedSalespersonId'] ?? ''));
+    } elseif (array_key_exists('assigned_salesperson_id', $item)) {
+        $assignedSalespersonId = trim((string)($item['assigned_salesperson_id'] ?? ''));
+    } elseif (array_key_exists('assignedToId', $item)) {
+        $assignedSalespersonId = trim((string)($item['assignedToId'] ?? ''));
+    } else {
+        $assignedSalespersonId = $ex['assigned_salesperson_id'] ?? '';
+    }
+
+    if (array_key_exists('assignedSalespersonName', $item)) {
+        $assignedSalespersonName = trim((string)($item['assignedSalespersonName'] ?? ''));
+    } elseif (array_key_exists('assigned_salesperson_name', $item)) {
+        $assignedSalespersonName = trim((string)($item['assigned_salesperson_name'] ?? ''));
+    } elseif (array_key_exists('assignedToName', $item)) {
+        $assignedSalespersonName = trim((string)($item['assignedToName'] ?? ''));
+    } else {
+        $assignedSalespersonName = $ex['assigned_salesperson_name'] ?? '';
+    }
+
+    $status = array_key_exists('status', $item)
+        ? (trim((string)($item['status'] ?? '')) ?: 'NEW')
+        : ($ex['status'] ?? 'NEW');
+    $notes = array_key_exists('notes', $item)
+        ? (string)($item['notes'] ?? '')
+        : ($ex['notes'] ?? '');
+
+    if (array_key_exists('nextFollowUpDate', $item)) {
+        $rawNextFollowUp = trim((string)($item['nextFollowUpDate'] ?? ''));
+    } elseif (array_key_exists('next_follow_up_date', $item)) {
+        $rawNextFollowUp = trim((string)($item['next_follow_up_date'] ?? ''));
+    } else {
+        $rawNextFollowUp = trim((string)($ex['next_follow_up_date'] ?? ''));
+    }
+    $nextFollowUpDate = $rawNextFollowUp !== '' ? substr($rawNextFollowUp, 0, 10) : null;
 
     $stmt = $pdo->prepare("
         INSERT INTO `solar_leads` (
@@ -1606,7 +1675,47 @@ function saveLeadToDb($pdo, $item) {
         $source, $assignedSalespersonId, $assignedSalespersonName,
         $status, $notes, $nextFollowUpDate
     ]);
-    return $item;
+
+    $savedRow = fetchExistingRowPhp($pdo, 'solar_leads', $item['id']);
+    if ($savedRow) {
+        return [
+            'id' => $savedRow['id'],
+            'customerName' => $savedRow['customer_name'],
+            'companyName' => $savedRow['company_name'] ?? '',
+            'phone' => $savedRow['phone'],
+            'email' => $savedRow['email'] ?? '',
+            'address' => $savedRow['address'] ?? '',
+            'city' => $savedRow['city'] ?? '',
+            'solarCapacityKw' => floatval($savedRow['solar_capacity_kw'] ?? 0),
+            'estimatedValue' => floatval($savedRow['estimated_value'] ?? 0),
+            'source' => $savedRow['source'] ?? 'Website',
+            'assignedSalespersonId' => $savedRow['assigned_salesperson_id'] ?? '',
+            'assignedSalespersonName' => $savedRow['assigned_salesperson_name'] ?? '',
+            'status' => $savedRow['status'] ?? 'NEW',
+            'notes' => $savedRow['notes'] ?? '',
+            'nextFollowUpDate' => $savedRow['next_follow_up_date'] ?? '',
+            'createdAt' => $savedRow['created_at'],
+            'updatedAt' => $savedRow['updated_at']
+        ];
+    }
+
+    return [
+        'id' => $item['id'],
+        'customerName' => $customerName,
+        'companyName' => $companyName,
+        'phone' => $phone,
+        'email' => $email,
+        'address' => $address,
+        'city' => $city,
+        'solarCapacityKw' => $solarCapacityKw,
+        'estimatedValue' => $estimatedValue,
+        'source' => $source,
+        'assignedSalespersonId' => $assignedSalespersonId,
+        'assignedSalespersonName' => $assignedSalespersonName,
+        'status' => $status,
+        'notes' => $notes,
+        'nextFollowUpDate' => $nextFollowUpDate ?? ''
+    ];
 }
 
 // Helper: Projects
@@ -3451,6 +3560,9 @@ function saveVendorSalesInvoicePhp($pdo, $item, $actor = null) {
     if (!is_array($item)) {
         throw new Exception('Invalid vendor sales invoice payload.', 400);
     }
+
+    require_once __DIR__ . '/accounting.php';
+    ensureAccountingTablesPhp($pdo);
 
     $pdo->beginTransaction();
     try {
@@ -10309,6 +10421,12 @@ if ($method === 'GET' && in_array($cleanPath, ['/pusher/status', '/pusher/status
 if (in_array($cleanPath, ['/leads', '/leads/'])) {
     $pdo = getDbConnection($dbConfig);
     ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied: Insufficient privileges.']);
+        exit;
+    }
 
     if ($method === 'GET') {
         $stmt = $pdo->query('SELECT * FROM `solar_leads` ORDER BY `created_at` DESC');
@@ -10340,9 +10458,17 @@ if (in_array($cleanPath, ['/leads', '/leads/'])) {
     }
 
     if ($method === 'POST') {
-        if (empty($body['customerName']) || empty($body['phone'])) {
+        $cName = trim((string)($body['customerName'] ?? $body['customer_name'] ?? ''));
+        $cPhone = trim((string)($body['phone'] ?? ''));
+        if ($cName === '' || $cPhone === '') {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Lead customerName and phone required.']);
+            exit;
+        }
+        $allowedStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'SITE SURVEY', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'];
+        if (isset($body['status']) && !in_array((string)$body['status'], $allowedStatuses, true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Invalid lead status.']);
             exit;
         }
         $saved = saveLeadToDb($pdo, $body);
@@ -10356,8 +10482,37 @@ if (preg_match('#^/leads/([^/]+)/?$#', $cleanPath, $matches)) {
     $leadId = urldecode($matches[1]);
     $pdo = getDbConnection($dbConfig);
     ensureRequiredTables($pdo);
+    $actor = requireAuthUserPhp($pdo);
+    if (isCustomerUserPhp($actor)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Access denied: Insufficient privileges.']);
+        exit;
+    }
 
     if ($method === 'PUT') {
+        $existing = fetchExistingRowPhp($pdo, 'solar_leads', $leadId);
+        if (!$existing) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Lead not found.']);
+            exit;
+        }
+        $cName = array_key_exists('customerName', $body)
+            ? trim((string)($body['customerName'] ?? ''))
+            : (array_key_exists('customer_name', $body) ? trim((string)($body['customer_name'] ?? '')) : trim((string)($existing['customer_name'] ?? '')));
+        $cPhone = array_key_exists('phone', $body)
+            ? trim((string)($body['phone'] ?? ''))
+            : trim((string)($existing['phone'] ?? ''));
+        if ($cName === '' || $cPhone === '') {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Lead customerName and phone required.']);
+            exit;
+        }
+        $allowedStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'SITE SURVEY', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'];
+        if (isset($body['status']) && !in_array((string)$body['status'], $allowedStatuses, true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Invalid lead status.']);
+            exit;
+        }
         $body['id'] = $leadId;
         $saved = saveLeadToDb($pdo, $body);
         http_response_code(200);

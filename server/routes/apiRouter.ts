@@ -927,9 +927,21 @@ apiRouter.delete('/customers/:id', async (req: Request, res: Response) => {
 // ==========================================================
 // 5. LEADS MODULE API (CRM)
 // ==========================================================
+const ALLOWED_LEAD_STATUSES = new Set([
+  'NEW', 'CONTACTED', 'QUALIFIED', 'SITE SURVEY', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'
+]);
 
-apiRouter.get('/leads', async (_req: Request, res: Response) => {
+apiRouter.get('/leads', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      res.status(401).json({ success: false, message: 'Authentication required.' });
+      return;
+    }
+    if (isCustomerUser(actor)) {
+      res.status(403).json({ success: false, message: 'Access denied: Insufficient privileges.' });
+      return;
+    }
     const leads = await dbManager.getLeads();
     res.json({ success: true, count: leads.length, data: leads });
   } catch (err: any) {
@@ -939,13 +951,30 @@ apiRouter.get('/leads', async (_req: Request, res: Response) => {
 
 apiRouter.post('/leads', async (req: Request, res: Response) => {
   try {
-    const payload = req.body;
-    if (!payload || !payload.customerName || !payload.phone) {
+    const actor = (req as any).user;
+    if (!actor) {
+      res.status(401).json({ success: false, message: 'Authentication required.' });
+      return;
+    }
+    if (isCustomerUser(actor)) {
+      res.status(403).json({ success: false, message: 'Access denied: Insufficient privileges.' });
+      return;
+    }
+    const payload = req.body || {};
+    const customerName = String(payload.customerName ?? payload.customer_name ?? '').trim();
+    const phone = String(payload.phone ?? '').trim();
+    if (!customerName || !phone) {
       res.status(400).json({ success: false, message: 'Lead customerName and phone required.' });
+      return;
+    }
+    if (payload.status !== undefined && !ALLOWED_LEAD_STATUSES.has(String(payload.status))) {
+      res.status(400).json({ success: false, message: 'Invalid lead status.' });
       return;
     }
     const newLead = {
       ...payload,
+      customerName,
+      phone,
       id: payload.id || `lead-${Date.now()}`,
       createdAt: new Date().toISOString()
     };
@@ -959,6 +988,15 @@ apiRouter.post('/leads', async (req: Request, res: Response) => {
 // Batch Lead Import (Excel / CSV Hub)
 apiRouter.post(['/leads/import', '/leads/import/'], async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      res.status(401).json({ success: false, message: 'Authentication required.' });
+      return;
+    }
+    if (isCustomerUser(actor)) {
+      res.status(403).json({ success: false, message: 'Access denied: Insufficient privileges.' });
+      return;
+    }
     const { leads, rows } = req.body || {};
     const list = Array.isArray(leads) ? leads : (Array.isArray(rows) ? rows : (Array.isArray(req.body) ? req.body : []));
     if (!list || list.length === 0) {
@@ -975,9 +1013,37 @@ apiRouter.post(['/leads/import', '/leads/import/'], async (req: Request, res: Re
 
 apiRouter.put('/leads/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      res.status(401).json({ success: false, message: 'Authentication required.' });
+      return;
+    }
+    if (isCustomerUser(actor)) {
+      res.status(403).json({ success: false, message: 'Access denied: Insufficient privileges.' });
+      return;
+    }
     const { id } = req.params;
-    const payload = req.body;
-    const updated = await dbManager.saveLead({ ...payload, id });
+    const existing = await dbManager.getLeadById(id);
+    if (!existing) {
+      res.status(404).json({ success: false, message: 'Lead not found.' });
+      return;
+    }
+    const payload = req.body || {};
+    const customerName = payload.customerName !== undefined
+      ? String(payload.customerName).trim()
+      : (payload.customer_name !== undefined ? String(payload.customer_name).trim() : String(existing.customerName || '').trim());
+    const phone = payload.phone !== undefined
+      ? String(payload.phone).trim()
+      : String(existing.phone || '').trim();
+    if (!customerName || !phone) {
+      res.status(400).json({ success: false, message: 'Lead customerName and phone required.' });
+      return;
+    }
+    if (payload.status !== undefined && !ALLOWED_LEAD_STATUSES.has(String(payload.status))) {
+      res.status(400).json({ success: false, message: 'Invalid lead status.' });
+      return;
+    }
+    const updated = await dbManager.saveLead({ ...payload, customerName, phone, id });
     res.json({ success: true, data: updated });
   } catch (err: any) {
     sendApiError(res, err, 'Failed to update lead');
@@ -986,6 +1052,15 @@ apiRouter.put('/leads/:id', async (req: Request, res: Response) => {
 
 apiRouter.delete('/leads/:id', async (req: Request, res: Response) => {
   try {
+    const actor = (req as any).user;
+    if (!actor) {
+      res.status(401).json({ success: false, message: 'Authentication required.' });
+      return;
+    }
+    if (isCustomerUser(actor)) {
+      res.status(403).json({ success: false, message: 'Access denied: Insufficient privileges.' });
+      return;
+    }
     const { id } = req.params;
     await dbManager.deleteLead(id);
     res.json({ success: true, message: 'Lead deleted from MySQL.' });

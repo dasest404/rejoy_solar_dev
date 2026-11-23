@@ -545,11 +545,11 @@ class StorageService {
       assignedSalespersonName: leadData.assignedSalespersonName || leadData.assignedToName || '',
       status: (leadData.status as LeadStatus) || 'NEW',
       notes: leadData.notes || '',
-      nextFollowUpDate: leadData.nextFollowUpDate || new Date(Date.now() + 86400000 * 2).toISOString().slice(0, 10),
+      nextFollowUpDate: leadData.nextFollowUpDate ?? new Date(Date.now() + 86400000 * 2).toISOString().slice(0, 10),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    const saved = await apiClient.syncPush('leads', { item: newLead });
+    const saved = await apiClient.saveLead(newLead);
     const committed = saved && typeof saved === 'object' && saved.id ? saved : newLead;
     const leads = this.getLeads().filter(l => l.id !== committed.id);
     leads.unshift(committed);
@@ -561,8 +561,42 @@ class StorageService {
     return committed;
   }
 
+  async updateLeadAsync(leadData: Lead): Promise<Lead> {
+    const payload: Lead = {
+      ...leadData,
+      customerName: String(leadData.customerName || '').trim(),
+      companyName: String(leadData.companyName || '').trim(),
+      phone: String(leadData.phone || '').trim(),
+      email: String(leadData.email || '').trim(),
+      address: String(leadData.address || '').trim(),
+      city: String(leadData.city || '').trim(),
+      solarCapacityKw: Number(leadData.solarCapacityKw) || 0,
+      estimatedValue: Number(leadData.estimatedValue) || 0,
+      source: String(leadData.source || 'Direct Referral').trim() || 'Direct Referral',
+      assignedSalespersonId: leadData.assignedSalespersonId || '',
+      assignedSalespersonName: leadData.assignedSalespersonName || '',
+      status: (leadData.status as LeadStatus) || 'NEW',
+      notes: leadData.notes || '',
+      nextFollowUpDate: leadData.nextFollowUpDate ? String(leadData.nextFollowUpDate).slice(0, 10) : '',
+      updatedAt: new Date().toISOString()
+    };
+    const saved = await apiClient.updateLead(payload.id, payload);
+    const committed: Lead = saved && typeof saved === 'object' && saved.id ? saved : payload;
+    const currentLeads = this.getLeads();
+    const exists = currentLeads.some(l => l.id === committed.id);
+    const nextLeads = exists
+      ? currentLeads.map(l => (l.id === committed.id ? committed : l))
+      : [committed, ...currentLeads];
+    this.memStore.set(STORAGE_KEYS.LEADS, nextLeads);
+    this.lastSyncError = null;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('solarpulse_storage_updated'));
+    }
+    return committed;
+  }
+
   async deleteLeadAsync(id: string): Promise<void> {
-    await apiClient.syncPush('leads', { item: { id }, action: 'delete' });
+    await apiClient.deleteLead(id);
     const leads = this.getLeads().filter(l => l.id !== id);
     this.memStore.set(STORAGE_KEYS.LEADS, leads);
     this.lastSyncError = null;

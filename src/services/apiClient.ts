@@ -400,6 +400,15 @@ class ApiClient {
     return await this.handleResponse(res);
   }
 
+  async updateLead(id: string, lead: any): Promise<any> {
+    const res = await this.request(`${this.baseUrl}/leads/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lead)
+    });
+    return await this.handleResponse(res);
+  }
+
   async deleteLead(id: string): Promise<boolean> {
     const res = await this.request(`${this.baseUrl}/leads/${encodeURIComponent(id)}`, {
       method: 'DELETE'

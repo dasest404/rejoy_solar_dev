@@ -363,8 +363,8 @@ export const PurchaseOrderEntry: React.FC = () => {
       status: 'ORDERED',
       paymentStatus: formPaymentStatus,
       paidAmount: initialPaidAmount > 0 ? initialPaidAmount : 0,
-      bankAccountId: initialPaidAmount > 0 ? selectedBank?.id || undefined : undefined,
-      bankAccountName: initialPaidAmount > 0 ? selectedBank?.accountName || undefined : undefined,
+      bankAccountId: selectedBank?.id || undefined,
+      bankAccountName: selectedBank?.accountName || undefined,
       paymentMode: initialPaidAmount > 0 ? formPaymentMode : undefined,
       referenceNo: initialPaidAmount > 0 ? formPaymentReference.trim() || undefined : undefined,
       paymentDueDate: formPaymentDueDate,
@@ -432,7 +432,9 @@ export const PurchaseOrderEntry: React.FC = () => {
   const openPaymentModal = (order: PurchaseOrder) => {
     const { balance } = getPOBalanceInfo(order);
     const defaultBank =
-      activeBankAccounts.find(b => b.isPrimary)?.id || activeBankAccounts[0]?.id || '';
+      (order.bankAccountId && activeBankAccounts.some(b => b.id === order.bankAccountId)
+        ? order.bankAccountId
+        : activeBankAccounts.find(b => b.isPrimary)?.id || activeBankAccounts[0]?.id) || '';
     setPaymentPOId(order.id);
     setPoPayDate(new Date().toISOString().slice(0, 10));
     setPoPayAmount(balance > 0 ? balance : 0);
@@ -1249,70 +1251,76 @@ export const PurchaseOrderEntry: React.FC = () => {
                   </div>
                 </div>
 
-                {formPaymentStatus !== 'UNPAID' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Pay From Cash / Bank Account *
-                      </label>
-                      <select
-                        required={activeBankAccounts.length > 0}
-                        value={formBankAccountId}
-                        onChange={e => setFormBankAccountId(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                      >
-                        {activeBankAccounts.length === 0 && (
-                          <option value="">Default Cash / Bank Ledger</option>
-                        )}
-                        {activeBankAccounts.map(acc => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.accountName} ({acc.accountType}) — Bal: ₹{Number(acc.currentBalance || 0).toLocaleString('en-IN')}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      {formPaymentStatus !== 'UNPAID'
+                        ? 'Pay From Cash / Bank Account *'
+                        : 'Settlement Cash / Bank Account'}
+                    </label>
+                    <select
+                      required={formPaymentStatus !== 'UNPAID' && activeBankAccounts.length > 0}
+                      value={formBankAccountId}
+                      onChange={e => setFormBankAccountId(e.target.value)}
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="">
+                        {activeBankAccounts.length === 0 ? 'Default Cash / Bank Ledger' : '-- Select Cash / Bank Account --'}
+                      </option>
+                      {activeBankAccounts.map(acc => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.accountName} ({acc.accountType}) — Bal: ₹{Number(acc.currentBalance || 0).toLocaleString('en-IN')}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        {formPaymentStatus === 'PAID' ? 'Full Payment (₹)' : 'Advance Amount (₹) *'}
-                      </label>
-                      <input
-                        type="number"
-                        min={0.01}
-                        max={Math.max(0.01, round2(formGrandTotal))}
-                        step="0.01"
-                        disabled={formPaymentStatus === 'PAID'}
-                        required
-                        value={formPaymentStatus === 'PAID' ? round2(formGrandTotal) : formInitialPaidAmount}
-                        onChange={e => setFormInitialPaidAmount(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg disabled:bg-slate-100"
-                      />
-                    </div>
+                  {formPaymentStatus !== 'UNPAID' && (
+                    <>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          {formPaymentStatus === 'PAID' ? 'Full Payment (₹)' : 'Advance Amount (₹) *'}
+                        </label>
+                        <input
+                          type="number"
+                          min={0.01}
+                          max={Math.max(0.01, round2(formGrandTotal))}
+                          step="0.01"
+                          disabled={formPaymentStatus === 'PAID'}
+                          required
+                          value={formPaymentStatus === 'PAID' ? round2(formGrandTotal) : formInitialPaidAmount}
+                          onChange={e => setFormInitialPaidAmount(Number(e.target.value))}
+                          className="w-full px-3 py-2 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg disabled:bg-slate-100"
+                        />
+                      </div>
 
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Payment Mode</label>
-                      <select
-                        value={formPaymentMode}
-                        onChange={e => setFormPaymentMode(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                      >
-                        <option value="Bank NEFT / RTGS">Bank NEFT / RTGS</option>
-                        <option value="UPI">UPI</option>
-                        <option value="Cheque">Cheque</option>
-                        <option value="Cash">Cash</option>
-                      </select>
-                    </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Payment Mode</label>
+                        <select
+                          value={formPaymentMode}
+                          onChange={e => setFormPaymentMode(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                        >
+                          <option value="Bank NEFT / RTGS">Bank NEFT / RTGS</option>
+                          <option value="UPI">UPI</option>
+                          <option value="Cheque">Cheque</option>
+                          <option value="Cash">Cash</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
 
-                    <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Payment Due Date</label>
-                      <input
-                        type="date"
-                        value={formPaymentDueDate}
-                        onChange={e => setFormPaymentDueDate(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                      />
-                    </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Payment Due Date</label>
+                    <input
+                      type="date"
+                      value={formPaymentDueDate}
+                      onChange={e => setFormPaymentDueDate(e.target.value)}
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
 
+                  {formPaymentStatus !== 'UNPAID' && (
                     <div className="sm:col-span-2">
                       <label className="block text-[11px] font-bold text-slate-700 mb-1">UTR / Cheque Ref</label>
                       <input
@@ -1323,8 +1331,8 @@ export const PurchaseOrderEntry: React.FC = () => {
                         className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
                       />
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
 
               {/* Vendor Bill Upload */}

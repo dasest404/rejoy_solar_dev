@@ -57,8 +57,9 @@ class AccountingService {
     definition: string
   ): Promise<void> {
     try {
-      const [cols]: any = await pool.query(`SHOW COLUMNS FROM \`${table}\` LIKE ?`, [column]);
-      if (!Array.isArray(cols) || cols.length === 0) {
+      const [cols]: any = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
+      const exists = Array.isArray(cols) && cols.some((c: any) => String(c?.Field || '').toLowerCase() === column.toLowerCase());
+      if (!exists) {
         await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
       }
     } catch (err: any) {
@@ -215,6 +216,8 @@ class AccountingService {
         \`tds_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         \`paid_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`returned_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        \`refunded_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         \`balance_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         \`itc_eligible\` TINYINT(1) NOT NULL DEFAULT 1,
         \`status\` VARCHAR(32) NOT NULL DEFAULT 'OPEN',
@@ -5083,6 +5086,7 @@ class AccountingService {
 
       let bank: any = null;
       let bankCoaId = '';
+      const requestedBankId = String(payload?.bankAccountId || '').trim();
       if (settlementMode === 'VENDOR_REFUND') {
         if (netPaidSoFar <= 0) {
           const err: any = new Error('Cannot record a vendor refund because no net payment has been made on this PO. Use Debit Note adjustment instead.');
@@ -5104,9 +5108,17 @@ class AccountingService {
           err.statusCode = 400;
           throw err;
         }
-        const resolved = await this.resolveBankAccountTx(conn, payload?.bankAccountId, settings);
+        const resolved = await this.resolveBankAccountTx(conn, requestedBankId, settings);
         bank = resolved.bank;
         bankCoaId = resolved.coaId;
+      } else if (requestedBankId) {
+        const [bankRows]: any = await conn.query(
+          'SELECT `id`, `account_name` FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1',
+          [requestedBankId]
+        );
+        if (bankRows?.[0]) {
+          bank = bankRows[0];
+        }
       }
 
       const bill = await this.ensurePurchaseOrderBillTx(conn, po, settings, actor);
@@ -5275,10 +5287,16 @@ class AccountingService {
       );
 
       if (bill) {
-        const nextBillStatus = nextBalance <= 0.01 && Number(bill.total_amount || 0) > 0 ? 'PAID' : (nextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+        const bTotal = round2(Number(bill.total_amount || 0));
+        const bPaid = round2(Number(bill.paid_amount || 0));
+        const bNextReturned = round2(Number(bill.returned_amount || 0) + totalAmount);
+        const bNextRefunded = round2(Number(bill.refunded_amount || 0) + refundAmount);
+        const bNextNetPaid = round2(Math.max(0, bPaid - bNextRefunded));
+        const bNextBalance = round2(Math.max(0, bTotal - bNextReturned - bNextNetPaid));
+        const nextBillStatus = bNextBalance <= 0.01 && bTotal > 0 ? 'PAID' : (bNextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
         await conn.query(
           'UPDATE `solar_acc_vendor_bills` SET `returned_amount` = ?, `refunded_amount` = ?, `balance_amount` = ?, `status` = ? WHERE `id` = ?',
-          [nextReturned, nextRefunded, nextBalance, nextBillStatus, bill.id]
+          [bNextReturned, bNextRefunded, bNextBalance, nextBillStatus, bill.id]
         );
       }
 

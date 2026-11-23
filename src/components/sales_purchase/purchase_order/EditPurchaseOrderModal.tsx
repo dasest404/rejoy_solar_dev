@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject, VendorBillAttachment } from '../../../types/solar';
+import React, { useState, useMemo, useEffect } from 'react';
+import { PurchaseOrder, PurchaseLineItem, Vendor, ProductItem, SolarProject, VendorBillAttachment, BankAccount } from '../../../types/solar';
 import { storageService } from '../../../services/storage';
 import { useApp } from '../../../context/AppContext';
 import { validatePOLineItem, validatePOLineItems } from '../../../services/validation';
@@ -49,6 +49,17 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
   const [invoiceReference, setInvoiceReference] = useState(order.invoiceReference || '');
   const [notes, setNotes] = useState(order.notes || '');
   const [orderStatus, setOrderStatus] = useState(order.status);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [bankAccountId, setBankAccountId] = useState(order.bankAccountId || '');
+
+  useEffect(() => {
+    storageService
+      .fetchAccountingBankAccountsAsync()
+      .then(banks => {
+        setBankAccounts((banks || []).filter((b: BankAccount) => b.isActive));
+      })
+      .catch(() => undefined);
+  }, []);
 
   // Line items state
   const [items, setItems] = useState<PurchaseLineItem[]>(() => {
@@ -278,7 +289,8 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
     const netPaid = Math.max(0, existingPaid - existingRefunded);
     const nextBalance = Math.max(0, Number((totals.grandTotal - existingReturned - netPaid).toFixed(2)));
 
-    const updatedOrder: PurchaseOrder = {
+      const selectedBank = bankAccounts.find(b => b.id === bankAccountId);
+      const updatedOrder: PurchaseOrder = {
       ...order,
       vendorId,
       vendorName: vendor?.name || order.vendorName,
@@ -293,6 +305,8 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
       returnedAmount: existingReturned,
       refundedAmount: existingRefunded,
       balanceAmount: nextBalance,
+      bankAccountId: bankAccountId || '',
+      bankAccountName: selectedBank?.accountName || '',
       paymentDueDate: paymentDueDate || undefined,
       invoiceReference: invoiceReference.trim() || undefined,
       notes: notes.trim() || undefined,
@@ -472,6 +486,22 @@ export const EditPurchaseOrderModal: React.FC<EditPurchaseOrderModalProps> = ({
                 onChange={e => setPaymentDueDate(e.target.value)}
                 className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500/20"
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Settlement Cash / Bank Account</label>
+              <select
+                value={bankAccountId}
+                onChange={e => setBankAccountId(e.target.value)}
+                className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500/20"
+              >
+                <option value="">Default Cash / Bank Ledger</option>
+                {bankAccounts.map(acc => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.accountName} ({acc.accountType}) — Bal: ₹{Number(acc.currentBalance || 0).toLocaleString('en-IN')}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

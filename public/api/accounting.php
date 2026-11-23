@@ -32,10 +32,15 @@ function accToSqlDate($val) {
 
 function accAddColumnIfMissing($pdo, $table, $col, $def) {
     try {
-        $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$table}` LIKE ?");
-        $stmt->execute([$col]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$row) {
+        $colsRes = $pdo->query("SHOW COLUMNS FROM `{$table}`")->fetchAll(PDO::FETCH_ASSOC);
+        $exists = false;
+        foreach ($colsRes ?: [] as $cr) {
+            if (isset($cr['Field']) && strcasecmp((string)$cr['Field'], (string)$col) === 0) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
             $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN `{$col}` {$def}");
         }
     } catch (Exception $e) {
@@ -180,6 +185,8 @@ function ensureAccountingTablesPhp($pdo) {
         `tds_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         `total_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         `paid_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `returned_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+        `refunded_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         `balance_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
         `itc_eligible` TINYINT(1) NOT NULL DEFAULT 1,
         `status` VARCHAR(32) NOT NULL DEFAULT 'OPEN',
@@ -2265,14 +2272,22 @@ function accCreatePurchaseReturnPhp($pdo, $payload, $actor) {
         $netPaidSoFar = accRound2(max(0, $poPaid - $poRefunded));
 
         $bank = null; $bankCoaId = '';
+        $requestedBankId = trim((string)($payload['bankAccountId'] ?? ''));
         if ($settlementMode === 'VENDOR_REFUND') {
             if ($netPaidSoFar <= 0) throw new Exception('Cannot record a vendor refund because no net payment has been made on this PO. Use Debit Note adjustment instead.', 400);
             if (!is_finite($refundAmount) || $refundAmount <= 0) throw new Exception('Refund amount must be greater than zero for Vendor Refund settlement.', 400);
             if ($refundAmount > $totalAmount + 0.01) throw new Exception('Refund amount cannot exceed Debit Note total.', 400);
             if ($refundAmount > $netPaidSoFar + 0.01) throw new Exception('Refund amount exceeds net paid amount available for refund.', 400);
-            $resolved = accResolveBankAccountTxPhp($pdo, $payload['bankAccountId'] ?? '', $settings);
+            $resolved = accResolveBankAccountTxPhp($pdo, $requestedBankId, $settings);
             $bank = $resolved['bank'];
             $bankCoaId = $resolved['coaId'];
+        } elseif ($requestedBankId !== '') {
+            $bStmt = $pdo->prepare('SELECT `id`, `account_name` FROM `solar_acc_bank_accounts` WHERE `id` = ? LIMIT 1');
+            $bStmt->execute([$requestedBankId]);
+            $bankRow = $bStmt->fetch(PDO::FETCH_ASSOC);
+            if ($bankRow) {
+                $bank = $bankRow;
+            }
         }
 
         $bill = accEnsurePurchaseOrderBillTxPhp($pdo, $po, $settings, $actor);
@@ -2367,9 +2382,15 @@ function accCreatePurchaseReturnPhp($pdo, $payload, $actor) {
             ->execute([$nextReturned, $nextRefunded, $nextBalance, $nextPoPayStatus, $po['id']]);
 
         if ($bill) {
-            $nextBillStatus = ($nextBalance <= 0.01 && floatval($bill['total_amount'] ?? 0) > 0) ? 'PAID' : ($nextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
+            $bTotal = accRound2($bill['total_amount'] ?? 0);
+            $bPaid = accRound2($bill['paid_amount'] ?? 0);
+            $bNextReturned = accRound2(floatval($bill['returned_amount'] ?? 0) + $totalAmount);
+            $bNextRefunded = accRound2(floatval($bill['refunded_amount'] ?? 0) + $refundAmount);
+            $bNextNetPaid = accRound2(max(0, $bPaid - $bNextRefunded));
+            $bNextBalance = accRound2(max(0, $bTotal - $bNextReturned - $bNextNetPaid));
+            $nextBillStatus = ($bNextBalance <= 0.01 && $bTotal > 0) ? 'PAID' : ($bNextNetPaid > 0.01 ? 'PARTIAL' : 'OPEN');
             $pdo->prepare('UPDATE `solar_acc_vendor_bills` SET `returned_amount`=?,`refunded_amount`=?,`balance_amount`=?,`status`=? WHERE `id`=?')
-                ->execute([$nextReturned, $nextRefunded, $nextBalance, $nextBillStatus, $bill['id']]);
+                ->execute([$bNextReturned, $bNextRefunded, $bNextBalance, $nextBillStatus, $bill['id']]);
         }
 
         accLogAuditPhp($pdo, $actor, 'PURCHASE_RETURNS', 'CREATE_PURCHASE_RETURN', $id, $returnNumber, "Recorded Purchase Return {$returnNumber} (₹{$totalAmount}) for PO {$po['po_number']}");

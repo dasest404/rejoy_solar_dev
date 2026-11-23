@@ -330,6 +330,19 @@ class MySqlDatabaseManager {
           bank_account_id: "VARCHAR(64) DEFAULT ''",
           updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
         },
+        solar_vendor_sales_invoices: {
+          returned_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          refunded_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          bank_account_id: "VARCHAR(64) DEFAULT ''"
+        },
+        solar_vendor_sales_payments: {
+          bank_account_id: "VARCHAR(64) DEFAULT ''",
+          journal_entry_id: "VARCHAR(64) DEFAULT ''"
+        },
+        solar_acc_vendor_bills: {
+          returned_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00",
+          refunded_amount: "DECIMAL(14,2) NOT NULL DEFAULT 0.00"
+        },
         solar_warehouses: {
           email: "VARCHAR(191) DEFAULT ''",
           capacity_sq_ft: "DECIMAL(12,2) DEFAULT 15000.00",
@@ -770,7 +783,10 @@ class MySqlDatabaseManager {
             \`tax_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
             \`total_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
             \`paid_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`returned_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`refunded_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
             \`balance_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            \`bank_account_id\` VARCHAR(64) DEFAULT '',
             \`status\` VARCHAR(32) NOT NULL DEFAULT 'ISSUED',
             \`created_by\` VARCHAR(255) DEFAULT '',
             \`updated_by\` VARCHAR(255) DEFAULT '',
@@ -821,6 +837,8 @@ class MySqlDatabaseManager {
             \`payment_mode\` VARCHAR(64) NOT NULL DEFAULT 'Bank NEFT/RTGS',
             \`reference_no\` VARCHAR(128) DEFAULT '',
             \`notes\` TEXT,
+            \`bank_account_id\` VARCHAR(64) DEFAULT '',
+            \`journal_entry_id\` VARCHAR(64) DEFAULT '',
             \`recorded_by\` VARCHAR(255) DEFAULT '',
             \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX \`idx_vsip_invoice\` (\`invoice_id\`),
@@ -1455,27 +1473,76 @@ class MySqlDatabaseManager {
     return mapped;
   }
 
+  public async getLeadById(id: string): Promise<any | null> {
+    if (!this.isConnected) {
+      return this.getFallbackItems('leads').find((l: any) => l.id === id) || null;
+    }
+    this.assertDbConnected();
+    const [rows]: any = await this.pool!.query('SELECT * FROM `solar_leads` WHERE `id` = ? LIMIT 1', [id]);
+    const r = Array.isArray(rows) ? rows[0] : null;
+    if (!r) return null;
+    return {
+      id: r.id,
+      customerName: r.customer_name,
+      companyName: r.company_name ?? '',
+      phone: r.phone,
+      email: r.email ?? '',
+      address: r.address ?? '',
+      city: r.city ?? '',
+      solarCapacityKw: Number(r.solar_capacity_kw) || 0,
+      estimatedValue: Number(r.estimated_value) || 0,
+      source: r.source ?? 'Website',
+      assignedSalespersonId: r.assigned_salesperson_id ?? '',
+      assignedSalespersonName: r.assigned_salesperson_name ?? '',
+      status: r.status ?? 'NEW',
+      notes: r.notes ?? '',
+      nextFollowUpDate: r.next_follow_up_date || '',
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    };
+  }
+
   public async saveLead(lead: any): Promise<any> {
     this.assertDbConnected();
     const timestamp = new Date().toISOString();
     const item = { ...lead, updatedAt: timestamp };
+    if (!item.id) item.id = `lead-${Date.now()}`;
     if (!item.createdAt) item.createdAt = timestamp;
 
     const existing = await this.getExistingRow('solar_leads', item.id);
-    const customerName = item.customerName ?? item.customer_name ?? existing?.customer_name ?? '';
-    const companyName = item.companyName ?? item.company_name ?? existing?.company_name ?? '';
-    const phone = item.phone ?? existing?.phone ?? '';
-    const email = item.email ?? existing?.email ?? '';
-    const address = item.address ?? existing?.address ?? '';
-    const city = item.city ?? existing?.city ?? '';
-    const solarCapacityKw = Number(item.solarCapacityKw ?? item.solar_capacity_kw ?? existing?.solar_capacity_kw) || 0;
-    const estimatedValue = Number(item.estimatedValue ?? item.estimated_value ?? existing?.estimated_value) || 0;
-    const source = item.source ?? existing?.source ?? 'Website';
-    const assignedSalespersonId = item.assignedSalespersonId ?? item.assigned_salesperson_id ?? existing?.assigned_salesperson_id ?? '';
-    const assignedSalespersonName = item.assignedSalespersonName ?? item.assigned_salesperson_name ?? existing?.assigned_salesperson_name ?? '';
-    const status = item.status ?? existing?.status ?? 'NEW';
-    const notes = item.notes ?? existing?.notes ?? '';
-    const rawNextFollowUp = item.nextFollowUpDate ?? item.next_follow_up_date ?? existing?.next_follow_up_date;
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(item, k) && item[k] !== undefined;
+
+    const customerName = has('customerName') ? String(item.customerName).trim() : (has('customer_name') ? String(item.customer_name).trim() : (existing?.customer_name ?? ''));
+    const companyName = has('companyName') ? String(item.companyName ?? '').trim() : (has('company_name') ? String(item.company_name ?? '').trim() : (existing?.company_name ?? ''));
+    const phone = has('phone') ? String(item.phone).trim() : (existing?.phone ?? '');
+    const email = has('email') ? String(item.email ?? '').trim() : (existing?.email ?? '');
+    const address = has('address') ? String(item.address ?? '').trim() : (existing?.address ?? '');
+    const city = has('city') ? String(item.city ?? '').trim() : (existing?.city ?? '');
+    const solarCapacityKw = has('solarCapacityKw')
+      ? (Number(item.solarCapacityKw) || 0)
+      : (has('solar_capacity_kw') ? (Number(item.solar_capacity_kw) || 0) : (Number(existing?.solar_capacity_kw) || 0));
+    const estimatedValue = has('estimatedValue')
+      ? (Number(item.estimatedValue) || 0)
+      : (has('estimated_value') ? (Number(item.estimated_value) || 0) : (Number(existing?.estimated_value) || 0));
+    const source = has('source') ? (String(item.source || '').trim() || 'Website') : (existing?.source ?? 'Website');
+
+    const assignedSalespersonId = has('assignedSalespersonId')
+      ? String(item.assignedSalespersonId ?? '').trim()
+      : (has('assigned_salesperson_id')
+          ? String(item.assigned_salesperson_id ?? '').trim()
+          : (has('assignedToId') ? String(item.assignedToId ?? '').trim() : (existing?.assigned_salesperson_id ?? '')));
+
+    const assignedSalespersonName = has('assignedSalespersonName')
+      ? String(item.assignedSalespersonName ?? '').trim()
+      : (has('assigned_salesperson_name')
+          ? String(item.assigned_salesperson_name ?? '').trim()
+          : (has('assignedToName') ? String(item.assignedToName ?? '').trim() : (existing?.assigned_salesperson_name ?? '')));
+
+    const status = has('status') ? (String(item.status || '').trim() || 'NEW') : (existing?.status ?? 'NEW');
+    const notes = has('notes') ? String(item.notes ?? '') : (existing?.notes ?? '');
+    const rawNextFollowUp = has('nextFollowUpDate')
+      ? item.nextFollowUpDate
+      : (has('next_follow_up_date') ? item.next_follow_up_date : existing?.next_follow_up_date);
     const nextFollowUpDate = rawNextFollowUp ? String(rawNextFollowUp).split('T')[0] : null;
 
     const sql = `
@@ -1512,12 +1579,32 @@ class MySqlDatabaseManager {
       nextFollowUpDate
     ]);
 
+    const savedLead = (await this.getLeadById(item.id)) || {
+      id: item.id,
+      customerName,
+      companyName,
+      phone,
+      email,
+      address,
+      city,
+      solarCapacityKw,
+      estimatedValue,
+      source,
+      assignedSalespersonId,
+      assignedSalespersonName,
+      status,
+      notes,
+      nextFollowUpDate: nextFollowUpDate || '',
+      createdAt: existing?.created_at || item.createdAt,
+      updatedAt: timestamp
+    };
+
     const items = this.getFallbackItems('leads');
-    const idx = items.findIndex(l => l.id === item.id);
-    if (idx >= 0) items[idx] = { ...items[idx], ...item };
-    else items.unshift(item);
+    const idx = items.findIndex(l => l.id === savedLead.id);
+    if (idx >= 0) items[idx] = savedLead;
+    else items.unshift(savedLead);
     this.setFallbackItems('leads', items);
-    return item;
+    return savedLead;
   }
 
   public async deleteLead(id: string): Promise<boolean> {
